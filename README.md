@@ -27,7 +27,7 @@ Spout2是什么？→是Windows上用于在不同图形程序之间共享GPU纹�
 ## 3. 工作原理
 
 ```mermaid
-flowchart TB
+flowchart LR
     VTS["VTube Studio<br/>渲染 Live2D 模型"] --> SPOUT["Spout2<br/>GPU 共享纹理"]
 
     subgraph PIPE["VTSFloat_Meow · 原生 C++ 渲染管线"]
@@ -35,10 +35,10 @@ flowchart TB
         GPU["Direct3D 11<br/>同一 GPU 接收"] --> CHECK{"尺寸 / 格式一致？"}
         CHECK -->|是| COPY["直接复制"]
         CHECK -->|否| SCALE["GPU 缩放与滤波<br/>性能 · 平衡 · 质量"]
-        COPY --> BGRA["32 位 BGRA<br/>预乘 Alpha 缓冲区"]
+        COPY --> BGRA["32 位 BGRA · 预乘 Alpha"]
         SCALE --> BGRA
         BGRA --> COMPOSE["边框 · 透明度 · 调试信息<br/>画面合成"]
-        COMPOSE --> WINDOW["UpdateLayeredWindow<br/>透明 Win32 分层窗口"]
+        COMPOSE --> WINDOW["UpdateLayeredWindow<br/>透明 Win32 窗口"]
     end
 
     SPOUT --> GPU
