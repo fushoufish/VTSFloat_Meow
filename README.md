@@ -27,20 +27,34 @@ Spout2是什么？→是Windows上用于在不同图形程序之间共享GPU纹�
 ## 3. 工作原理
 
 ```mermaid
-flowchart LR
-    A[VTube Studio] --> B[模型渲染]
-    B --> C[Spout2 共享纹理]
-    C --> D[检测发送端 GPU]
-    D --> E[Direct3D 11 接收]
-    E --> F{窗口尺寸是否一致}
-    F -- 是 --> G[直接复制]
-    F -- 否 --> H[GPU 双线性/双三次缩放]
-    G --> I[预乘 Alpha BGRA 缓冲区]
-    H --> I
-    I --> J[边框、调试信息、透明度合成]
-    J --> K[Win32 UpdateLayeredWindow]
-    K --> L[桌面/游戏上层显示]
-    M[VTube Studio Plugins API] -.表情、统计、配置.-> J
+flowchart TB
+    VTS["VTube Studio<br/>渲染 Live2D 模型"] --> SPOUT["Spout2<br/>GPU 共享纹理"]
+
+    subgraph PIPE["VTSFloat_Meow · 原生 C++ 渲染管线"]
+        direction TB
+        GPU["Direct3D 11<br/>同一 GPU 接收"] --> CHECK{"尺寸 / 格式一致？"}
+        CHECK -->|是| COPY["直接复制"]
+        CHECK -->|否| SCALE["GPU 缩放与滤波<br/>性能 · 平衡 · 质量"]
+        COPY --> BGRA["32 位 BGRA<br/>预乘 Alpha 缓冲区"]
+        SCALE --> BGRA
+        BGRA --> COMPOSE["边框 · 透明度 · 调试信息<br/>画面合成"]
+        COMPOSE --> WINDOW["UpdateLayeredWindow<br/>透明 Win32 分层窗口"]
+    end
+
+    SPOUT --> GPU
+    WINDOW --> DESKTOP["Windows 桌面合成器<br/>显示在游戏 / 应用上方"]
+    API["VTube Studio Plugins API<br/>表情 · 统计 · 配置"] -.-> COMPOSE
+
+    classDef source fill:#e8f4ff,stroke:#3182ce,color:#123b5d,stroke-width:1.5px;
+    classDef pipeline fill:#f3efff,stroke:#7c5ac2,color:#30205a,stroke-width:1.5px;
+    classDef decision fill:#fff4d6,stroke:#d69e2e,color:#5c4300,stroke-width:1.5px;
+    classDef output fill:#e7f8ee,stroke:#2f855a,color:#174b2c,stroke-width:1.5px;
+    classDef api fill:#fff0f0,stroke:#d9534f,color:#6b1e1e,stroke-width:1.5px;
+    class VTS,SPOUT source;
+    class GPU,COPY,SCALE,BGRA,COMPOSE,WINDOW pipeline;
+    class CHECK decision;
+    class DESKTOP output;
+    class API api;
 ```
 
 数据管线可以简单理解为：
