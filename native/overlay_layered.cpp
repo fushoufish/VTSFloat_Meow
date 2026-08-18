@@ -99,9 +99,7 @@ constexpr int kBorderModeNormal = 2;
 constexpr int kDefaultBorderThickness = 6;
 constexpr int kMaximumBorderThickness = 50;
 constexpr COLORREF kDefaultCustomBorderColor = RGB(24, 132, 255);
-// Filled in when the project repository URL is decided.  Keeping this empty
-// makes the button safe to ship before the public repository is announced.
-constexpr wchar_t kGithubUrl[] = L"";
+constexpr wchar_t kGithubUrl[] = L"https://github.com/fushoufish/VTSFloat_Meow";
 
 enum class ToolbarButton {
     None,
@@ -459,7 +457,10 @@ constexpr wchar_t kVtsApiPluginName[] = L"VTSFloat_Meow";
 constexpr wchar_t kVtsApiPluginDeveloper[] = L"Lily";
 constexpr int kVtsApiPort = 8001;
 constexpr int kVtsApiPollIntervalMs = 2000;
-constexpr int kVtsApiReconnectDelayMs = 5000;
+// Keep API recovery responsive after the initial probe. The silent retry path
+// uses this cadence for the INI-saved endpoint only.
+constexpr int kVtsApiReconnectDelayMs = 600;
+constexpr int kVtsApiModelReadyDelayMs = 2500;
 
 std::string Base64Encode(const std::vector<BYTE>& data) {
     static constexpr char alphabet[] =
@@ -562,6 +563,22 @@ std::string BuildJsonRequest(const std::string& type, const std::string& dataFie
     json += R"("messageType":")" + type + R"(",)";
     json += R"("data":{)" + dataFields + R"(}})";
     return json;
+}
+
+std::string EscapeJsonString(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 8);
+    for (const char c : value) {
+        switch (c) {
+        case '\\': escaped += "\\\\"; break;
+        case '"': escaped += "\\\""; break;
+        case '\n': escaped += "\\n"; break;
+        case '\r': escaped += "\\r"; break;
+        case '\t': escaped += "\\t"; break;
+        default: escaped += c; break;
+        }
+    }
+    return escaped;
 }
 
 std::string DecodeJsonString(const std::string& raw) {
@@ -717,13 +734,30 @@ bool ExtractJsonBool(const std::string& json, const std::string& key) {
            json.find("true", pos) < pos + 5;
 }
 
+struct VtsExpressionCommand {
+    std::string file;
+    bool active = false;
+    double fadeTime = 0.3;
+};
+
 // VTS API WebSocket client - runs in a background thread.
 class VtsApiClient {
 public:
+    struct ExpressionInfo {
+        std::string file;
+        std::string name;
+        bool active = false;
+    };
+
     void Start(HINSTANCE instance) {
         if (running_.exchange(true)) return;
         instance_ = instance;
-        port_ = ReadConfigInt(L"VtsApi", L"Port", kVtsApiPort);
+        const int savedPort = ReadConfigInt(L"VtsApi", L"Port", 0);
+        portConfigured_ = savedPort > 0 && savedPort <= 65535;
+        port_ = portConfigured_ ? savedPort : kVtsApiPort;
+        initialDiscoveryStarted_.store(false, std::memory_order_relaxed);
+        initialDiscoveryDone_.store(false, std::memory_order_relaxed);
+        authPending_.store(false, std::memory_order_relaxed);
         thread_ = std::thread([this]() { ThreadMain(); });
     }
 
@@ -752,8 +786,79 @@ public:
         return extraStats_;
     }
 
+    std::vector<ExpressionInfo> GetExpressions() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return expressions_;
+    }
+
+    bool GetExpressionActive(const std::string& file, bool& active) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& expression : expressions_) {
+            if (expression.file == file) {
+                active = expression.active;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void RequestExpressionState() {
+        expressionStateRequested_.store(true, std::memory_order_relaxed);
+    }
+
+    void SetExpressionActive(const std::string& file, bool active, double fadeTime = 0.3) {
+        if (file.empty()) return;
+        std::lock_guard<std::mutex> lock(expressionCommandMutex_);
+        // Keep the queue bounded and collapse repeated updates for the same
+        // expression. Hover transitions can otherwise enqueue stale toggles
+        // while VTS is reconnecting.
+        for (auto it = expressionCommands_.begin(); it != expressionCommands_.end();) {
+            if (it->file == file) it = expressionCommands_.erase(it);
+            else ++it;
+        }
+        expressionCommands_.push_back(VtsExpressionCommand{ file, active, fadeTime });
+    }
+
+    void ResetCache() {
+        Stop();
+        cachedToken_.clear();
+        activePort_ = 0;
+        connected_.store(false);
+        everAuthenticated_.store(false);
+        scanning_.store(false);
+        scanRequested_.store(false);
+        scanResult_.store(0);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            realtimeFps_ = 0;
+            extraStats_ = ExtraStats{};
+            expressions_.clear();
+            lastExpressionModelId_.clear();
+        }
+        {
+            std::lock_guard<std::mutex> lock(expressionCommandMutex_);
+            expressionCommands_.clear();
+        }
+        expressionStateRequested_.store(false, std::memory_order_relaxed);
+        initialDiscoveryStarted_.store(false, std::memory_order_relaxed);
+        initialDiscoveryDone_.store(false, std::memory_order_relaxed);
+        authPending_.store(false, std::memory_order_relaxed);
+    }
+
     bool IsConnected() const {
         return connected_.load();
+    }
+
+    bool IsInitialDiscoveryDone() const {
+        return initialDiscoveryDone_.load(std::memory_order_relaxed);
+    }
+
+    bool IsAwaitingAuthorization() const {
+        return authPending_.load(std::memory_order_relaxed);
+    }
+
+    bool HasConfiguredPort() const {
+        return portConfigured_;
     }
 
     bool IsScanning() const {
@@ -792,7 +897,15 @@ private:
         LoadCachedToken();
         Log("[vts-api] thread started");
         while (running_.load()) {
-            if (!Connect()) {
+            bool connectedToApi = false;
+            if (!initialDiscoveryStarted_.exchange(true, std::memory_order_relaxed)) {
+                Log("[vts-api] initial discovery started");
+                connectedToApi = ConnectInitial();
+                initialDiscoveryDone_.store(true, std::memory_order_relaxed);
+            } else {
+                connectedToApi = ConnectSilent();
+            }
+            if (!connectedToApi) {
                 const int step = 100;
                 for (int elapsed = 0; elapsed < kVtsApiReconnectDelayMs && running_.load(); elapsed += step) {
                     if (scanRequested_.load()) break;
@@ -807,10 +920,12 @@ private:
             }
             connected_.store(true);
             everAuthenticated_.store(true);
+            RequestExpressionState();
             if (activePort_ > 0) {
                 if (activePort_ != port_) {
                     port_ = activePort_;
                 }
+                portConfigured_ = true;
                 WriteConfigInt(L"VtsApi", L"Port", activePort_);
                 Log("[vts-api] saved port " + std::to_string(activePort_) + " to config");
             }
@@ -831,7 +946,7 @@ private:
         }
     }
 
-    bool Connect() {
+    bool ScanRequestedPorts() {
         if (scanRequested_.exchange(false)) {
             scanning_.store(true);
             std::vector<int> ports = FindVtsListeningPorts();
@@ -848,23 +963,45 @@ private:
             scanResult_.store(2);
             return false;
         }
-        // Always try saved/configured port first (highest priority)
+        return false;
+    }
+
+    bool ConnectInitial() {
         if (!running_.load()) return false;
-        if (scanRequested_.load()) return false;
-        if (TryConnectPort(port_)) {
-            if (ProbeIsVtsApi()) return true;
-            Disconnect();
-        }
-        constexpr int kTryPorts[] = { 8001, 8000, 8002, 8003 };
-        for (int port : kTryPorts) {
-            if (!running_.load()) return false;
-            if (scanRequested_.load()) return false;
-            if (port == port_) continue;
-            if (TryConnectPort(port)) {
-                if (ProbeIsVtsApi()) return true;
+        if (portConfigured_) {
+            for (int attempt = 0; attempt < 2 && running_.load(); ++attempt) {
+                if (TryConnectPort(port_, 150, 150) && ProbeIsVtsApi()) {
+                    return true;
+                }
                 Disconnect();
             }
         }
+
+        constexpr struct Candidate {
+            int port;
+            DWORD timeoutMs;
+        } candidates[] = { { 8001, 100 }, { 8002, 50 }, { 8000, 50 } };
+        for (const Candidate& candidate : candidates) {
+            if (!running_.load()) return false;
+            if (portConfigured_ && candidate.port == port_) continue;
+            if (TryConnectPort(candidate.port, candidate.timeoutMs, candidate.timeoutMs) &&
+                ProbeIsVtsApi()) {
+                return true;
+            }
+            Disconnect();
+        }
+        return false;
+    }
+
+    bool ConnectSilent() {
+        if (scanRequested_.load()) {
+            return ScanRequestedPorts();
+        }
+        if (!portConfigured_ || !running_.load()) return false;
+        if (TryConnectPort(port_, 100, 100) && ProbeIsVtsApi()) {
+            return true;
+        }
+        Disconnect();
         return false;
     }
 
@@ -932,16 +1069,16 @@ private:
         return result;
     }
 
-    bool TryConnectPort(int port) {
+    bool TryConnectPort(int port, DWORD connectTimeoutMs = 200, DWORD ioTimeoutMs = 500) {
         activePort_ = 0;
         hSession_ = WinHttpOpen(
             L"VTSFloat_Meow/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
             WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
         if (!hSession_) return false;
 
-        DWORD connectTimeout = 200;
+        DWORD connectTimeout = connectTimeoutMs;
         WinHttpSetOption(hSession_, WINHTTP_OPTION_CONNECT_TIMEOUT, &connectTimeout, sizeof(connectTimeout));
-        DWORD ioTimeout = 500;
+        DWORD ioTimeout = ioTimeoutMs;
         WinHttpSetOption(hSession_, WINHTTP_OPTION_SEND_TIMEOUT, &ioTimeout, sizeof(ioTimeout));
         WinHttpSetOption(hSession_, WINHTTP_OPTION_RECEIVE_TIMEOUT, &ioTimeout, sizeof(ioTimeout));
 
@@ -1034,15 +1171,26 @@ private:
 
     bool RequestNewToken() {
         Log("[vts-api] requesting new token");
+        authPending_.store(true, std::memory_order_relaxed);
         const std::string iconB64;
         std::string data = R"("pluginName":"VTSFloat_Meow","pluginDeveloper":"Lily","pluginIcon":")" + iconB64 + R"(")";
         std::string request = BuildJsonRequest("AuthenticationTokenRequest", data);
-        if (!SendJson(request)) return false;
+        if (!SendJson(request)) {
+            authPending_.store(false, std::memory_order_relaxed);
+            return false;
+        }
         std::string response = ReceiveJson();
-        if (response.empty()) return false;
+        if (response.empty()) {
+            // VTS keeps the authorization dialog open while waiting for the
+            // user. Leave this state visible to the toolbar; the API thread
+            // will retry after the short reconnect interval if the request
+            // timed out.
+            return false;
+        }
 
         std::string token = ExtractJsonString(response, "authenticationToken");
         if (token.empty()) {
+            authPending_.store(false, std::memory_order_relaxed);
             Log("[vts-api] token request failed: " + ExtractJsonString(response, "message"));
             return false;
         }
@@ -1052,14 +1200,19 @@ private:
 
         std::string authData = R"("pluginName":"VTSFloat_Meow","pluginDeveloper":"Lily","authenticationToken":")" + cachedToken_ + R"(")";
         std::string authReq = BuildJsonRequest("AuthenticationRequest", authData);
-        if (!SendJson(authReq)) return false;
+        if (!SendJson(authReq)) {
+            authPending_.store(false, std::memory_order_relaxed);
+            return false;
+        }
         response = ReceiveJson();
         if (response.empty()) return false;
 
         if (ExtractJsonBool(response, "authenticated")) {
+            authPending_.store(false, std::memory_order_relaxed);
             Log("[vts-api] authenticated with new token");
             return true;
         }
+        authPending_.store(false, std::memory_order_relaxed);
         Log("[vts-api] authentication failed after token grant");
         return false;
     }
@@ -1092,9 +1245,21 @@ private:
         if (!response.empty() && ExtractJsonString(response, "messageType") != "APIError") {
             std::string modelId = ExtractJsonString(response, "modelName");
             int artmesh = ExtractJsonInt(response, "numberOfLive2DArtmeshes");
-            std::lock_guard<std::mutex> lock(mutex_);
-            extraStats_.modelId = modelId;
-            if (artmesh >= 0) extraStats_.artmeshCount = artmesh;
+            bool modelChanged = false;
+            bool expressionNeedsRefresh = false;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                modelChanged = modelId != extraStats_.modelId;
+                extraStats_.modelId = modelId;
+                if (artmesh >= 0) extraStats_.artmeshCount = artmesh;
+                if (modelChanged) {
+                    expressions_.clear();
+                    lastExpressionModelId_.clear();
+                }
+                expressionNeedsRefresh = !modelId.empty() &&
+                    modelId != lastExpressionModelId_;
+            }
+            if (modelChanged || expressionNeedsRefresh) RequestExpressionState();
         }
 
         // ItemListRequest
@@ -1119,7 +1284,77 @@ private:
             std::lock_guard<std::mutex> lock(mutex_);
             extraStats_.apiLatencyMs = ms;
         }
+        ProcessExpressionRequests();
         return true;
+    }
+
+    void ProcessExpressionRequests() {
+        if (!hWebSocket_) return;
+        if (expressionStateRequested_.exchange(false, std::memory_order_relaxed)) {
+            if (SendJson(BuildJsonRequest("ExpressionStateRequest", R"("details":true)"))) {
+                const std::string response = ReceiveJson();
+                if (!response.empty() &&
+                    ExtractJsonString(response, "messageType") != "APIError") {
+                    std::vector<ExpressionInfo> parsed;
+                    size_t search = 0;
+                    while (true) {
+                        const size_t fileKey = response.find(R"("file")", search);
+                        if (fileKey == std::string::npos) break;
+                        const size_t objectEnd = response.find('}', fileKey);
+                        const size_t end = objectEnd == std::string::npos
+                            ? response.size() : objectEnd;
+                        const std::string object = response.substr(fileKey, end - fileKey);
+                        const std::string file = ExtractJsonString(object, "file");
+                        if (!file.empty()) {
+                            ExpressionInfo info;
+                            info.file = file;
+                            info.name = ExtractJsonString(object, "name");
+                            info.active = ExtractJsonBool(object, "active");
+                            bool duplicate = false;
+                            for (const auto& existing : parsed) {
+                                if (existing.file == info.file) {
+                                    duplicate = true;
+                                    break;
+                                }
+                            }
+                            if (!duplicate) parsed.push_back(std::move(info));
+                        }
+                        search = fileKey + 6;
+                    }
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    expressions_ = std::move(parsed);
+                    lastExpressionModelId_ = ExtractJsonString(response, "modelName");
+                }
+            }
+        }
+
+        std::deque<VtsExpressionCommand> commands;
+        {
+            std::lock_guard<std::mutex> lock(expressionCommandMutex_);
+            commands.swap(expressionCommands_);
+        }
+        for (const auto& command : commands) {
+            const std::string data =
+                R"("expressionFile":")" + EscapeJsonString(command.file) +
+                R"(","active":)" + (command.active ? "true" : "false") +
+                R"(,"fadeTime":)" + std::to_string((std::clamp)(command.fadeTime, 0.0, 2.0));
+            if (!SendJson(BuildJsonRequest("ExpressionActivationRequest", data))) {
+                continue;
+            }
+            const std::string response = ReceiveJson();
+            if (response.empty() || ExtractJsonString(response, "messageType") == "APIError") {
+                continue;
+            }
+            // Keep the cached state coherent for quick restoration without
+            // waiting for the next full ExpressionStateRequest.
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (auto& expression : expressions_) {
+                if (expression.file == command.file) {
+                    expression.active = command.active;
+                    break;
+                }
+            }
+        }
     }
 
     void LoadCachedToken() {
@@ -1149,12 +1384,21 @@ private:
     std::atomic<bool> scanRequested_{ false };
     std::atomic<int> scanResult_{ 0 };  // 0=none, 1=success, 2=fail
     std::atomic<bool> everAuthenticated_{ false };
+    std::atomic<bool> initialDiscoveryStarted_{ false };
+    std::atomic<bool> initialDiscoveryDone_{ false };
+    std::atomic<bool> authPending_{ false };
     std::thread thread_;
     int realtimeFps_ = 0;
     int port_ = kVtsApiPort;
+    bool portConfigured_ = false;
     int activePort_ = 0;
     std::string cachedToken_;
     ExtraStats extraStats_;
+    std::vector<ExpressionInfo> expressions_;
+    std::string lastExpressionModelId_;
+    std::mutex expressionCommandMutex_;
+    std::deque<VtsExpressionCommand> expressionCommands_;
+    std::atomic<bool> expressionStateRequested_{ false };
 
     HINTERNET hSession_ = nullptr;
     HINTERNET hConnect_ = nullptr;
@@ -1505,8 +1749,6 @@ public:
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
         const MMRESULT timerResolution = timeBeginPeriod(1);
 
-        vtsApi_.Start(instance_);
-
         if (fpsMode_ == FpsMode::FollowVtsApi) {
             fpsMode_ = FpsMode::FollowVts;
         }
@@ -1787,6 +2029,14 @@ private:
 
     void PollVtsStatus(bool force = false) {
         if (GetCurrentThreadId() != uiThreadId_) return;
+        // Keep the first-run view clean until a real model frame has arrived.
+        // Status recovery is only useful after a stream was seen once.
+        if (!hasReceivedModel_) {
+            if (statusMode_ != VtsStatusMode::Hidden) {
+                HideVtsStatus();
+            }
+            return;
+        }
         const auto now = Clock::now();
         if (!force && now - lastVtsStatusCheck_ < std::chrono::milliseconds(750)) {
             return;
@@ -1892,6 +2142,10 @@ private:
             ReadConfigInt(L"opacity", L"model_percent", 100), 10, 100);
         hoverExpandPx_ = (std::clamp)(
             ReadConfigInt(L"opacity", L"hover_expand_px", 0), -500, 500);
+        hoverExpressionEnabled_ = ReadConfigInt(
+            L"expression", L"hover_enabled", 0) != 0;
+        hoverExpressionFile_ = WideToUtf8(ReadConfigString(
+            L"expression", L"hover_file").c_str());
         aspectLocked_ = ReadConfigInt(L"window", L"lock_aspect", 1) != 0;
         const int borderSchema = ReadConfigInt(L"border", L"schema", 1);
         const int savedBorderMode = ReadConfigInt(
@@ -1927,12 +2181,117 @@ private:
         WriteConfigInt(L"opacity", L"locked_hover_percent", hoverOpacityPercent_);
         WriteConfigInt(L"opacity", L"model_percent", modelOpacityPercent_);
         WriteConfigInt(L"opacity", L"hover_expand_px", hoverExpandPx_);
+        WriteConfigInt(L"expression", L"hover_enabled", hoverExpressionEnabled_ ? 1 : 0);
+        WriteConfigString(L"expression", L"hover_file", Utf8ToWide(hoverExpressionFile_));
         WriteConfigInt(L"window", L"lock_aspect", aspectLocked_ ? 1 : 0);
         WriteConfigInt(L"border", L"schema", 2);
         WriteConfigInt(L"border", L"mode", borderMode_);
         WriteConfigInt(
             L"border", L"custom_color", static_cast<int>(customBorderColor_));
         WriteConfigInt(L"border", L"thickness", borderThickness_);
+    }
+
+    void ResetSettingsToDefaults() {
+        // This is deliberately scoped to the application's own INI file. It
+        // does not touch the VTS installation, Spout, logs, or any user files.
+        CancelFpsCapture();
+        CancelHotkeyCapture();
+        if (toolbarHwnd_) {
+            KillTimer(toolbarHwnd_, 48);
+        }
+        if (borderPanelHwnd_ && IsWindow(borderPanelHwnd_)) {
+            SendMessageW(borderPanelHwnd_, WM_COMMAND, IDCANCEL, 0);
+        }
+
+        const std::filesystem::path path = ConfigPath();
+        std::error_code error;
+        std::filesystem::remove(path, error);
+
+        if (hotkeyRegistered_) {
+            UnregisterHotKey(hwnd_, kHotkeyId);
+            hotkeyRegistered_ = false;
+        }
+        hotkeyModifiers_ = MOD_CONTROL | MOD_SHIFT;
+        hotkeyVk_ = 'L';
+        debugMode_ = false;
+        selectedGpuIndex_ = -1;
+        gpuSelectionFallback_ = false;
+        targetFps_ = 60;
+        fpsMode_ = FpsMode::FollowVts;
+        scalingQuality_ = kScalingBalanced;
+        hoverFadeEnabled_ = true;
+        hoverOpacityPercent_ = kDefaultHoverOpacityPercent;
+        modelOpacityPercent_ = 100;
+        hoverExpandPx_ = 0;
+        CancelHoverExpression();
+        hoverExpressionEnabled_ = false;
+        hoverExpressionFile_.clear();
+        aspectLocked_ = true;
+        borderMode_ = kBorderModeNormal;
+        customBorderColor_ = kDefaultCustomBorderColor;
+        borderThickness_ = kDefaultBorderThickness;
+        bgWarningPermanentlyDismissed_ = false;
+        gpuWarningPermanentlyDismissed_ = false;
+        gpuWarningShown_ = false;
+        statusDismissed_ = false;
+        hasReceivedModel_ = false;
+        apiStartScheduled_ = false;
+        apiStartedAfterModel_ = false;
+        lastApiNotificationVisible_ = false;
+        vtsConfiguredFps_ = 0;
+        vtsConfiguredMode_.clear();
+        vtsApiFps_ = 0;
+        apiNotificationDismissed_ = false;
+        apiWasConnected_ = false;
+        opaqueBackgroundDetected_ = false;
+        opaqueFrameCount_ = 0;
+        holdNotificationForScanResult_ = false;
+        scanStartedObserved_ = false;
+        awaitingUserApproval_ = false;
+        showingApiSuccess_ = false;
+        toolbarHovered_ = ToolbarButton::None;
+        toolbarPressed_ = ToolbarButton::None;
+        capturingFps_ = false;
+        fpsInput_.clear();
+        capturingHotkey_ = false;
+        hoverOpacityPreviewActive_ = false;
+        hoverExpandEditing_ = false;
+        hoverExpandPreviewAlpha_ = 0.0;
+        currentOverlayAlpha_ = 255;
+        hoverFadeStartAlpha_ = 255;
+        hoverTargetAlpha_ = 255;
+        hoverFadeStarted_ = Clock::now();
+        debugFpsHistory_.clear();
+        debugFrameMsHistory_.clear();
+        debugCacheDirty_ = true;
+
+        RegisterConfiguredHotkey(true);
+        SetOverlayVisible(true);
+        SetLocked(false);
+
+        const HMONITOR monitor = MonitorFromPoint(
+            POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY);
+        MONITORINFO info{};
+        info.cbSize = sizeof(info);
+        if (monitor && GetMonitorInfoW(monitor, &info)) {
+            const int x = info.rcWork.left +
+                (info.rcWork.right - info.rcWork.left - kDefaultWidth) / 2;
+            const int y = info.rcWork.top +
+                (info.rcWork.bottom - info.rcWork.top - kDefaultHeight) / 2;
+            SetWindowPos(hwnd_, HWND_TOPMOST, x, y,
+                         kDefaultWidth, kDefaultHeight,
+                         SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
+        PositionToolbar();
+        ++requested_;
+        resetFrameSchedule_ = true;
+        RenderFrame();
+
+        // The VTS API token and port are in the same INI. Restarting this
+        // client drops the in-memory token as well as the on-disk cache.
+        vtsApi_.ResetCache();
+        Log(std::string("[settings] reset_to_defaults") +
+            (error ? " remove_error=" + std::to_string(error.value()) : ""));
     }
 
     void SaveHotkeySettings() const {
@@ -2525,6 +2884,48 @@ private:
                     toolbarHwnd_, nullptr, nullptr,
                     RDW_INVALIDATE | RDW_UPDATENOW);
             }
+        }
+    }
+
+    void ShowDebugMenu() {
+        HMENU menu = CreatePopupMenu();
+        if (!menu) return;
+
+        constexpr UINT kDebugToggleCommand = 3401;
+        constexpr UINT kResetSettingsCommand = 3402;
+        AppendMenuW(
+            menu,
+            MF_STRING | (debugMode_ ? MF_CHECKED : 0),
+            kDebugToggleCommand,
+            L"调试");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(
+            menu,
+            MF_STRING,
+            kResetSettingsCommand,
+            L"清除缓存并重置脚本");
+
+        const RECT debugRect = ToolbarButtonRect(ToolbarButton::Debug);
+        POINT popup{ debugRect.left, debugRect.bottom };
+        ClientToScreen(toolbarHwnd_, &popup);
+        const UINT command = RunModalWhileRendering([this, menu, popup]() {
+            return TrackPopupMenu(
+                menu,
+                TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN,
+                popup.x, popup.y, 0, toolbarHwnd_, nullptr);
+        });
+        DestroyMenu(menu);
+        if (!command) return;
+
+        if (command == kDebugToggleCommand) {
+            debugMode_ = !debugMode_;
+            SaveUiSettings();
+            PositionToolbar();
+            InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+            Log(std::string("[toolbar] debug=") + (debugMode_ ? "1" : "0"));
+        } else if (command == kResetSettingsCommand) {
+            Log("[toolbar] action=reset_settings");
+            ResetSettingsToDefaults();
         }
     }
 
@@ -3230,6 +3631,8 @@ private:
         int originalHoverOpacityPercent = kDefaultHoverOpacityPercent;
         int originalModelOpacityPercent = 100;
         int originalHoverExpandPx = 0;
+        bool originalHoverExpressionEnabled = false;
+        std::string originalHoverExpressionFile;
         std::vector<std::uint32_t> wheelPixels;
         int wheelBitmapWidth = 0;
         int wheelBitmapHeight = 0;
@@ -3557,7 +3960,7 @@ private:
     }
 
     static int PersonalPanelHeight(const LayeredOverlay* overlay) {
-        return overlay && overlay->borderMode_ == kBorderModeCustom ? 590 : 410;
+        return overlay && overlay->borderMode_ == kBorderModeCustom ? 700 : 520;
     }
 
     static void PanelText(
@@ -3743,6 +4146,32 @@ private:
         PanelText(dc, std::to_wstring(overlay->hoverExpandPx_) + L"px", RECT{ 340, y, 410, y + 28 },
             RGB(240, 246, 255), 13, true, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
+        y += 42;
+        RECT expressionCheck{ 20, y + 3, 38, y + 21 };
+        PanelFill(dc, expressionCheck,
+            overlay->hoverExpressionEnabled_ ? RGB(55, 139, 221) : RGB(41, 58, 80));
+        if (overlay->hoverExpressionEnabled_) {
+            PanelText(dc, L"✓", expressionCheck, RGB(255, 255, 255), 14, true,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        PanelText(dc, L"鼠标悬停时触发表情（4秒后恢复）",
+            RECT{ 48, y, 390, y + 28 }, RGB(220, 232, 248), 13, false,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+        y += 34;
+        RECT expressionButton{ 20, y, 258, y + 32 };
+        PanelFill(dc, expressionButton, RGB(26, 46, 71));
+        std::wstring expressionLabel = L"选择表情";
+        if (!overlay->hoverExpressionFile_.empty()) {
+            expressionLabel = L"表情：" + Utf8ToWide(overlay->hoverExpressionFile_);
+        }
+        PanelText(dc, expressionLabel, expressionButton, RGB(240, 246, 255), 12, true,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        RECT previewButton{ 266, y, 405, y + 32 };
+        PanelFill(dc, previewButton, RGB(32, 91, 151));
+        PanelText(dc, L"预览 4 秒", previewButton, RGB(240, 246, 255), 12, true,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
         const int footerY = client.bottom - 48;
         PanelFill(dc, RECT{ 16, footerY - 8, client.right - 16, footerY - 7 }, RGB(38, 58, 82));
         const int buttonW = (client.right - 48) / 3;
@@ -3775,6 +4204,10 @@ private:
         if (y >= base + 87 && y < base + 120 && x < 350) return 9;
         if (y >= base + 125 && y < base + 160) return 7;
         if (y >= base + 163 && y < base + 200) return 8;
+        if (y >= base + 200 && y < base + 235 && x < 395) return 13;
+        if (y >= base + 235 && y < base + 280) {
+            return x < 262 ? 14 : 15;
+        }
         if (overlay->borderMode_ == kBorderModeCustom) {
             const RECT wheel = PersonalWheelRect(overlay);
             if (x >= wheel.left && x < wheel.right && y >= wheel.top && y < wheel.bottom) return 3;
@@ -3871,6 +4304,10 @@ private:
         overlay->hoverOpacityPercent_ = kDefaultHoverOpacityPercent;
         overlay->modelOpacityPercent_ = 100;
         overlay->hoverExpandPx_ = 0;
+        overlay->CancelHoverExpression();
+        overlay->hoverExpressionEnabled_ = false;
+        overlay->hoverExpressionFile_.clear();
+        overlay->RestorePanelExpressionPreview();
         overlay->hoverOpacityPreviewActive_ = true;
         SetTimer(panel, 91, 1000, nullptr);
         state->activeHit = 0;
@@ -3890,11 +4327,63 @@ private:
         overlay->hoverOpacityPercent_ = state->originalHoverOpacityPercent;
         overlay->modelOpacityPercent_ = state->originalModelOpacityPercent;
         overlay->hoverExpandPx_ = state->originalHoverExpandPx;
+        overlay->hoverExpressionEnabled_ = state->originalHoverExpressionEnabled;
+        overlay->hoverExpressionFile_ = state->originalHoverExpressionFile;
+        overlay->RestorePanelExpressionPreview();
         overlay->hoverOpacityPreviewActive_ = false;
         ++overlay->requested_;
         overlay->RenderFrame();
         Log("[toolbar] border_settings_cancel");
         DestroyWindow(panel);
+    }
+
+    static void ShowExpressionMenu(HWND panel, BorderDialogState* state) {
+        if (!state || !state->overlay) return;
+        LayeredOverlay* overlay = state->overlay;
+        const auto expressions = overlay->vtsApi_.GetExpressions();
+        HMENU menu = CreatePopupMenu();
+        if (!menu) return;
+        constexpr UINT kExpressionBase = 6200;
+        if (expressions.empty()) {
+            AppendMenuW(menu, MF_STRING | MF_GRAYED, kExpressionBase,
+                L"暂无可用表情（请确认 VTS API 已连接）");
+            overlay->vtsApi_.RequestExpressionState();
+        } else {
+            for (size_t i = 0; i < expressions.size(); ++i) {
+                const auto& expression = expressions[i];
+                std::wstring label = Utf8ToWide(
+                    expression.name.empty() ? expression.file : expression.name);
+                if (label.empty()) label = L"未命名表情";
+                if (expression.file == overlay->hoverExpressionFile_) {
+                    label += L"  ✓";
+                }
+                AppendMenuW(menu,
+                    MF_STRING | (expression.file == overlay->hoverExpressionFile_
+                        ? MF_CHECKED : 0),
+                    kExpressionBase + static_cast<UINT>(i), label.c_str());
+            }
+        }
+        RECT button{ 20, 0, 258, 0 };
+        const int base = overlay->borderMode_ == kBorderModeCustom ? 330 : 145;
+        button.top = base + 239;
+        button.bottom = button.top + 32;
+        POINT popup{ button.left, button.bottom };
+        ClientToScreen(panel, &popup);
+        const UINT command = overlay->RunModalWhileRendering([&]() {
+            return TrackPopupMenu(menu,
+                TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN,
+                popup.x, popup.y, 0, panel, nullptr);
+        });
+        DestroyMenu(menu);
+        if (command < kExpressionBase ||
+            command >= kExpressionBase + expressions.size()) {
+            return;
+        }
+        overlay->hoverExpressionFile_ = expressions[command - kExpressionBase].file;
+        if (overlay->PreviewExpressionFromPanel()) {
+            SetTimer(panel, 94, 4000, nullptr);
+        }
+        RefreshPersonalPanel(panel);
     }
 
     static LRESULT CALLBACK PersonalPanelProc(
@@ -3927,6 +4416,15 @@ private:
                     overlay->showHoverExpandPreview_ = false;
                     overlay->hoverExpandPreviewUntil_ = Clock::time_point{};
                 }
+                return 0;
+            }
+            if (wParam == 93) {
+                RefreshPersonalPanel(panel);
+                return 0;
+            }
+            if (wParam == 94) {
+                KillTimer(panel, 94);
+                overlay->RestorePanelExpressionPreview();
                 return 0;
             }
             break;
@@ -3987,6 +4485,28 @@ private:
                 RefreshPersonalPanel(panel);
                 return 0;
             }
+            if (hit == 13) {
+                overlay->hoverExpressionEnabled_ = !overlay->hoverExpressionEnabled_;
+                if (!overlay->hoverExpressionEnabled_) {
+                    overlay->CancelHoverExpression();
+                } else {
+                    overlay->vtsApi_.RequestExpressionState();
+                }
+                ++overlay->requested_;
+                overlay->RenderFrame();
+                RefreshPersonalPanel(panel);
+                return 0;
+            }
+            if (hit == 14) {
+                ShowExpressionMenu(panel, state);
+                return 0;
+            }
+            if (hit == 15) {
+                if (overlay->PreviewExpressionFromPanel()) {
+                    SetTimer(panel, 94, 4000, nullptr);
+                }
+                return 0;
+            }
             if (hit == 20) {
                 ResetPersonalPanel(panel, state);
                 return 0;
@@ -3997,6 +4517,8 @@ private:
             }
             if (hit == 22) {
                 overlay->EndHoverOpacityPreview();
+                KillTimer(panel, 94);
+                overlay->RestorePanelExpressionPreview();
                 overlay->SaveUiSettings();
                 Log("[toolbar] border_settings_saved mode=" + std::to_string(overlay->borderMode_) +
                     " thickness=" + std::to_string(overlay->borderThickness_));
@@ -4076,7 +4598,10 @@ private:
             KillTimer(panel, 1);
             KillTimer(panel, 91);
             KillTimer(panel, 92);
+            KillTimer(panel, 93);
+            KillTimer(panel, 94);
             if (GetCapture() == panel) ReleaseCapture();
+            overlay->RestorePanelExpressionPreview();
             overlay->borderDialogOpen_ = false;
             overlay->hoverOpacityPreviewActive_ = false;
             overlay->showHoverExpandPreview_ = false;
@@ -4106,6 +4631,8 @@ private:
         state->originalHoverOpacityPercent = hoverOpacityPercent_;
         state->originalModelOpacityPercent = modelOpacityPercent_;
         state->originalHoverExpandPx = hoverExpandPx_;
+        state->originalHoverExpressionEnabled = hoverExpressionEnabled_;
+        state->originalHoverExpressionFile = hoverExpressionFile_;
         CustomColorHueSaturation(customBorderColor_, state->colorHue, state->colorSaturation);
         state->colorValuePercent = CustomColorValuePercent(customBorderColor_);
         borderDialogOpen_ = true;
@@ -4136,6 +4663,8 @@ private:
             SWP_NOACTIVATE | SWP_SHOWWINDOW);
         PositionBorderPanel();
         ShowWindow(borderPanelHwnd_, SW_SHOWNOACTIVATE);
+        vtsApi_.RequestExpressionState();
+        SetTimer(borderPanelHwnd_, 93, 500, nullptr);
         InvalidateRect(borderPanelHwnd_, nullptr, FALSE);
     }
 
@@ -5224,6 +5753,10 @@ private:
         previousBitmap_ = SelectObject(memoryDc_, dib_);
         dibWidth_ = width;
         dibHeight_ = height;
+        // CreateDIBSection does not guarantee initialized pixels. Clear a
+        // newly sized surface before the first Spout frame arrives; otherwise
+        // a startup/resize gap can present white garbage as a frozen frame.
+        std::memset(dibBits_, 0, static_cast<size_t>(width) * height * 4);
     }
 
     void DestroyDib() {
@@ -5718,6 +6251,81 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         return true;
     }
 
+    void RestoreHoverExpression() {
+        if (!hoverExpressionHovered_ || hoverExpressionRestored_ ||
+            hoverExpressionFile_.empty()) {
+            return;
+        }
+        vtsApi_.SetExpressionActive(
+            hoverExpressionFile_, hoverExpressionOriginalActive_, 0.35);
+        hoverExpressionRestored_ = true;
+    }
+
+    void CancelHoverExpression() {
+        RestoreHoverExpression();
+        hoverExpressionHovered_ = false;
+        hoverExpressionRestored_ = false;
+        hoverExpressionOriginalActive_ = false;
+        hoverExpressionRestoreAt_ = Clock::time_point{};
+    }
+
+    void UpdateHoverExpression() {
+        const bool shouldHover = locked_ && !borderDialogOpen_ &&
+            hoverExpressionEnabled_ && !hoverExpressionFile_.empty() &&
+            hasReceivedModel_ && vtsApi_.IsConnected() && IsCursorOverModel();
+        if (shouldHover && !hoverExpressionHovered_) {
+            bool originalActive = false;
+            if (!vtsApi_.GetExpressionActive(hoverExpressionFile_, originalActive)) {
+                // The API worker refreshes the expression list asynchronously.
+                // Do not activate until the pre-hover state is known, otherwise
+                // leaving the model could accidentally disable a user expression.
+                vtsApi_.RequestExpressionState();
+                return;
+            }
+            hoverExpressionOriginalActive_ = originalActive;
+            hoverExpressionHovered_ = true;
+            hoverExpressionRestored_ = false;
+            hoverExpressionRestoreAt_ = Clock::now() + std::chrono::seconds(4);
+            vtsApi_.SetExpressionActive(hoverExpressionFile_, true, 0.3);
+        } else if (!shouldHover && hoverExpressionHovered_) {
+            CancelHoverExpression();
+        } else if (hoverExpressionHovered_ && !hoverExpressionRestored_ &&
+            Clock::now() >= hoverExpressionRestoreAt_) {
+            // Keep the hover edge latched until the pointer leaves, so a
+            // stationary pointer does not retrigger the expression every 4s.
+            RestoreHoverExpression();
+        }
+    }
+
+    void RestorePanelExpressionPreview() {
+        if (!expressionPanelPreviewActive_ || expressionPanelPreviewFile_.empty()) {
+            return;
+        }
+        vtsApi_.SetExpressionActive(
+            expressionPanelPreviewFile_, expressionPanelPreviewOriginalActive_, 0.35);
+        expressionPanelPreviewActive_ = false;
+        expressionPanelPreviewOriginalActive_ = false;
+        expressionPanelPreviewFile_.clear();
+    }
+
+    bool PreviewExpressionFromPanel() {
+        if (hoverExpressionFile_.empty() || !vtsApi_.IsConnected()) {
+            vtsApi_.RequestExpressionState();
+            return false;
+        }
+        RestorePanelExpressionPreview();
+        bool originalActive = false;
+        if (!vtsApi_.GetExpressionActive(hoverExpressionFile_, originalActive)) {
+            vtsApi_.RequestExpressionState();
+            return false;
+        }
+        expressionPanelPreviewFile_ = hoverExpressionFile_;
+        expressionPanelPreviewOriginalActive_ = originalActive;
+        expressionPanelPreviewActive_ = true;
+        vtsApi_.SetExpressionActive(expressionPanelPreviewFile_, true, 0.3);
+        return true;
+    }
+
     void DrawBgWarningOverlay(int width, int height) {
         if (locked_ || !opaqueBackgroundDetected_ || bgWarningPermanentlyDismissed_) {
             bgWarningCloseRect_ = RECT{};
@@ -5931,16 +6539,9 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             gpuWarningDontShowRect_ = RECT{};
             return;
         }
-        const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-            Clock::now() - gpuWarningStart_).count();
-        if (elapsed >= 8) {
-            gpuWarningShown_ = false;
-            gpuWarningDontShowRect_ = RECT{};
-            return;
-        }
         if (!memoryDc_ || !dibBits_ || width < 320 || height < 60) return;
 
-        const int panelW = 470;
+        const int panelW = (std::min)(620, width - 24);
         const int panelH = 34;
         const int panelX = width - panelW - 12;
         int panelY = 12;
@@ -5970,7 +6571,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
         SetTextColor(dc, RGB(255, 230, 170));
-        RECT textRect{ panelX + 6 + 90 + 6, panelY, panelX + panelW - 6, panelY + panelH };
+        RECT textRect{ panelX + 6 + 90 + 6, panelY,
+            panelX + panelW - 6, panelY + panelH };
         DrawTextW(dc, L"当前运行在高性能显卡中，高负载场景性能将会受限",
             -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
@@ -6030,6 +6632,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             return;
         }
         UpdateHoverOpacity();
+        UpdateHoverExpression();
         const auto presentVtsStatus = [this]() {
             RECT current{};
             GetWindowRect(hwnd_, &current);
@@ -6049,12 +6652,21 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             presentVtsStatus();
             return;
         }
+        // Spout's optional frame-count mutex can block for 67 ms when another
+        // receiver or a busy game holds it. The overlay already has its own
+        // cadence and does not need Spout's semaphore; release that optional
+        // lock after the first successful receive so texture acquisition is
+        // non-blocking. We still copy the latest shared texture each tick.
+        if (!spoutFrameSyncDisabled_) {
+            receiver_.DisableFrameCount();
+            spoutFrameSyncDisabled_ = true;
+        }
         receiveMs_ += std::chrono::duration<double, std::milli>(
             Clock::now() - receiveStarted).count();
         ++received_;
 
         ID3D11Texture2D* source = receiver_.GetSenderTexture();
-        if (!source || !receiver_.IsFrameNew()) {
+        if (!source || (!spoutFrameSyncDisabled_ && !receiver_.IsFrameNew())) {
             PollVtsStatus();
             presentVtsStatus();
             return;
@@ -6066,6 +6678,22 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             HideVtsStatus();
         }
         ++newFrames_;
+        const bool firstModelFrame = !hasReceivedModel_;
+        hasReceivedModel_ = true;
+        if (firstModelFrame && GetCurrentThreadId() == uiThreadId_) {
+            if (!apiStartedAfterModel_ && toolbarHwnd_) {
+                apiStartScheduled_ = true;
+                SetTimer(toolbarHwnd_, 48, kVtsApiModelReadyDelayMs, nullptr);
+            }
+            // The API banner is intentionally hidden before a real Spout
+            // model frame arrives. Reflow and repaint immediately on that
+            // first frame so an unavailable API is not hidden until a later
+            // timer tick or toolbar interaction.
+            PositionToolbar();
+            if (toolbarHwnd_) {
+                InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+            }
+        }
 
         D3D11_TEXTURE2D_DESC description{};
         source->GetDesc(&description);
@@ -6925,6 +7553,14 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         }
         const int prevApiFps = vtsApiFps_;
         vtsApiFps_ = vtsApi_.GetRealtimeFps();
+        const bool apiNotificationVisible = ShowApiNotification();
+        if (apiNotificationVisible != lastApiNotificationVisible_) {
+            lastApiNotificationVisible_ = apiNotificationVisible;
+            PositionToolbar();
+            if (toolbarHwnd_) {
+                InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+            }
+        }
         DetectOpaqueBackground();
         if (vtsApiFps_ > 0 && prevApiFps == 0) {
             apiWasConnected_ = true;
@@ -7013,11 +7649,16 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
 
     bool ShowApiNotification() const {
         if (locked_) return false;
+        if (!hasReceivedModel_) return false;
+        if (!apiStartedAfterModel_) return false;
         if (holdNotificationForScanResult_) return true;
-        if (awaitingUserApproval_) return true;
+        if (awaitingUserApproval_ || vtsApi_.IsAwaitingAuthorization()) return true;
         if (showingApiSuccess_) return true;
-        if (vtsApi_.WasEverAuthenticated()) return false;
-        return !vtsApi_.IsConnected() && sourceWidth_ > 0;
+        if (!vtsApi_.IsInitialDiscoveryDone()) return false;
+        // Only show the API hint after a real model frame has been received.
+        // On a new computer, or after VTS/API disconnects, this is the
+        // reliable way to tell the user that VTS API access needs attention.
+        return !vtsApi_.IsConnected();
     }
 
     int TotalNotificationOffset() const {
@@ -7026,6 +7667,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
 
     void CheckGpuWarning() {
         if (gpuWarningPermanentlyDismissed_ || gpuWarningShown_) return;
+        if (!hasReceivedModel_) return;
         if (activeGpuIndex_ < 0) return;
         const bool onlyOneGpu = gpuAdapters_.size() <= 1;
         const bool runningOnHighPerf = minimumPowerGpuIndex_ >= 0 &&
@@ -7269,9 +7911,11 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
 
         int notifY = 1;
         if (ShowApiNotification()) {
+            const bool awaitingAuthorization =
+                awaitingUserApproval_ || vtsApi_.IsAwaitingAuthorization();
             RECT notifRect{ 1, notifY, client.right - 1, notifY + kApiNotificationHeight };
             HBRUSH notifBg = CreateSolidBrush(
-                (awaitingUserApproval_ || showingApiSuccess_) ? RGB(15, 50, 22) : RGB(50, 30, 10));
+                (awaitingAuthorization || showingApiSuccess_) ? RGB(15, 50, 22) : RGB(50, 30, 10));
             FillRect(buffer, &notifRect, notifBg);
             DeleteObject(notifBg);
             HFONT notifFont = CreateFontW(
@@ -7281,25 +7925,25 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             HGDIOBJ oldNotifFont = SelectObject(buffer, notifFont);
             SetBkMode(buffer, TRANSPARENT);
             SetTextColor(buffer,
-                (awaitingUserApproval_ || showingApiSuccess_) ? RGB(130, 255, 150) : RGB(255, 200, 100));
+                (awaitingAuthorization || showingApiSuccess_) ? RGB(130, 255, 150) : RGB(255, 200, 100));
             const bool disconnected = apiWasConnected_ && !vtsApi_.IsConnected();
             std::wstring notifBuf;
             const wchar_t* notifText;
             if (showingApiSuccess_) {
                 notifText = L"添加成功！";
-            } else if (awaitingUserApproval_) {
+            } else if (awaitingAuthorization) {
                 const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
                     Clock::now().time_since_epoch()).count();
                 const int dotCount = static_cast<int>(seconds % 4);
-                notifBuf = L"请前往 VTubeStudio 允许 VTSFloat_Meow 插件进行访问 · 等待允许中";
+                notifBuf = L"等待 VTube Studio 授权插件连接中，请打开 VTS 插件进行授权";
                 for (int i = 0; i < dotCount; ++i) notifBuf += L".";
                 notifText = notifBuf.c_str();
             } else if (disconnected) {
-                notifText = L"刚刚发现你关闭了 VTubeStudio Plugins API，无法同步实时渲染帧数，将导致额外性能开销";
+                notifText = L"VTubeStudio API 连接已断开，无法同步实时渲染帧数，请点击右侧“如何开启”";
             } else {
-                notifText = L"未启用 VTubeStudio Plugins API，无法同步实时渲染帧数，将导致额外性能开销";
+                notifText = L"尚未获取 VTubeStudio API 授权，请点击右侧“如何开启”";
             }
-            if (awaitingUserApproval_ || showingApiSuccess_) {
+            if (awaitingAuthorization || showingApiSuccess_) {
                 RECT textRect{ 0, notifY, client.right, notifY + kApiNotificationHeight };
                 DrawTextW(buffer, notifText, -1, &textRect,
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -7438,7 +8082,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             drawButton(ToolbarButton::Border, L"个性化");
             drawButton(
                 ToolbarButton::Debug,
-                debugMode_ ? L"调试 开" : L"调试 关");
+                L"调试");
             drawButton(ToolbarButton::Lock, L"完成");
             drawGithubButton();
             drawButton(ToolbarButton::Hide, L"—");
@@ -7597,11 +8241,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             break;
         case ToolbarButton::Debug:
             CancelFpsCapture();
-            debugMode_ = !debugMode_;
-            SaveUiSettings();
-            PositionToolbar();
-            InvalidateRect(toolbarHwnd_, nullptr, FALSE);
-            Log(std::string("[toolbar] debug=") + (debugMode_ ? "1" : "0"));
+            Log("[toolbar] action=debug_menu");
+            ShowDebugMenu();
             break;
         case ToolbarButton::Lock:
             Log("[toolbar] action=lock");
@@ -7658,16 +8299,17 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             TrackMouseEvent(&tracking);
             return 0;
         }
-        case WM_MOUSELEAVE:
+        case WM_MOUSELEAVE: {
             toolbarHovered_ = ToolbarButton::None;
             InvalidateRect(toolbarHwnd_, nullptr, FALSE);
             return 0;
+        }
         case WM_LBUTTONDOWN: {
             SetForegroundWindow(toolbarHwnd_);
             SetFocus(toolbarHwnd_);
             POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             if (ShowApiNotification() && point.y < kApiNotificationHeight) {
-                if (awaitingUserApproval_) {
+                if (awaitingUserApproval_ || vtsApi_.IsAwaitingAuthorization()) {
                     return 0;
                 }
                 RECT clientR{};
@@ -7728,6 +8370,16 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             }
             break;
         case WM_TIMER:
+            if (wParam == 48) {
+                KillTimer(toolbarHwnd_, 48);
+                apiStartScheduled_ = false;
+                if (hasReceivedModel_ && !apiStartedAfterModel_) {
+                    apiStartedAfterModel_ = true;
+                    vtsApi_.Start(instance_);
+                    InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+                }
+                return 0;
+            }
             if (wParam == 42) {
                 InvalidateRect(toolbarHwnd_, nullptr, FALSE);
                 if (vtsApi_.IsScanning()) {
@@ -7810,6 +8462,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                     RECT clientR{};
                     GetClientRect(toolbarHwnd_, &clientR);
                     if (ShowApiNotification() && !awaitingUserApproval_ &&
+                        !vtsApi_.IsAwaitingAuthorization() &&
                         point.x >= clientR.right - 185) {
                         cursor = IDC_HAND;
                     } else {
@@ -7841,6 +8494,9 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             SendMessageW(borderPanelHwnd_, WM_COMMAND, IDOK, 0);
         }
         locked_ = locked;
+        if (!locked_) {
+            CancelHoverExpression();
+        }
         if (!locked_ && !hoverOpacityPreviewActive_) {
             currentOverlayAlpha_ = 255;
             hoverFadeStartAlpha_ = 255;
@@ -7931,13 +8587,17 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             }
             break;
         case WM_SETCURSOR:
-            if (LOWORD(lParam) == HTCLIENT) {
+            {
+                // Layered windows may report HTCAPTION/HTTRANSPARENT while
+                // the pointer is over the rendered warning. Use the actual
+                // screen position instead of requiring HTCLIENT so the two
+                // warning actions always get a hand cursor.
                 POINT p{};
                 GetCursorPos(&p);
                 ScreenToClient(hwnd_, &p);
                 if ((opaqueBackgroundDetected_ && !bgWarningPermanentlyDismissed_ &&
-                     (PtInRect(&bgWarningCloseRect_, p) ||
-                      PtInRect(&bgWarningDontShowRect_, p))) ||
+                    (PtInRect(&bgWarningCloseRect_, p) ||
+                     PtInRect(&bgWarningDontShowRect_, p))) ||
                     (gpuWarningShown_ && !gpuWarningPermanentlyDismissed_ &&
                      PtInRect(&gpuWarningDontShowRect_, p))) {
                     SetCursor(LoadCursorW(nullptr, IDC_HAND));
@@ -8013,6 +8673,14 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                     return HTCLIENT;
                 }
                 return HTTRANSPARENT;
+            }
+            if (!locked_ &&
+                ((opaqueBackgroundDetected_ && !bgWarningPermanentlyDismissed_ &&
+                  (PtInRect(&bgWarningCloseRect_, point) ||
+                   PtInRect(&bgWarningDontShowRect_, point))) ||
+                 (gpuWarningShown_ && !gpuWarningPermanentlyDismissed_ &&
+                  PtInRect(&gpuWarningDontShowRect_, point)))) {
+                return HTCLIENT;
             }
             RECT client{};
             GetClientRect(hwnd_, &client);
@@ -8188,6 +8856,10 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     VtsStatusMode statusMode_ = VtsStatusMode::Hidden;
     std::filesystem::path statusDirectory_;
     bool statusDismissed_ = false;
+    bool hasReceivedModel_ = false;
+    bool apiStartScheduled_ = false;
+    bool apiStartedAfterModel_ = false;
+    bool lastApiNotificationVisible_ = false;
     bool locked_ = true;
     bool initialAspectApplied_ = false;
     bool hotkeyRegistered_ = false;
@@ -8200,6 +8872,15 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     int hoverOpacityPercent_ = kDefaultHoverOpacityPercent;
     int modelOpacityPercent_ = 100;
     int hoverExpandPx_ = 0;
+    bool hoverExpressionEnabled_ = false;
+    std::string hoverExpressionFile_;
+    bool hoverExpressionHovered_ = false;
+    bool hoverExpressionRestored_ = false;
+    bool hoverExpressionOriginalActive_ = false;
+    Clock::time_point hoverExpressionRestoreAt_{};
+    bool expressionPanelPreviewActive_ = false;
+    bool expressionPanelPreviewOriginalActive_ = false;
+    std::string expressionPanelPreviewFile_;
     bool borderDialogOpen_ = false;
     HWND borderPanelHwnd_ = nullptr;
     bool showHoverExpandPreview_ = false;
@@ -8265,6 +8946,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     ToolbarButton toolbarPressed_ = ToolbarButton::None;
 
     spoutDX receiver_;
+    bool spoutFrameSyncDisabled_ = false;
     ComPtr<ID3D11Device> device_;
     ComPtr<ID3D11DeviceContext> context_;
     ComPtr<IDXGIAdapter3> activeAdapter3_;
