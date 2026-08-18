@@ -1,0 +1,28 @@
+# Runtime output and screenshots
+runtime_logs/
+*.log
+
+# Generated native build output
+native/build/
+native/bin/
+native/third_party/Spout2/.git/
+
+# Temporary/compiler artifacts
+*.obj
+*.pdb
+*.ilk
+*.tlog
+*.lastbuildstate
+*.recipe
+*.lib
+*.exp
+*.tmp
+
+# Local user settings
+vts_overlay_layered.ini
+
+# Local Steam launch metadata (not part of the overlay project)
+steam_appid.txt
+
+# Private local project history
+private_project.md
