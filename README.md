@@ -1,21 +1,25 @@
 # VTSFloat_Meow
 
-VTSFloat_Meow 是一个面向 Windows 的 VTube Studio 透明模型悬浮层。当前版本：**Beta 1.0.1**。
+- VTSFloat_Meow 是一个面向 Windows10/11 的 VTube Studio 透明模型悬浮层。当前版本：**Beta 1.0.1**。
+- (暂未在windows10中进行实验，理论上讲推测预计估计应当推断大概率极其可能是没问题的....吧) (=^･ω･^=)
 
 ## 1. 这个工具解决什么问题
 
-许多 VTuber 用户希望把 VTube Studio 模型放到游戏、桌面或其他应用上方。传统做法通常要借助 OBS、Bandicam 等工具完成采集、抠图、透明图层和窗口叠加，配置复杂，也会引入额外的编码、合成和显示开销。
+许多用户( ~~包括我~~ )希望把 VTube Studio 模型放到游戏、桌面或其他应用上方然后美美的( ~~傻傻的~~ )欣赏自己的模型动态。
 
-VTSFloat_Meow 专门处理这层工作：VTube Studio 负责渲染模型并通过 Spout2 发送共享纹理，本程序负责接收、缩放、合成透明画面并显示。它不向游戏、应用或系统底层注入代码，也不依赖 OBS、Bandicam 或 Python。
+传统做法通常要借助 OBS、Bandicam 等工具完成采集、抠图、透明图层和窗口叠加，配置复杂，也会引入额外的编码、合成显示等性能开销。
+然后就诞生了这个项目来解决这个问题。
 
+VTSFloat_Meow 的实现原理：VTube Studio 负责渲染模型并通过 Spout2 发送共享纹理，本程序负责接收、缩放、合成透明画面并显示。它不向游戏、应用或系统底层注入代码，也不依赖 OBS、Bandicam 或 Python。
+Spout2是什么？→是Windows上用于在不同图形程序之间共享GPU纹理的技术。画面可以直接在显存中跨程序传递，避免传统的视频编码和解码
 ## 2. 主要功能
 
 - 任意调整模型窗口大小，并支持比例锁定或自由拉伸。
 - 主屏居中、多显示器切换、恢复上次窗口位置和大小。
 - 支持全屏游戏、无边框窗口和普通桌面应用上层显示。
-- 锁定后鼠标可穿透模型，与下方应用继续交互。
-- 可设置鼠标经过模型时的不透明度和触发范围，并支持平滑过渡。
-- 可在悬停时触发表情，离开或超时后恢复原来的表情状态。
+- 锁定后鼠标可穿透模型，与下方应用/游戏界面继续交互。
+- 可设置鼠标经过模型时的不透明度和触发范围，且平滑过渡。
+- 可在悬停时触发表情，离开或超时后恢复原先的表情状态。
 - 自定义边框颜色、渐变模式、粗细、调试信息和帧率策略。
 - 自动匹配 VTube Studio 的 Spout GPU，并提供多 GPU 选择和 VTube Studio 启动辅助。
 - 系统托盘、快捷键、VTube Studio Plugins API 连接和设置缓存。
@@ -42,41 +46,61 @@ flowchart LR
 数据管线可以简单理解为：
 
 ```text
-VTube Studio 渲染模型
+① VTube Studio 渲染 Live2D 模型
         ↓
-Spout2 共享纹理（发送端 GPU）
+② VTube Studio 通过 Spout2 输出共享纹理
+   （发送端 GPU）
         ↓
-VTSFloat_Meow 在同一 GPU 上接收
+③ VTSFloat_Meow 使用同一 GPU
+   通过 Direct3D 11 接收纹理
         ↓
-必要时缩放并转换为预乘 Alpha BGRA
+④ 检查纹理尺寸、格式和宽高比
         ↓
-叠加边框、透明度和调试层
+⑤ 进行 GPU 缩放与滤波
         ↓
-原生 Win32 分层窗口显示
+⑥ 转换为带 Alpha 通道的
+   32 位 BGRA 图像缓冲区
+        ↓
+⑦ 叠加边框、透明度和调试信息
+        ↓
+⑧ 通过 UpdateLayeredWindow
+   提交透明 Win32 分层窗口
+        ↓
+⑨ Windows 桌面合成器
+   将窗口显示在游戏或其他应用上方
 ```
 
 程序不注入任何游戏或应用，不读取游戏画面，也不参与游戏渲染管线。
 
 ## 4. 使用须知
 
-### 基本使用
+### 1. 基本使用
 
 1. 启动 VTube Studio。
-2. 在 VTube Studio 的“设置 → 相机”中启用 **Spout2/透明推流**，背景选择 `ColorPicker`。
-3. 启动根目录的 `VTSFloat_Meow.exe`，或运行：
-
-   ```powershell
-   .\start_overlay.cmd
-   ```
+2. 在 VTube Studio 的 设置 → 相机”中启用 **Spout2**，背景选择 `ColorPicker` 并打开 `透明推流 ( 关键 )`。
+3. 启动 `VTSFloat_Meow.exe` 或 `start_overlay.cmd`
 
 4. 首次连接 VTube Studio Plugins API 时，在 VTS 中允许插件访问。
 5. 点击“完成”锁定覆盖层；默认快捷键为 `Ctrl+Shift+L`。
 
-### 为什么推荐核显/节能 GPU
+### 2. VTube Studio API 开启教程
+
+1. 在 VTube Studio 的 设置 → 找到 **VTube Studio Plugins / Plugin API** 区域。
+2. 打开 **Start API** 或 **Allow Plugin API access**。
+3. 端口保持默认的 `8001` 即可。若端口被占用，VTube Studio 可能会自动使用 `8002` 或其他端口。
+4. 保持 VTube Studio 和模型运行，然后启动 `VTSFloat_Meow.exe`。
+5. 第一次连接时，VTube Studio 会弹出插件授权提示，请点击 **允许 / Allow**。
+6. 授权成功后，脚本即可使用 API 读取模型状态、获取统计信息和触发表情。之后再次启动通常不会重复弹出授权窗口。
+
+如果没有出现授权提示，请确认 API 已开启、VTube Studio 没有运行多个实例，并检查 API 设置中显示的实际端口。
+
+# ***为什么推荐核显/节能 GPU？
 
 Spout2 共享纹理通常只能在发送端所在的 GPU 上直接打开。VTube Studio、Spout2 和 VTSFloat_Meow 最好运行在同一块 GPU 上。推荐使用核显或节能 GPU，是因为高性能独显通常还要承担游戏或高负载应用的渲染任务。
 
 当游戏以无上限帧率运行时，独显的渲染队列、显存带宽和线程调度可能已经接近满载。此时再让 VTube Studio 和覆盖层争用同一块 GPU，可能导致 Spout 互斥等待、帧率下降，严重时表现为视频、游戏或覆盖层短暂卡死。使用核显可以把模型链路与游戏渲染分开。
+
+在无限暖暖,异环(虚幻5)，燕云十六声(Messiah)，CS2(起源2)中 将VTSFloat_Meow,Spout2,VTube Studio 运行在同游戏的高性能独显时 几乎无法正常渲染，除非手动降低游戏画质与帧率上限）
 
 只有一块 GPU 的电脑也可以使用；程序会直接使用这块 GPU。多 GPU 电脑切换 GPU 后，需要按提示重启 VTube Studio 和覆盖层。
 
@@ -88,7 +112,7 @@ Spout2 共享纹理通常只能在发送端所在的 GPU 上直接打开。VTube
 %LOCALAPPDATA%\vts_overlay_layered.ini
 ```
 
-其中包括窗口位置和大小、比例锁定、帧率、边框、快捷键、GPU 选择及 VTube Studio API 端口。删除该文件，或在“调试 → 清除缓存并重置脚本”中操作，可恢复默认设置。文件只保存本机配置，不是项目源码的一部分。
+其中包括窗口位置和大小、比例锁定、帧率、边框、快捷键、GPU 选择及 VTube Studio API 端口。删除该文件，或在“调试 → 清除缓存并重置脚本”中操作，可恢复默认设置。
 
 ## 5. 性能与性能设计
 
@@ -115,21 +139,24 @@ Spout2 共享纹理通常只能在发送端所在的 GPU 上直接打开。VTube
 
 ## 6. 技术栈
 
-- C++17
-- Win32 窗口、输入、系统托盘和快捷键 API
-- Direct3D 11 / DXGI
-- Spout2 DirectX 共享纹理
-- `UpdateLayeredWindow` 分层透明窗口
-- VTube Studio Plugins API（WebSocket）
-- CMake + Visual Studio 2022 MSVC
+| 模块 | 当前实现 | 作用 |
+| --- | --- | --- |
+| 语言 | C++17 | 主程序和渲染循环 |
+| 窗口 | Win32 分层窗口（`WS_EX_LAYERED`） | 显示透明像素、置顶、鼠标穿透 |
+| 图形设备 | Direct3D 11 / DXGI | 创建 GPU 设备、读取显卡和显示器信息 |
+| 画面传输 | 项目内置 Spout2 DirectX 接收端 | 从 VTS 取共享纹理，不经过网络和磁盘 |
+| 缩放 | D3D11 GPU shader（性能/平衡/质量三档） | 在显卡上完成模型缩放和滤波 |
+| 最终上屏 | 32 位 BGRA DIB + `UpdateLayeredWindow` | 把透明画面交给 Windows 桌面合成器 |
+| 性能统计 | Windows PDH GPU Engine + DXGI 显存查询 | 显示本程序 GPU 占用、GPU 内存和帧耗时 |
+| 设置 | `%LOCALAPPDATA%\vts_overlay_layered.ini` | 保存位置、尺寸、帧率、GPU、外观等设置 |
+| 构建 | CMake + MSVC，脚本为 `native/build_native.ps1` | 生成根目录的 `VTSFloat_Meow.exe` |
 
 ## 7. 早期瓶颈与解决方向
 
 项目早期经历过几次失败路线：
 
-1. **Python/Qt 主线程渲染**：接收、缩放、绘制和窗口消息挤在同一条 GUI 线程，高帧率游戏前台运行时容易排队，拖拽和模型画面会一起卡顿。
-2. **DXGI SwapChain/Present 路线**：在无上限帧率游戏中，交换链提交可能被桌面合成器或显卡调度阻塞数秒，出现“FPS 计数器停止、视频也卡住”的现象。
-3. **跨 GPU 共享纹理**：VTube Studio 和覆盖层不在同一 GPU 时，共享句柄无法稳定打开，接收端只能拿到空纹理或长时间等待。
+1. **Python/Qt 主线程渲染**：接收、缩放、绘制和窗口消息挤在同一条 GUI 线程，高帧率游戏前台运行时直接排队，拖拽和模型画面直接一起卡死。
+2. **DXGI SwapChain/Present 路线**：在高负载游戏中，交换链提交可能被桌面合成器或显卡调度阻塞数秒。
 
 当前实现改为独立的原生 C++ 渲染线程、Direct3D 11 接收、预乘 Alpha DIB 和 `UpdateLayeredWindow`。同时关闭会造成长时间等待的 Spout 可选帧同步互斥锁，由覆盖层自己的刷新调度控制节奏，避免游戏高负载时把等待传递到整个桌面。
 
@@ -143,7 +170,7 @@ Spout2 共享纹理通常只能在发送端所在的 GPU 上直接打开。VTube
 
 ## 构建
 
-安装 Visual Studio 2022 C++ 工具链后，在项目根目录执行：
+安装 Visual Studio 2022 C++ 工具链，在项目根目录执行：
 
 ```powershell
 .\native\build_native.ps1 -Configuration Release
@@ -159,9 +186,9 @@ native/                     C++ 源码、CMake 配置和编译脚本
 native/third_party/Spout2   内置 Spout2 源码
 start_overlay.cmd           启动程序的便捷脚本
 stop_overlay.cmd            关闭程序的便捷脚本
-md/                         面向开发者的补充说明
+md/                         面向开发者/更多了解的补充说明
 ```
 
 ## 许可证与发布状态
 
-当前为 **Beta 1.0.1**，主要用于测试透明模型接收、GPU 匹配和高负载游戏场景下的稳定性。正式版前仍可能调整界面和配置格式。
+任处于测试开发阶段
