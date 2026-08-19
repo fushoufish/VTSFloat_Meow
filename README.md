@@ -1,6 +1,12 @@
-# VTSFloat_Meow
+<p align="center">
+  <img src="VTSFloat_Meow.png" alt="VTSFloat_Meow Logo" width="240">
+</p>
 
-- VTSFloat_Meow 是一个面向 Windows10/11 的 VTube Studio 透明模型悬浮层。当前版本：**Beta 1.0.1**。
+<h1 align="center">VTSFloat_Meow</h1>
+
+<p align="center">将 VTube Studio 的透明模型直接悬浮到桌面、游戏或其他应用上方。</p>
+
+- VTSFloat_Meow 是一个面向 Windows10/11 的 VTube Studio 透明模型悬浮层。当前版本：**Beta 1.0.2**。
 - (暂未在windows10中进行实验，理论上讲推测预计估计应当推断大概率极其可能是没问题的....吧) (=^･ω･^=)
 
 ## 1. 这个工具解决什么问题
