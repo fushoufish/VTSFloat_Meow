@@ -4756,20 +4756,24 @@ private:
         PanelText(dc, L"鼠标经过模型时将模型透明化", RECT{ 48, y, 350, y + 28 },
             RGB(220, 232, 248), 13, false);
 
+        // Keep the fade toggle and its opacity slider on separate rows.  These
+        // controls used to share the same y coordinate, which made the labels
+        // and slider appear on top of each other in the personalization panel.
+        y += 42;
         PanelText(dc, L"悬停不透明度", RECT{ 20, y, 145, y + 28 }, RGB(166, 198, 232), 13, true);
         PanelSlider(dc, RECT{ 130, y + 10, 355, y + 20 }, overlay->hoverOpacityPercent_, 0, 100,
             state->activeHit == 7);
         PanelText(dc, std::to_wstring(overlay->hoverOpacityPercent_) + L"%", RECT{ 365, y, 410, y + 28 },
             RGB(240, 246, 255), 13, true, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
-        y += 38;
+        y += 42;
         PanelText(dc, L"悬停扩展", RECT{ 20, y, 125, y + 28 }, RGB(166, 198, 232), 13, true);
         PanelSlider(dc, RECT{ 130, y + 10, 330, y + 20 }, overlay->hoverExpandPx_, -500, 500,
             state->activeHit == 8);
         PanelText(dc, std::to_wstring(overlay->hoverExpandPx_) + L"px", RECT{ 340, y, 410, y + 28 },
             RGB(240, 246, 255), 13, true, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
-        y += 38;
+        y += 42;
         // The feature switch is deliberately separate from the selection
         // action. Re-selecting a subject must not silently enable the mode.
         RECT subjectCheck{ 20, y + 3, 38, y + 21 };
@@ -4865,13 +4869,13 @@ private:
         if (y >= base && y < base + 30) return 5;
         if (y >= base + 45 && y < base + 75) return 6;
         if (y >= base + 87 && y < base + 120 && x < 350) return 9;
-        if (y >= base + 125 && y < base + 160) return 7;
-        if (y >= base + 163 && y < base + 198) return 8;
-        if (y >= base + 201 && y < base + 238) {
+        if (y >= base + 129 && y < base + 162) return 7;
+        if (y >= base + 171 && y < base + 204) return 8;
+        if (y >= base + 213 && y < base + 250) {
             return x < 285 ? 16 : 17;
         }
-        if (y >= base + 238 && y < base + 273 && x < 395) return 13;
-        const int expressionOptionsTop = base + 277;
+        if (y >= base + 255 && y < base + 290 && x < 395) return 13;
+        const int expressionOptionsTop = base + 289;
         if (overlay->hoverExpressionEnabled_ &&
             y >= expressionOptionsTop && y < expressionOptionsTop + 34 &&
             x >= 225 && x < 340) {
@@ -5085,7 +5089,9 @@ private:
         }
         RECT button{ 20, 0, 258, 0 };
         const int base = overlay->borderMode_ == kBorderModeCustom ? 330 : 145;
-        button.top = base + (overlay->hoverExpressionEnabled_ ? 272 : 234);
+        // The expression button follows the checkbox and optional duration
+        // row in the same fixed-spacing layout used by DrawPersonalPanel.
+        button.top = base + (overlay->hoverExpressionEnabled_ ? 327 : 289);
         button.bottom = button.top + 32;
         POINT popup{ button.left, button.bottom };
         ClientToScreen(panel, &popup);
