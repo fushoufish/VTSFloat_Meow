@@ -476,7 +476,7 @@ constexpr int kVtsApiReconnectDelayMs = 600;
 constexpr int kVtsApiModelReadyDelayMs = 2500;
 // Port discovery deliberately uses short timeouts, but reusing those values
 // for the authenticated WebSocket makes a busy game look like an API drop.
-constexpr DWORD kVtsApiSessionIoTimeoutMs = 1500;
+constexpr DWORD kVtsApiSessionIoTimeoutMs = 1000;
 
 std::string Base64Encode(const std::vector<BYTE>& data) {
     static constexpr char alphabet[] =
@@ -1216,10 +1216,11 @@ private:
         hWebSocket_ = WinHttpWebSocketCompleteUpgrade(hRequest_, 0);
         if (!hWebSocket_) { CleanupHandles(); return false; }
 
-        // The timeout above is only for finding a listening port. Once the
-        // WebSocket is established, allow VTS time to answer while it is
-        // rendering or switching models.
-        DWORD sessionIoTimeout = kVtsApiSessionIoTimeoutMs;
+        // Keep the probe timeout consistent with the selected endpoint:
+        // 8001 gets the longer first-discovery window, while all other
+        // candidate ports use the one-second scan budget.
+        DWORD sessionIoTimeout = port == kVtsApiPort
+            ? 3000 : kVtsApiSessionIoTimeoutMs;
         WinHttpSetOption(
             hSession_, WINHTTP_OPTION_RECEIVE_TIMEOUT,
             &sessionIoTimeout, sizeof(sessionIoTimeout));
