@@ -7019,6 +7019,105 @@ private:
         Log(gpuLog.str());
     }
 
+    // The overlay can be started before VTube Studio.  In that case there is
+    // no Spout sender yet, so CreateGraphics() initially chooses the saved or
+    // minimum-power adapter.  If VTube Studio is subsequently launched on a
+    // different adapter, the DX11 share handle cannot be opened by that
+    // already-created device.  Recreate the receiver/device once the sender
+    // becomes visible so a script restart is not required.
+    bool TryRebindGraphicsToSpoutSender() {
+        if (GetCurrentThreadId() != uiThreadId_ || spoutRebindInProgress_) {
+            return false;
+        }
+        const auto now = Clock::now();
+        if (now - lastSpoutRebindCheck_ < std::chrono::milliseconds(500)) {
+            return false;
+        }
+        lastSpoutRebindCheck_ = now;
+
+        char senderName[256]{};
+        if (!receiver_.GetActiveSender(senderName) || senderName[0] == '\0') {
+            return false;
+        }
+        const int senderAdapterIndex = receiver_.GetSenderAdapter(senderName);
+        if (senderAdapterIndex < 0) {
+            return false;
+        }
+
+        ComPtr<IDXGIFactory6> factory;
+        ComPtr<IDXGIAdapter1> senderAdapter;
+        if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory))) ||
+            FAILED(factory->EnumAdapters1(
+                static_cast<UINT>(senderAdapterIndex), &senderAdapter))) {
+            return false;
+        }
+        DXGI_ADAPTER_DESC1 senderDescription{};
+        senderAdapter->GetDesc1(&senderDescription);
+
+        DXGI_ADAPTER_DESC1 activeDescription{};
+        bool sameAdapter = false;
+        if (activeAdapter3_ && SUCCEEDED(activeAdapter3_->GetDesc1(&activeDescription))) {
+            sameAdapter = activeDescription.AdapterLuid.HighPart ==
+                    senderDescription.AdapterLuid.HighPart &&
+                activeDescription.AdapterLuid.LowPart ==
+                    senderDescription.AdapterLuid.LowPart;
+        }
+        if (sameAdapter) {
+            return false;
+        }
+
+        Log("[spout] sender appeared on a different GPU; rebinding receiver to " +
+            WideToUtf8(senderDescription.Description));
+        spoutRebindInProgress_ = true;
+        receiver_.ReleaseReceiver();
+        receiver_.CloseDirectX11();
+
+        // Release all resources that retain the old adapter/device before
+        // CreateGraphics() selects the sender's adapter.
+        staging_.Reset();
+        scaleInputView_.Reset();
+        scaleInput_.Reset();
+        scaleOutputView_.Reset();
+        scaleOutput_.Reset();
+        scaleOutputReadback_.Reset();
+        scaleVertexShader_.Reset();
+        scalePixelShader_.Reset();
+        scaleSampler_.Reset();
+        scalePointSampler_.Reset();
+        scaleSettingsBuffer_.Reset();
+        scaleRasterizer_.Reset();
+        scaleMapX_.clear();
+        scaleMapY_.clear();
+        scaleMapWidth_ = scaleMapHeight_ = 0;
+        scaleMapSourceWidth_ = scaleMapSourceHeight_ = 0;
+        scaleSourceWidth_ = scaleSourceHeight_ = 0;
+        scaleSourceFormat_ = DXGI_FORMAT_UNKNOWN;
+        scaleOutputWidth_ = scaleOutputHeight_ = 0;
+        gpuScalerUnavailable_ = false;
+        sourceWidth_ = sourceHeight_ = 0;
+        sourceFormat_ = DXGI_FORMAT_UNKNOWN;
+        initialAspectApplied_ = false;
+        spoutFrameSyncDisabled_ = false;
+        if (gpuUsageQuery_) {
+            PdhCloseQuery(gpuUsageQuery_);
+            gpuUsageQuery_ = nullptr;
+            gpuUsageCounter_ = nullptr;
+        }
+        activeAdapter3_.Reset();
+        context_.Reset();
+        device_.Reset();
+
+        bool rebound = false;
+        try {
+            CreateGraphics();
+            rebound = true;
+        } catch (const std::exception& error) {
+            Log(std::string("[spout] automatic GPU rebind failed: ") + error.what());
+        }
+        spoutRebindInProgress_ = false;
+        return rebound;
+    }
+
     void RecreateStaging(ID3D11Texture2D* source) {
         D3D11_TEXTURE2D_DESC description{};
         source->GetDesc(&description);
@@ -8303,6 +8402,10 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         };
         const auto receiveStarted = Clock::now();
         if (!receiver_.ReceiveTexture()) {
+            // VTS may have been launched after this process and can publish
+            // Spout from another GPU.  Rebind before presenting the waiting
+            // page; the next frame can then be received without restarting.
+            TryRebindGraphicsToSpoutSender();
             PollVtsStatus();
             presentVtsStatus();
             return;
@@ -10722,6 +10825,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
 
     spoutDX receiver_;
     bool spoutFrameSyncDisabled_ = false;
+    bool spoutRebindInProgress_ = false;
+    Clock::time_point lastSpoutRebindCheck_{};
     ComPtr<ID3D11Device> device_;
     ComPtr<ID3D11DeviceContext> context_;
     ComPtr<IDXGIAdapter3> activeAdapter3_;
