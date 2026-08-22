@@ -4641,17 +4641,17 @@ private:
 
     static void DrawPanelLockGlyph(HDC dc, RECT rect, bool unlocked) {
         const int centerX = (rect.left + rect.right) / 2;
-        const int bodyTop = rect.top + 20;
-        const int bodyLeft = centerX - 9;
-        const int bodyRight = centerX + 9;
-        const int bodyBottom = rect.top + 33;
+        const int bodyTop = rect.top + 22;
+        const int bodyLeft = centerX - 6;
+        const int bodyRight = centerX + 6;
+        const int bodyBottom = rect.top + 32;
         HBRUSH bodyBrush = CreateSolidBrush(
             unlocked ? RGB(91, 179, 118) : RGB(166, 198, 232));
         HPEN bodyPen = CreatePen(PS_SOLID, 1,
             unlocked ? RGB(126, 226, 151) : RGB(220, 236, 255));
         HGDIOBJ oldBrush = SelectObject(dc, bodyBrush);
         HGDIOBJ oldPen = SelectObject(dc, bodyPen);
-        RoundRect(dc, bodyLeft, bodyTop, bodyRight, bodyBottom, 3, 3);
+        RoundRect(dc, bodyLeft, bodyTop, bodyRight, bodyBottom, 2, 2);
         SelectObject(dc, oldPen);
         SelectObject(dc, oldBrush);
         DeleteObject(bodyPen);
@@ -4661,8 +4661,8 @@ private:
             unlocked ? RGB(126, 226, 151) : RGB(220, 236, 255));
         oldPen = SelectObject(dc, shackle);
         HGDIOBJ oldArcBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
-        Arc(dc, centerX - 7, rect.top + 8, centerX + 7, rect.top + 26,
-            centerX + 7, rect.top + 17, centerX - 7, rect.top + 17);
+        Arc(dc, centerX - 5, rect.top + 12, centerX + 5, rect.top + 27,
+            centerX + 5, rect.top + 19, centerX - 5, rect.top + 19);
         SelectObject(dc, oldArcBrush);
         SelectObject(dc, oldPen);
         DeleteObject(shackle);
@@ -4670,8 +4670,8 @@ private:
             // Erase the right half of the shackle to make the open state clear.
             HPEN erase = CreatePen(PS_SOLID, 4, RGB(28, 48, 75));
             oldPen = SelectObject(dc, erase);
-            MoveToEx(dc, centerX + 5, rect.top + 13, nullptr);
-            LineTo(dc, centerX + 9, rect.top + 18);
+            MoveToEx(dc, centerX + 3, rect.top + 15, nullptr);
+            LineTo(dc, centerX + 7, rect.top + 20);
             SelectObject(dc, oldPen);
             DeleteObject(erase);
         }
@@ -4730,9 +4730,7 @@ private:
         PanelFill(dc, header, RGB(28, 48, 75));
         PanelText(dc, L"个性化", RECT{ 16, 0, 300, 44 }, RGB(240, 246, 255), 18, true,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        const RECT panelLockButton{ client.right - 86, 0, client.right - 48, 44 };
-        PanelFill(dc, panelLockButton,
-            overlay->personalPanelUnlocked_ ? RGB(41, 105, 170) : RGB(24, 40, 62));
+        const RECT panelLockButton{ client.right - 76, 0, client.right - 48, 44 };
         DrawPanelLockGlyph(dc, panelLockButton, overlay->personalPanelUnlocked_);
         PanelText(dc, L"×", RECT{ client.right - 44, 0, client.right - 8, 44 },
             RGB(240, 246, 255), 25, false, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -4854,13 +4852,13 @@ private:
             PanelText(dc, L"✓", subjectCheck, RGB(255, 255, 255), 14, true,
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
-        PanelText(dc, L"剔除特效悬停触发范围",
+        PanelText(dc, L"仅在手动框选范围内触发",
             RECT{ 48, y, 280, y + 28 }, RGB(220, 232, 248), 13, false,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         const RECT subjectReselectButton{ 290, y + 1, 405, y + 27 };
         PanelFill(dc, subjectReselectButton, state->activeHit == 17
             ? RGB(48, 122, 193) : RGB(26, 46, 71));
-        PanelText(dc, overlay->subjectHoverRegionConfigured_ ? L"重新框选" : L"框选主体",
+        PanelText(dc, overlay->subjectHoverRegionConfigured_ ? L"重新框选" : L"框选范围",
             subjectReselectButton, RGB(166, 211, 255), 12, true,
             DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
@@ -4934,7 +4932,7 @@ private:
     static int PersonalPanelHitTest(const LayeredOverlay* overlay, int x, int y) {
         if (!overlay) return 0;
         if (x >= 370 && x < 420 && y < 44) return 1; // close
-        if (x >= 334 && x < 370 && y < 44) return 2; // panel lock/drag toggle
+        if (x >= 344 && x < 370 && y < 44) return 2; // panel lock/drag toggle
         const int modeLeft = 105;
         const int modeWidth = (420 - modeLeft - 16) / 3;
         if (y >= 52 && y < 84 && x >= modeLeft && x < 420 - 16) {
@@ -5668,13 +5666,105 @@ private:
         InvalidateRect(borderPanelHwnd_, nullptr, FALSE);
     }
 
-    static RECT NormalizedSubjectSelectionRect(POINT start, POINT end) {
-        return RECT{
-            (std::min)(start.x, end.x),
-            (std::min)(start.y, end.y),
-            (std::max)(start.x, end.x),
-            (std::max)(start.y, end.y),
-        };
+    struct SubjectSelectionSnapshot {
+        std::vector<std::vector<POINT>> polygons;
+        std::vector<POINT> currentPolygon;
+    };
+
+    struct SubjectSelectionToolbarLayout {
+        RECT panel{};
+        RECT undo{};
+        RECT redo{};
+        RECT count{};
+        RECT finish{};
+    };
+
+    static SubjectSelectionToolbarLayout SubjectSelectionToolbar(HWND window) {
+        RECT client{};
+        GetClientRect(window, &client);
+        const int width = 438;
+        const int left = (std::max)(16L, client.right - width - 24L);
+        const int top = 20;
+        SubjectSelectionToolbarLayout layout;
+        layout.panel = RECT{ left, top, left + width, top + 56 };
+        layout.count = RECT{ left + 10, top + 8, left + 194, top + 48 };
+        layout.undo = RECT{ left + 202, top + 8, left + 242, top + 48 };
+        layout.redo = RECT{ left + 248, top + 8, left + 288, top + 48 };
+        layout.finish = RECT{ left + 298, top + 8, left + 428, top + 48 };
+        return layout;
+    }
+
+    SubjectSelectionSnapshot CurrentSubjectSelectionSnapshot() const {
+        return SubjectSelectionSnapshot{
+            subjectSelectionPolygons_, subjectSelectionPolygon_ };
+    }
+
+    void RestoreSubjectSelectionSnapshot(const SubjectSelectionSnapshot& snapshot) {
+        subjectSelectionPolygons_ = snapshot.polygons;
+        subjectSelectionPolygon_ = snapshot.currentPolygon;
+        if (!subjectSelectionPolygon_.empty()) {
+            subjectSelectionCursor_ = subjectSelectionPolygon_.back();
+        }
+    }
+
+    void RecordSubjectSelectionEdit() {
+        subjectSelectionUndo_.push_back(CurrentSubjectSelectionSnapshot());
+        if (subjectSelectionUndo_.size() > 128) {
+            subjectSelectionUndo_.erase(subjectSelectionUndo_.begin());
+        }
+        subjectSelectionRedo_.clear();
+    }
+
+    void UndoSubjectSelectionEdit() {
+        if (subjectSelectionUndo_.empty()) return;
+        subjectSelectionRedo_.push_back(CurrentSubjectSelectionSnapshot());
+        RestoreSubjectSelectionSnapshot(subjectSelectionUndo_.back());
+        subjectSelectionUndo_.pop_back();
+        if (subjectSelectionHwnd_) InvalidateRect(subjectSelectionHwnd_, nullptr, FALSE);
+    }
+
+    void RedoSubjectSelectionEdit() {
+        if (subjectSelectionRedo_.empty()) return;
+        subjectSelectionUndo_.push_back(CurrentSubjectSelectionSnapshot());
+        RestoreSubjectSelectionSnapshot(subjectSelectionRedo_.back());
+        subjectSelectionRedo_.pop_back();
+        if (subjectSelectionHwnd_) InvalidateRect(subjectSelectionHwnd_, nullptr, FALSE);
+    }
+
+    void CompleteCurrentSubjectPolygon() {
+        if (subjectSelectionPolygon_.size() < 3) return;
+        RecordSubjectSelectionEdit();
+        subjectSelectionPolygons_.push_back(subjectSelectionPolygon_);
+        subjectSelectionPolygon_.clear();
+        subjectSelectionDragging_ = false;
+        if (GetCapture() == subjectSelectionHwnd_) ReleaseCapture();
+        if (subjectSelectionHwnd_) InvalidateRect(subjectSelectionHwnd_, nullptr, FALSE);
+    }
+
+    static void DrawSubjectHistoryGlyph(
+        HDC dc, RECT rect, bool redo, COLORREF color) {
+        HPEN pen = CreatePen(PS_SOLID, 2, color);
+        HGDIOBJ oldPen = SelectObject(dc, pen);
+        HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+        const int centerY = (rect.top + rect.bottom) / 2;
+        if (redo) {
+            Arc(dc, rect.left + 8, rect.top + 8, rect.right - 7, rect.bottom - 6,
+                rect.left + 9, centerY, rect.right - 7, centerY);
+            MoveToEx(dc, rect.right - 7, centerY, nullptr);
+            LineTo(dc, rect.right - 14, centerY - 7);
+            MoveToEx(dc, rect.right - 7, centerY, nullptr);
+            LineTo(dc, rect.right - 14, centerY + 7);
+        } else {
+            Arc(dc, rect.left + 7, rect.top + 8, rect.right - 8, rect.bottom - 6,
+                rect.right - 9, centerY, rect.left + 7, centerY);
+            MoveToEx(dc, rect.left + 7, centerY, nullptr);
+            LineTo(dc, rect.left + 14, centerY - 7);
+            MoveToEx(dc, rect.left + 7, centerY, nullptr);
+            LineTo(dc, rect.left + 14, centerY + 7);
+        }
+        SelectObject(dc, oldBrush);
+        SelectObject(dc, oldPen);
+        DeleteObject(pen);
     }
 
     void DrawSubjectSelectionOverlay(HWND window) {
@@ -5696,15 +5786,36 @@ private:
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, RGB(240, 248, 255));
         RECT title{ 28, 24, client.right - 28, 54 };
-        DrawTextW(dc, L"多边形套索选择主体", -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(dc, L"手动框选悬停范围（支持多选）", -1, &title,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         SelectObject(dc, hintFont);
         SetTextColor(dc, RGB(185, 213, 244));
         RECT hint{ 28, 57, client.right - 28, 84 };
-        DrawTextW(dc, L"逐点点击勾勒角色主体；双击或点击起点完成。将使用 Alpha 分割并跟踪主体。按 Esc 取消。",
+        DrawTextW(dc, L"逐点点击勾勒范围；双击或点击起点完成一个范围，然后可继续框选。回车完成全部，Esc 取消。",
             -1, &hint, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         SelectObject(dc, oldFont);
         DeleteObject(titleFont);
         DeleteObject(hintFont);
+
+        for (size_t polygonIndex = 0;
+            polygonIndex < subjectSelectionPolygons_.size(); ++polygonIndex) {
+            const auto& polygon = subjectSelectionPolygons_[polygonIndex];
+            if (polygon.size() < 3) continue;
+            HBRUSH clear = static_cast<HBRUSH>(GetStockObject(HOLLOW_BRUSH));
+            HPEN completedPen = CreatePen(PS_SOLID, 3, RGB(112, 238, 137));
+            HGDIOBJ oldBrush = SelectObject(dc, clear);
+            HGDIOBJ oldPen = SelectObject(dc, completedPen);
+            Polygon(dc, polygon.data(), static_cast<int>(polygon.size()));
+            SelectObject(dc, oldPen);
+            SelectObject(dc, oldBrush);
+            DeleteObject(completedPen);
+            RECT numberRect{
+                polygon.front().x + 10, polygon.front().y - 18,
+                polygon.front().x + 70, polygon.front().y + 18 };
+            PanelText(dc, std::to_wstring(polygonIndex + 1), numberRect,
+                RGB(146, 255, 166), 15, true,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        }
 
         if (!subjectSelectionPolygon_.empty()) {
             HBRUSH clear = static_cast<HBRUSH>(GetStockObject(HOLLOW_BRUSH));
@@ -5733,7 +5844,9 @@ private:
                 HBRUSH vertexBrush = CreateSolidBrush(i == 0
                     ? RGB(112, 238, 137) : RGB(71, 189, 255));
                 HGDIOBJ oldVertexBrush = SelectObject(dc, vertexBrush);
-                Ellipse(dc, point.x - 5, point.y - 5, point.x + 6, point.y + 6);
+                const int radius = i == 0 ? 11 : 7;
+                Ellipse(dc, point.x - radius, point.y - radius,
+                    point.x + radius + 1, point.y + radius + 1);
                 SelectObject(dc, oldVertexBrush);
                 DeleteObject(vertexBrush);
             }
@@ -5741,6 +5854,33 @@ private:
             SelectObject(dc, oldBrush);
             DeleteObject(outline);
         }
+
+        const SubjectSelectionToolbarLayout toolbar = SubjectSelectionToolbar(window);
+        PanelFill(dc, toolbar.panel, RGB(18, 31, 49));
+        HPEN toolbarBorder = CreatePen(PS_SOLID, 1, RGB(66, 103, 143));
+        HGDIOBJ oldToolbarPen = SelectObject(dc, toolbarBorder);
+        HGDIOBJ oldToolbarBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+        Rectangle(dc, toolbar.panel.left, toolbar.panel.top,
+            toolbar.panel.right, toolbar.panel.bottom);
+        SelectObject(dc, oldToolbarBrush);
+        SelectObject(dc, oldToolbarPen);
+        DeleteObject(toolbarBorder);
+
+        const bool canUndo = !subjectSelectionUndo_.empty();
+        const bool canRedo = !subjectSelectionRedo_.empty();
+        PanelFill(dc, toolbar.undo, RGB(28, 48, 75));
+        PanelFill(dc, toolbar.redo, RGB(28, 48, 75));
+        DrawSubjectHistoryGlyph(dc, toolbar.undo, false,
+            canUndo ? RGB(220, 237, 255) : RGB(83, 105, 129));
+        DrawSubjectHistoryGlyph(dc, toolbar.redo, true,
+            canRedo ? RGB(220, 237, 255) : RGB(83, 105, 129));
+        PanelText(dc,
+            L"当前框选主体数量：" + std::to_wstring(subjectSelectionPolygons_.size()),
+            toolbar.count, RGB(210, 226, 245), 14, true,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        PanelFill(dc, toolbar.finish, RGB(36, 103, 171));
+        PanelText(dc, L"完成  Enter", toolbar.finish, RGB(245, 250, 255), 14, true,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         EndPaint(window, &paint);
     }
 
@@ -6077,54 +6217,27 @@ private:
     }
 
     bool CaptureSubjectHoverMask(
-        int left, int top, int right, int bottom,
-        const std::vector<POINT>* polygon = nullptr) {
-        if (!dibBits_ || dibWidth_ <= 0 || dibHeight_ <= 0) return false;
-        left = (std::clamp)(left, 0, dibWidth_);
-        right = (std::clamp)(right, 0, dibWidth_);
-        top = (std::clamp)(top, 0, dibHeight_);
-        bottom = (std::clamp)(bottom, 0, dibHeight_);
-        if (left >= right || top >= bottom) return false;
-
+        const std::vector<std::vector<POINT>>& localPolygons) {
+        if (dibWidth_ <= 0 || dibHeight_ <= 0 || localPolygons.empty()) return false;
         const int gridWidth =
             (dibWidth_ + kSubjectMaskCellPx - 1) / kSubjectMaskCellPx;
         const int gridHeight =
             (dibHeight_ + kSubjectMaskCellPx - 1) / kSubjectMaskCellPx;
         std::vector<std::uint8_t> bits(
             (static_cast<size_t>(gridWidth) * gridHeight + 7) / 8, 0);
-        const bool haveRawModel = !hoverPreviewBasePixels_.empty() &&
-            hoverPreviewBaseWidth_ == dibWidth_ &&
-            hoverPreviewBaseHeight_ == dibHeight_;
-        const auto* pixels = haveRawModel
-            ? hoverPreviewBasePixels_.data()
-            : static_cast<const std::uint8_t*>(dibBits_);
         size_t occupiedCells = 0;
         for (int gy = 0; gy < gridHeight; ++gy) {
-            const int cellTop = (std::max)(top, gy * kSubjectMaskCellPx);
-            const int cellBottom = (std::min)(bottom,
-                (gy + 1) * kSubjectMaskCellPx);
-            if (cellTop >= cellBottom) continue;
+            const double y = (static_cast<double>(gy) + 0.5) * dibHeight_ / gridHeight;
             for (int gx = 0; gx < gridWidth; ++gx) {
-                const int cellLeft = (std::max)(left, gx * kSubjectMaskCellPx);
-                const int cellRight = (std::min)(right,
-                    (gx + 1) * kSubjectMaskCellPx);
-                if (cellLeft >= cellRight) continue;
-                bool occupied = false;
-                for (int y = cellTop; y < cellBottom && !occupied; ++y) {
-                    for (int x = cellLeft; x < cellRight; ++x) {
-                        if (polygon && !PointInPolygon(
-                            *polygon, static_cast<double>(x) + 0.5,
-                            static_cast<double>(y) + 0.5)) {
-                            continue;
-                        }
-                        if (PreviewBorderPixel(x, y) || DebugOverlayPixel(x, y)) continue;
-                        if (pixels[(static_cast<size_t>(y) * dibWidth_ + x) * 4 + 3] > 8) {
-                            occupied = true;
-                            break;
-                        }
+                const double x = (static_cast<double>(gx) + 0.5) * dibWidth_ / gridWidth;
+                bool inside = false;
+                for (const auto& polygon : localPolygons) {
+                    if (PointInPolygon(polygon, x, y)) {
+                        inside = true;
+                        break;
                     }
                 }
-                if (!occupied) continue;
+                if (!inside) continue;
                 const size_t index = static_cast<size_t>(gy) * gridWidth + gx;
                 bits[index / 8] |= static_cast<std::uint8_t>(1u << (index % 8));
                 ++occupiedCells;
@@ -6133,80 +6246,72 @@ private:
         if (occupiedCells == 0) return false;
         subjectHoverMaskGridWidth_ = gridWidth;
         subjectHoverMaskGridHeight_ = gridHeight;
-        const double preferredX = (left + right) * 0.5 / kSubjectMaskCellPx;
-        const double preferredY = (top + bottom) * 0.5 / kSubjectMaskCellPx;
-        subjectHoverMaskBits_ = KeepScoredSubjectComponents(
-            bits, gridWidth, gridHeight, preferredX, preferredY, true);
-        occupiedCells = 0;
-        for (const std::uint8_t value : subjectHoverMaskBits_) {
-            std::uint8_t bitsInByte = value;
-            while (bitsInByte != 0) {
-                occupiedCells += bitsInByte & 1u;
-                bitsInByte = static_cast<std::uint8_t>(bitsInByte >> 1);
-            }
-        }
-        if (occupiedCells == 0) return false;
-        // A fresh lasso defines a new tracking baseline; do not let the old
-        // model center bias component selection during this initial capture.
+        subjectHoverMaskBits_ = std::move(bits);
         subjectHoverTrackingReferenceValid_ = false;
-        CaptureSubjectTrackingReference();
-        Log("[hover subject] locked mask cells=" + std::to_string(occupiedCells));
+        subjectHoverTrackingScale_ = 1.0;
+        Log("[hover subject] manual regions=" +
+            std::to_string(localPolygons.size()) +
+            " cells=" + std::to_string(occupiedCells));
         return true;
     }
 
     void FinishSubjectSelection(bool commit) {
         if (!subjectSelectionHwnd_) return;
-        if (commit && subjectSelectionPolygon_.size() >= 3) {
-            RECT local{
-                subjectSelectionPolygon_.front().x,
-                subjectSelectionPolygon_.front().y,
-                subjectSelectionPolygon_.front().x,
-                subjectSelectionPolygon_.front().y };
-            for (const POINT point : subjectSelectionPolygon_) {
-                local.left = (std::min)(local.left, point.x);
-                local.top = (std::min)(local.top, point.y);
-                local.right = (std::max)(local.right, point.x);
-                local.bottom = (std::max)(local.bottom, point.y);
+        if (commit) {
+            std::vector<std::vector<POINT>> polygons = subjectSelectionPolygons_;
+            if (subjectSelectionPolygon_.size() >= 3) {
+                polygons.push_back(subjectSelectionPolygon_);
             }
+            if (!polygons.empty()) {
             RECT overlayRect{};
             GetWindowRect(hwnd_, &overlayRect);
-            RECT selectedOnScreen{
-                local.left + subjectSelectionVirtualLeft_,
-                local.top + subjectSelectionVirtualTop_,
-                local.right + subjectSelectionVirtualLeft_,
-                local.bottom + subjectSelectionVirtualTop_ };
-            RECT clipped{};
-            if (IntersectRect(&clipped, &selectedOnScreen, &overlayRect) &&
-                clipped.right - clipped.left >= 8 && clipped.bottom - clipped.top >= 8) {
                 const int width = (std::max)(1L, overlayRect.right - overlayRect.left);
                 const int height = (std::max)(1L, overlayRect.bottom - overlayRect.top);
-                const int localLeft = static_cast<int>(clipped.left - overlayRect.left);
-                const int localTop = static_cast<int>(clipped.top - overlayRect.top);
-                const int localRight = static_cast<int>(clipped.right - overlayRect.left);
-                const int localBottom = static_cast<int>(clipped.bottom - overlayRect.top);
-                subjectHoverRegionLeft_ = (std::clamp)(
-                    localLeft * 10000 / width, 0, 10000);
-                subjectHoverRegionTop_ = (std::clamp)(
-                    localTop * 10000 / height, 0, 10000);
-                subjectHoverRegionRight_ = (std::clamp)(
-                    localRight * 10000 / width, 0, 10000);
-                subjectHoverRegionBottom_ = (std::clamp)(
-                    localBottom * 10000 / height, 0, 10000);
-                std::vector<POINT> localPolygon;
-                localPolygon.reserve(subjectSelectionPolygon_.size());
-                for (const POINT point : subjectSelectionPolygon_) {
-                    localPolygon.push_back(POINT{
-                        point.x + subjectSelectionVirtualLeft_ - overlayRect.left,
-                        point.y + subjectSelectionVirtualTop_ - overlayRect.top });
+                std::vector<std::vector<POINT>> localPolygons;
+                localPolygons.reserve(polygons.size());
+                int localLeft = width;
+                int localTop = height;
+                int localRight = 0;
+                int localBottom = 0;
+                for (const auto& polygon : polygons) {
+                    if (polygon.size() < 3) continue;
+                    std::vector<POINT> localPolygon;
+                    localPolygon.reserve(polygon.size());
+                    for (const POINT point : polygon) {
+                        const POINT localPoint{
+                            point.x + subjectSelectionVirtualLeft_ - overlayRect.left,
+                            point.y + subjectSelectionVirtualTop_ - overlayRect.top };
+                        localPolygon.push_back(localPoint);
+                        localLeft = (std::min)(localLeft, static_cast<int>(localPoint.x));
+                        localTop = (std::min)(localTop, static_cast<int>(localPoint.y));
+                        localRight = (std::max)(localRight, static_cast<int>(localPoint.x));
+                        localBottom = (std::max)(localBottom, static_cast<int>(localPoint.y));
+                    }
+                    localPolygons.push_back(std::move(localPolygon));
                 }
-                const bool maskCaptured = CaptureSubjectHoverMask(
-                    localLeft, localTop, localRight, localBottom, &localPolygon);
-                subjectHoverRegionConfigured_ =
-                    subjectHoverRegionLeft_ < subjectHoverRegionRight_ &&
-                    subjectHoverRegionTop_ < subjectHoverRegionBottom_ && maskCaptured;
-                if (subjectHoverRegionConfigured_) {
+                localLeft = (std::clamp)(localLeft, 0, width);
+                localTop = (std::clamp)(localTop, 0, height);
+                localRight = (std::clamp)(localRight, 0, width);
+                localBottom = (std::clamp)(localBottom, 0, height);
+                const int newRegionLeft = (std::clamp)(
+                    localLeft * 10000 / width, 0, 10000);
+                const int newRegionTop = (std::clamp)(
+                    localTop * 10000 / height, 0, 10000);
+                const int newRegionRight = (std::clamp)(
+                    localRight * 10000 / width, 0, 10000);
+                const int newRegionBottom = (std::clamp)(
+                    localBottom * 10000 / height, 0, 10000);
+                const bool maskCaptured = localLeft < localRight && localTop < localBottom &&
+                    CaptureSubjectHoverMask(localPolygons);
+                if (maskCaptured && newRegionLeft < newRegionRight &&
+                    newRegionTop < newRegionBottom) {
+                    subjectHoverRegionLeft_ = newRegionLeft;
+                    subjectHoverRegionTop_ = newRegionTop;
+                    subjectHoverRegionRight_ = newRegionRight;
+                    subjectHoverRegionBottom_ = newRegionBottom;
+                    subjectHoverRegionConfigured_ = true;
                     SaveUiSettings();
-                    Log("[hover subject] region and mask saved");
+                    Log("[hover subject] manual multi-region mask saved");
                 }
             }
         }
@@ -6218,8 +6323,8 @@ private:
             SetForegroundWindow(subjectSelectionHwnd_);
             return;
         }
-        // Remove all temporary UI visualization before freezing the frame so
-        // the stored alpha mask contains only the model, not preview bands.
+        // Remove temporary preview layers while the user manually defines the
+        // hover regions. The received model frame remains frozen underneath.
         showSubjectRegionPreview_ = false;
         showHoverExpandPreview_ = false;
         hoverExpandPreviewAlpha_ = 0.0;
@@ -6230,12 +6335,15 @@ private:
         subjectSelectionVirtualTop_ = GetSystemMetrics(SM_YVIRTUALSCREEN);
         const int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
         const int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        subjectSelectionPolygons_.clear();
         subjectSelectionPolygon_.clear();
+        subjectSelectionUndo_.clear();
+        subjectSelectionRedo_.clear();
         subjectSelectionCursor_ = POINT{};
         subjectSelectionDragging_ = false;
         subjectSelectionHwnd_ = CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
-            kSubjectSelectionClass, L"VTSFloat_Meow - 框选角色主体", WS_POPUP,
+            kSubjectSelectionClass, L"VTSFloat_Meow - 手动框选悬停范围", WS_POPUP,
             subjectSelectionVirtualLeft_, subjectSelectionVirtualTop_, width, height,
             nullptr, nullptr, instance_, this);
         if (!subjectSelectionHwnd_) {
@@ -6268,22 +6376,46 @@ private:
         case WM_PAINT:
             overlay->DrawSubjectSelectionOverlay(window);
             return 0;
-        case WM_SETCURSOR:
-            SetCursor(LoadCursorW(nullptr, IDC_CROSS));
+        case WM_SETCURSOR: {
+            POINT point{};
+            GetCursorPos(&point);
+            ScreenToClient(window, &point);
+            const auto toolbar = SubjectSelectionToolbar(window);
+            if (PtInRect(&toolbar.undo, point) || PtInRect(&toolbar.redo, point) ||
+                PtInRect(&toolbar.finish, point)) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+            } else {
+                SetCursor(LoadCursorW(nullptr, IDC_CROSS));
+            }
             return TRUE;
+        }
         case WM_LBUTTONDOWN: {
             const POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            const auto toolbar = SubjectSelectionToolbar(window);
+            if (PtInRect(&toolbar.undo, point)) {
+                overlay->UndoSubjectSelectionEdit();
+                return 0;
+            }
+            if (PtInRect(&toolbar.redo, point)) {
+                overlay->RedoSubjectSelectionEdit();
+                return 0;
+            }
+            if (PtInRect(&toolbar.finish, point)) {
+                overlay->FinishSubjectSelection(true);
+                return 0;
+            }
+            if (PtInRect(&toolbar.panel, point)) return 0;
             if (overlay->subjectSelectionPolygon_.size() >= 3) {
                 const POINT first = overlay->subjectSelectionPolygon_.front();
                 const int dx = point.x - first.x;
                 const int dy = point.y - first.y;
-                if (dx * dx + dy * dy <= 14 * 14) {
+                if (dx * dx + dy * dy <= 22 * 22) {
                     overlay->subjectSelectionCursor_ = first;
-                    overlay->subjectSelectionDragging_ = false;
-                    overlay->FinishSubjectSelection(true);
+                    overlay->CompleteCurrentSubjectPolygon();
                     return 0;
                 }
             }
+            overlay->RecordSubjectSelectionEdit();
             overlay->subjectSelectionPolygon_.push_back(point);
             overlay->subjectSelectionCursor_ = point;
             overlay->subjectSelectionDragging_ = true;
@@ -6291,16 +6423,18 @@ private:
             InvalidateRect(window, nullptr, FALSE);
             return 0;
         }
-        case WM_LBUTTONDBLCLK:
+        case WM_LBUTTONDBLCLK: {
+            const POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            const auto toolbar = SubjectSelectionToolbar(window);
+            if (PtInRect(&toolbar.panel, point)) return 0;
             if (overlay->subjectSelectionPolygon_.size() >= 3) {
-                overlay->subjectSelectionDragging_ = false;
-                if (GetCapture() == window) ReleaseCapture();
-                overlay->FinishSubjectSelection(true);
+                overlay->CompleteCurrentSubjectPolygon();
             }
             return 0;
+        }
         case WM_MOUSEMOVE:
             overlay->subjectSelectionCursor_ = POINT{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            if (overlay->subjectSelectionDragging_ && GetCapture() == window) {
+            if (!overlay->subjectSelectionPolygon_.empty()) {
                 InvalidateRect(window, nullptr, FALSE);
             }
             return 0;
@@ -6312,9 +6446,25 @@ private:
             InvalidateRect(window, nullptr, FALSE);
             return 0;
         case WM_RBUTTONDOWN:
-            overlay->FinishSubjectSelection(false);
+            overlay->UndoSubjectSelectionEdit();
             return 0;
         case WM_KEYDOWN:
+            if ((GetKeyState(VK_CONTROL) & 0x8000) != 0 && wParam == 'Z') {
+                if ((GetKeyState(VK_SHIFT) & 0x8000) != 0) {
+                    overlay->RedoSubjectSelectionEdit();
+                } else {
+                    overlay->UndoSubjectSelectionEdit();
+                }
+                return 0;
+            }
+            if ((GetKeyState(VK_CONTROL) & 0x8000) != 0 && wParam == 'Y') {
+                overlay->RedoSubjectSelectionEdit();
+                return 0;
+            }
+            if (wParam == VK_RETURN) {
+                overlay->FinishSubjectSelection(true);
+                return 0;
+            }
             if (wParam == VK_ESCAPE) {
                 overlay->FinishSubjectSelection(false);
                 return 0;
@@ -6326,7 +6476,10 @@ private:
         case WM_DESTROY:
             if (GetCapture() == window) ReleaseCapture();
             overlay->subjectSelectionHwnd_ = nullptr;
+            overlay->subjectSelectionPolygons_.clear();
             overlay->subjectSelectionPolygon_.clear();
+            overlay->subjectSelectionUndo_.clear();
+            overlay->subjectSelectionRedo_.clear();
             overlay->subjectSelectionDragging_ = false;
             overlay->RenderFrame();
             if (overlay->borderPanelHwnd_) {
@@ -7872,24 +8025,14 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             subjectHoverMaskBits_.empty()) {
             return false;
         }
-        const double currentGridX =
+        const double maskGridX =
             (static_cast<double>(x) + 0.5) * subjectHoverMaskGridWidth_ /
             (std::max)(1, width);
-        const double currentGridY =
+        const double maskGridY =
             (static_cast<double>(y) + 0.5) * subjectHoverMaskGridHeight_ /
             (std::max)(1, height);
-        double referenceGridX = currentGridX;
-        double referenceGridY = currentGridY;
-        if (subjectHoverTrackingReferenceValid_ && subjectHoverTrackingScale_ > 0.01) {
-            referenceGridX = subjectHoverTrackingReferenceCenterX_ +
-                (currentGridX - subjectHoverTrackingCurrentCenterX_) /
-                    subjectHoverTrackingScale_;
-            referenceGridY = subjectHoverTrackingReferenceCenterY_ +
-                (currentGridY - subjectHoverTrackingCurrentCenterY_) /
-                    subjectHoverTrackingScale_;
-        }
-        const int gridX = static_cast<int>(std::floor(referenceGridX));
-        const int gridY = static_cast<int>(std::floor(referenceGridY));
+        const int gridX = static_cast<int>(std::floor(maskGridX));
+        const int gridY = static_cast<int>(std::floor(maskGridY));
         if (gridX < 0 || gridY < 0 ||
             gridX >= subjectHoverMaskGridWidth_ ||
             gridY >= subjectHoverMaskGridHeight_) {
@@ -8819,7 +8962,6 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         // Capture the raw model before controls/debug text are painted. This
         // keeps opacity previews and hover fades restricted to model pixels.
         CaptureHoverPreviewBase();
-        UpdateSubjectHoverTracking();
 
         if (!locked_ || debugMode_) {
             DrawControls(width, height);
@@ -11070,7 +11212,10 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     double subjectHoverTrackingScale_ = 1.0;
     Clock::time_point subjectHoverTrackingLastUpdate_{};
     HWND subjectSelectionHwnd_ = nullptr;
+    std::vector<std::vector<POINT>> subjectSelectionPolygons_;
     std::vector<POINT> subjectSelectionPolygon_;
+    std::vector<SubjectSelectionSnapshot> subjectSelectionUndo_;
+    std::vector<SubjectSelectionSnapshot> subjectSelectionRedo_;
     POINT subjectSelectionCursor_{};
     bool subjectSelectionDragging_ = false;
     int subjectSelectionVirtualLeft_ = 0;
