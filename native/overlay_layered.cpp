@@ -4659,44 +4659,6 @@ private:
         DeleteObject(brush);
     }
 
-    static void DrawPanelLockGlyph(HDC dc, RECT rect, bool unlocked) {
-        const int centerX = (rect.left + rect.right) / 2;
-        const int bodyTop = rect.top + 22;
-        const int bodyLeft = centerX - 6;
-        const int bodyRight = centerX + 6;
-        const int bodyBottom = rect.top + 32;
-        HBRUSH bodyBrush = CreateSolidBrush(
-            unlocked ? RGB(91, 179, 118) : RGB(166, 198, 232));
-        HPEN bodyPen = CreatePen(PS_SOLID, 1,
-            unlocked ? RGB(126, 226, 151) : RGB(220, 236, 255));
-        HGDIOBJ oldBrush = SelectObject(dc, bodyBrush);
-        HGDIOBJ oldPen = SelectObject(dc, bodyPen);
-        RoundRect(dc, bodyLeft, bodyTop, bodyRight, bodyBottom, 2, 2);
-        SelectObject(dc, oldPen);
-        SelectObject(dc, oldBrush);
-        DeleteObject(bodyPen);
-        DeleteObject(bodyBrush);
-
-        HPEN shackle = CreatePen(PS_SOLID, 2,
-            unlocked ? RGB(126, 226, 151) : RGB(220, 236, 255));
-        oldPen = SelectObject(dc, shackle);
-        HGDIOBJ oldArcBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
-        Arc(dc, centerX - 5, rect.top + 12, centerX + 5, rect.top + 27,
-            centerX + 5, rect.top + 19, centerX - 5, rect.top + 19);
-        SelectObject(dc, oldArcBrush);
-        SelectObject(dc, oldPen);
-        DeleteObject(shackle);
-        if (unlocked) {
-            // Erase the right half of the shackle to make the open state clear.
-            HPEN erase = CreatePen(PS_SOLID, 4, RGB(28, 48, 75));
-            oldPen = SelectObject(dc, erase);
-            MoveToEx(dc, centerX + 3, rect.top + 15, nullptr);
-            LineTo(dc, centerX + 7, rect.top + 20);
-            SelectObject(dc, oldPen);
-            DeleteObject(erase);
-        }
-    }
-
     static void RefreshPersonalPanel(HWND panel) {
         if (!panel || !IsWindow(panel)) return;
         // InvalidateRect alone may defer WM_PAINT until the drag message
@@ -4750,8 +4712,6 @@ private:
         PanelFill(dc, header, RGB(28, 48, 75));
         PanelText(dc, L"个性化", RECT{ 16, 0, 300, 44 }, RGB(240, 246, 255), 18, true,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        const RECT panelLockButton{ client.right - 76, 0, client.right - 48, 44 };
-        DrawPanelLockGlyph(dc, panelLockButton, overlay->personalPanelUnlocked_);
         PanelText(dc, L"×", RECT{ client.right - 44, 0, client.right - 8, 44 },
             RGB(240, 246, 255), 25, false, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
@@ -4952,7 +4912,6 @@ private:
     static int PersonalPanelHitTest(const LayeredOverlay* overlay, int x, int y) {
         if (!overlay) return 0;
         if (x >= 370 && x < 420 && y < 44) return 1; // close
-        if (x >= 344 && x < 370 && y < 44) return 2; // panel lock/drag toggle
         const int modeLeft = 105;
         const int modeWidth = (420 - modeLeft - 16) / 3;
         if (y >= 52 && y < 84 && x >= modeLeft && x < 420 - 16) {
@@ -5241,11 +5200,7 @@ private:
                     SetCursor(LoadCursorW(nullptr, IDC_IBEAM));
                     return TRUE;
                 }
-                if (hit == 2) {
-                    SetCursor(LoadCursorW(nullptr, IDC_HAND));
-                    return TRUE;
-                }
-                if (overlay->personalPanelUnlocked_ && point.y < 44 && hit == 0) {
+                if (point.y < 44 && hit == 0) {
                     SetCursor(LoadCursorW(nullptr, IDC_SIZEALL));
                     return TRUE;
                 }
@@ -5328,20 +5283,12 @@ private:
             if (hit != 15) {
                 state->editingHoverExpressionDuration = false;
             }
-            if (hit == 2) {
-                overlay->personalPanelUnlocked_ = !overlay->personalPanelUnlocked_;
-                if (!overlay->personalPanelUnlocked_) {
-                    state->draggingPanel = false;
-                    if (GetCapture() == panel) ReleaseCapture();
-                }
-                InvalidateRect(panel, nullptr, FALSE);
-                return 0;
-            }
-            if (overlay->personalPanelUnlocked_ && y < 44 && hit == 0) {
+            if (y < 44 && hit == 0) {
                 RECT windowRect{};
                 GetWindowRect(panel, &windowRect);
                 POINT cursor{};
                 GetCursorPos(&cursor);
+                overlay->personalPanelManuallyPositioned_ = true;
                 state->draggingPanel = true;
                 state->dragStartCursor = cursor;
                 state->dragStartWindow = POINT{ windowRect.left, windowRect.top };
@@ -5596,7 +5543,7 @@ private:
             overlay->hoverExpandEditing_ = false;
             overlay->hoverExpandPreviewAlpha_ = 0.0;
             overlay->showSubjectRegionPreview_ = false;
-            overlay->personalPanelUnlocked_ = false;
+            overlay->personalPanelManuallyPositioned_ = false;
             overlay->borderPanelHwnd_ = nullptr;
             delete state;
             return 0;
@@ -5651,7 +5598,7 @@ private:
         // captured for personalization previews.
         CancelHoverExpression();
         borderDialogOpen_ = true;
-        personalPanelUnlocked_ = false;
+        personalPanelManuallyPositioned_ = false;
         Log("[toolbar] border_panel_open");
 
         static const wchar_t kPersonalPanelClass[] = L"LilyVtsPersonalizationPanel";
@@ -6585,9 +6532,10 @@ private:
 
     void PositionBorderPanel() {
         if (!borderPanelHwnd_ || !IsWindow(borderPanelHwnd_) || !hwnd_) return;
-        // Once the user unlocks and drags the personalization panel, keep its
-        // explicit position. Overlay moves/resizes should not snap it back.
-        if (personalPanelUnlocked_) return;
+        // Once the user drags the personalization panel during this session,
+        // keep its explicit position. Reopening the panel resets this flag and
+        // places it beside the model again.
+        if (personalPanelManuallyPositioned_) return;
         RECT model{};
         GetWindowRect(hwnd_, &model);
         const int panelW = 420;
@@ -11330,7 +11278,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     Clock::time_point expressionPanelIgnoreUntil_{};
     bool borderDialogOpen_ = false;
     HWND borderPanelHwnd_ = nullptr;
-    bool personalPanelUnlocked_ = false;
+    bool personalPanelManuallyPositioned_ = false;
     bool showHoverExpandPreview_ = false;
     bool hoverExpandEditing_ = false;
     bool showSubjectRegionPreview_ = false;
