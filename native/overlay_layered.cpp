@@ -4853,9 +4853,13 @@ private:
 
         y += 34;
         if (overlay->hoverExpressionEnabled_) {
-            PanelText(dc, L"表情恢复延时", RECT{ 20, y, 180, y + 28 },
-                RGB(166, 198, 232), 13, true);
-            RECT durationInput{ 225, y + 2, 340, y + 28 };
+            // Keep the label, value and unit as one visually centered row.
+            const RECT durationLabel{ 62, y + 2, 202, y + 28 };
+            const RECT durationInput{ 214, y + 2, 329, y + 28 };
+            const RECT durationUnit{ 337, y + 2, 357, y + 28 };
+            PanelText(dc, L"表情恢复延时", durationLabel,
+                RGB(166, 198, 232), 13, true,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             PanelFill(dc, durationInput, state->editingHoverExpressionDuration
                 ? RGB(34, 78, 124) : RGB(26, 46, 71));
             HPEN durationBorder = CreatePen(
@@ -4871,11 +4875,10 @@ private:
             const std::wstring durationText = state->editingHoverExpressionDuration
                 ? state->hoverExpressionDurationInput
                 : FormatNonNegativeDecimal(overlay->hoverExpressionDurationSeconds_);
-            PanelText(dc, durationText, RECT{ durationInput.left + 10, durationInput.top,
-                durationInput.right - 6, durationInput.bottom }, RGB(240, 246, 255),
-                13, false, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-            PanelText(dc, L"秒", RECT{ 350, y, 390, y + 28 },
-                RGB(220, 232, 248), 13, false);
+            PanelText(dc, durationText, durationInput, RGB(240, 246, 255),
+                13, false, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            PanelText(dc, L"秒", durationUnit, RGB(220, 232, 248), 13, false,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             y += 38;
         }
         RECT expressionButton{ 20, y, 405, y + 32 };
@@ -4927,7 +4930,7 @@ private:
         const int expressionOptionsTop = base + 289;
         if (overlay->hoverExpressionEnabled_ &&
             y >= expressionOptionsTop && y < expressionOptionsTop + 34 &&
-            x >= 225 && x < 340) {
+            x >= 214 && x < 329) {
             return 15;
         }
         const int expressionButtonTop = expressionOptionsTop +
