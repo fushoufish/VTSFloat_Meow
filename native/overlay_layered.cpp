@@ -2199,6 +2199,7 @@ private:
 
         WNDCLASSEXW subjectSelectionClass{};
         subjectSelectionClass.cbSize = sizeof(subjectSelectionClass);
+        subjectSelectionClass.style = CS_DBLCLKS;
         subjectSelectionClass.hInstance = instance_;
         subjectSelectionClass.lpfnWndProc = &LayeredOverlay::SubjectSelectionWindowProc;
         subjectSelectionClass.lpszClassName = kSubjectSelectionClass;
@@ -4265,6 +4266,9 @@ private:
         int colorValuePercent = 100;
         int activeHit = 0;
         bool trackingMouseLeave = false;
+        bool draggingPanel = false;
+        POINT dragStartCursor{};
+        POINT dragStartWindow{};
     };
 
     static RainbowColor HsvWheelColor(
@@ -4584,14 +4588,41 @@ private:
     }
 
     static int PersonalPanelHeight(const LayeredOverlay* overlay) {
-        return overlay && overlay->borderMode_ == kBorderModeCustom ? 738 : 558;
+        return overlay && overlay->borderMode_ == kBorderModeCustom ? 738 : 518;
+    }
+
+    static int UiFontSize(HWND window, int baseSize) {
+        if (baseSize <= 0) return baseSize;
+        HMONITOR monitor = nullptr;
+        if (window) {
+            monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+        } else {
+            POINT cursor{};
+            GetCursorPos(&cursor);
+            monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+        }
+        MONITORINFO info{};
+        info.cbSize = sizeof(info);
+        if (!monitor || !GetMonitorInfoW(monitor, &info)) return baseSize;
+        const int width = info.rcWork.right - info.rcWork.left;
+        double scale = 1.0;
+        // The overlay uses fixed pixel-sized controls.  Reduce text slightly
+        // on 2K/4K work areas so it does not dominate the compact toolbar and
+        // personalization panel; 1080p keeps the original sizing.
+        if (width >= 3400) {
+            scale = 0.80;
+        } else if (width >= 2200) {
+            scale = 0.88;
+        }
+        return (std::max)(9, static_cast<int>(std::lround(baseSize * scale)));
     }
 
     static void PanelText(
         HDC dc, const std::wstring& text, RECT rect, COLORREF color,
         int pixelHeight = 15, bool bold = false, UINT flags = DT_LEFT | DT_VCENTER) {
         HFONT font = CreateFontW(
-            -pixelHeight, 0, 0, 0, bold ? FW_SEMIBOLD : FW_NORMAL, FALSE, FALSE,
+            -UiFontSize(nullptr, pixelHeight), 0, 0, 0,
+            bold ? FW_SEMIBOLD : FW_NORMAL, FALSE, FALSE,
             FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         HGDIOBJ old = SelectObject(dc, font);
@@ -4606,6 +4637,44 @@ private:
         HBRUSH brush = CreateSolidBrush(color);
         FillRect(dc, &rect, brush);
         DeleteObject(brush);
+    }
+
+    static void DrawPanelLockGlyph(HDC dc, RECT rect, bool unlocked) {
+        const int centerX = (rect.left + rect.right) / 2;
+        const int bodyTop = rect.top + 20;
+        const int bodyLeft = centerX - 9;
+        const int bodyRight = centerX + 9;
+        const int bodyBottom = rect.top + 33;
+        HBRUSH bodyBrush = CreateSolidBrush(
+            unlocked ? RGB(91, 179, 118) : RGB(166, 198, 232));
+        HPEN bodyPen = CreatePen(PS_SOLID, 1,
+            unlocked ? RGB(126, 226, 151) : RGB(220, 236, 255));
+        HGDIOBJ oldBrush = SelectObject(dc, bodyBrush);
+        HGDIOBJ oldPen = SelectObject(dc, bodyPen);
+        RoundRect(dc, bodyLeft, bodyTop, bodyRight, bodyBottom, 3, 3);
+        SelectObject(dc, oldPen);
+        SelectObject(dc, oldBrush);
+        DeleteObject(bodyPen);
+        DeleteObject(bodyBrush);
+
+        HPEN shackle = CreatePen(PS_SOLID, 2,
+            unlocked ? RGB(126, 226, 151) : RGB(220, 236, 255));
+        oldPen = SelectObject(dc, shackle);
+        HGDIOBJ oldArcBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+        Arc(dc, centerX - 7, rect.top + 8, centerX + 7, rect.top + 26,
+            centerX + 7, rect.top + 17, centerX - 7, rect.top + 17);
+        SelectObject(dc, oldArcBrush);
+        SelectObject(dc, oldPen);
+        DeleteObject(shackle);
+        if (unlocked) {
+            // Erase the right half of the shackle to make the open state clear.
+            HPEN erase = CreatePen(PS_SOLID, 4, RGB(28, 48, 75));
+            oldPen = SelectObject(dc, erase);
+            MoveToEx(dc, centerX + 5, rect.top + 13, nullptr);
+            LineTo(dc, centerX + 9, rect.top + 18);
+            SelectObject(dc, oldPen);
+            DeleteObject(erase);
+        }
     }
 
     static void RefreshPersonalPanel(HWND panel) {
@@ -4659,8 +4728,12 @@ private:
 
         RECT header{ 0, 0, client.right, 44 };
         PanelFill(dc, header, RGB(28, 48, 75));
-        PanelText(dc, L"个性化", RECT{ 16, 0, 180, 44 }, RGB(240, 246, 255), 18, true,
+        PanelText(dc, L"个性化", RECT{ 16, 0, 300, 44 }, RGB(240, 246, 255), 18, true,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        const RECT panelLockButton{ client.right - 86, 0, client.right - 48, 44 };
+        PanelFill(dc, panelLockButton,
+            overlay->personalPanelUnlocked_ ? RGB(41, 105, 170) : RGB(24, 40, 62));
+        DrawPanelLockGlyph(dc, panelLockButton, overlay->personalPanelUnlocked_);
         PanelText(dc, L"×", RECT{ client.right - 44, 0, client.right - 8, 44 },
             RGB(240, 246, 255), 25, false, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
@@ -4728,9 +4801,7 @@ private:
                 state->activeHit == 4);
             y = 330;
         } else {
-            PanelText(dc, L"当前模式不需要色盘", RECT{ 22, 112, 390, 144 },
-                RGB(126, 157, 193), 14, false);
-            y = 145;
+            y = 105;
         }
 
         PanelText(dc, L"边框粗细", RECT{ 20, y, 125, y + 28 }, RGB(166, 198, 232), 13, true);
@@ -4786,8 +4857,11 @@ private:
         PanelText(dc, L"剔除特效悬停触发范围",
             RECT{ 48, y, 280, y + 28 }, RGB(220, 232, 248), 13, false,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        const RECT subjectReselectButton{ 290, y + 1, 405, y + 27 };
+        PanelFill(dc, subjectReselectButton, state->activeHit == 17
+            ? RGB(48, 122, 193) : RGB(26, 46, 71));
         PanelText(dc, overlay->subjectHoverRegionConfigured_ ? L"重新框选" : L"框选主体",
-            RECT{ 294, y, 405, y + 28 }, RGB(166, 211, 255), 12, true,
+            subjectReselectButton, RGB(166, 211, 255), 12, true,
             DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
         y += 42;
@@ -4860,12 +4934,13 @@ private:
     static int PersonalPanelHitTest(const LayeredOverlay* overlay, int x, int y) {
         if (!overlay) return 0;
         if (x >= 370 && x < 420 && y < 44) return 1; // close
+        if (x >= 334 && x < 370 && y < 44) return 2; // panel lock/drag toggle
         const int modeLeft = 105;
         const int modeWidth = (420 - modeLeft - 16) / 3;
         if (y >= 52 && y < 84 && x >= modeLeft && x < 420 - 16) {
             return 10 + (x - modeLeft) / modeWidth;
         }
-        int base = overlay->borderMode_ == kBorderModeCustom ? 330 : 145;
+        int base = overlay->borderMode_ == kBorderModeCustom ? 330 : 105;
         if (y >= base && y < base + 30) return 5;
         if (y >= base + 45 && y < base + 75) return 6;
         if (y >= base + 87 && y < base + 120 && x < 350) return 9;
@@ -5088,7 +5163,7 @@ private:
             }
         }
         RECT button{ 20, 0, 258, 0 };
-        const int base = overlay->borderMode_ == kBorderModeCustom ? 330 : 145;
+        const int base = overlay->borderMode_ == kBorderModeCustom ? 330 : 105;
         // The expression button follows the checkbox and optional duration
         // row in the same fixed-spacing layout used by DrawPersonalPanel.
         button.top = base + (overlay->hoverExpressionEnabled_ ? 327 : 289);
@@ -5143,8 +5218,17 @@ private:
                 POINT point{};
                 GetCursorPos(&point);
                 ScreenToClient(panel, &point);
-                if (PersonalPanelHitTest(overlay, point.x, point.y) == 15) {
+                const int hit = PersonalPanelHitTest(overlay, point.x, point.y);
+                if (hit == 15) {
                     SetCursor(LoadCursorW(nullptr, IDC_IBEAM));
+                    return TRUE;
+                }
+                if (hit == 2) {
+                    SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                    return TRUE;
+                }
+                if (overlay->personalPanelUnlocked_ && point.y < 44 && hit == 0) {
+                    SetCursor(LoadCursorW(nullptr, IDC_SIZEALL));
                     return TRUE;
                 }
             }
@@ -5225,6 +5309,26 @@ private:
             const int hit = PersonalPanelHitTest(overlay, x, y);
             if (hit != 15) {
                 state->editingHoverExpressionDuration = false;
+            }
+            if (hit == 2) {
+                overlay->personalPanelUnlocked_ = !overlay->personalPanelUnlocked_;
+                if (!overlay->personalPanelUnlocked_) {
+                    state->draggingPanel = false;
+                    if (GetCapture() == panel) ReleaseCapture();
+                }
+                InvalidateRect(panel, nullptr, FALSE);
+                return 0;
+            }
+            if (overlay->personalPanelUnlocked_ && y < 44 && hit == 0) {
+                RECT windowRect{};
+                GetWindowRect(panel, &windowRect);
+                POINT cursor{};
+                GetCursorPos(&cursor);
+                state->draggingPanel = true;
+                state->dragStartCursor = cursor;
+                state->dragStartWindow = POINT{ windowRect.left, windowRect.top };
+                SetCapture(panel);
+                return 0;
             }
             if (hit == 1) {
                 RestorePersonalPanel(panel, state);
@@ -5353,6 +5457,17 @@ private:
                 tracking.hwndTrack = panel;
                 state->trackingMouseLeave = TrackMouseEvent(&tracking) != FALSE;
             }
+            if (state->draggingPanel && GetCapture() == panel) {
+                POINT cursor{};
+                GetCursorPos(&cursor);
+                const int x = state->dragStartWindow.x +
+                    cursor.x - state->dragStartCursor.x;
+                const int y = state->dragStartWindow.y +
+                    cursor.y - state->dragStartCursor.y;
+                SetWindowPos(panel, HWND_TOPMOST, x, y, 0, 0,
+                    SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                return 0;
+            }
             {
                 const POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
                 const bool showSubjectPreview =
@@ -5388,6 +5503,11 @@ private:
             }
             return 0;
         case WM_LBUTTONUP:
+            if (state->draggingPanel) {
+                state->draggingPanel = false;
+                if (GetCapture() == panel) ReleaseCapture();
+                return 0;
+            }
             if (state->activeHit != 0) {
                 POINT cursor{};
                 GetCursorPos(&cursor);
@@ -5415,6 +5535,7 @@ private:
             }
             break;
         case WM_CAPTURECHANGED:
+            state->draggingPanel = false;
             if (state->activeHit == 8) {
                 overlay->hoverExpandEditing_ = false;
                 overlay->showHoverExpandPreview_ = false;
@@ -5455,6 +5576,7 @@ private:
             overlay->hoverExpandEditing_ = false;
             overlay->hoverExpandPreviewAlpha_ = 0.0;
             overlay->showSubjectRegionPreview_ = false;
+            overlay->personalPanelUnlocked_ = false;
             overlay->borderPanelHwnd_ = nullptr;
             delete state;
             return 0;
@@ -5509,6 +5631,7 @@ private:
         // captured for personalization previews.
         CancelHoverExpression();
         borderDialogOpen_ = true;
+        personalPanelUnlocked_ = false;
         Log("[toolbar] border_panel_open");
 
         static const wchar_t kPersonalPanelClass[] = L"LilyVtsPersonalizationPanel";
@@ -5563,36 +5686,57 @@ private:
         FillRect(dc, &client, shade);
         DeleteObject(shade);
 
-        HFONT titleFont = CreateFontW(-22, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE,
+        HFONT titleFont = CreateFontW(-UiFontSize(window, 22), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE,
             FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
-        HFONT hintFont = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE,
+        HFONT hintFont = CreateFontW(-UiFontSize(window, 15), 0, 0, 0, FW_NORMAL, FALSE, FALSE,
             FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
         HGDIOBJ oldFont = SelectObject(dc, titleFont);
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, RGB(240, 248, 255));
         RECT title{ 28, 24, client.right - 28, 54 };
-        DrawTextW(dc, L"框选角色主体", -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(dc, L"多边形套索选择主体", -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         SelectObject(dc, hintFont);
         SetTextColor(dc, RGB(185, 213, 244));
         RECT hint{ 28, 57, client.right - 28, 84 };
-        DrawTextW(dc, L"拖动鼠标圈住角色主体；松开确认。框外的内容不会触发模型透明化。按 Esc 取消。",
+        DrawTextW(dc, L"逐点点击勾勒角色主体；双击或点击起点完成。将使用 Alpha 分割并跟踪主体。按 Esc 取消。",
             -1, &hint, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         SelectObject(dc, oldFont);
         DeleteObject(titleFont);
         DeleteObject(hintFont);
 
-        if (subjectSelectionDragging_ ||
-            subjectSelectionStart_.x != subjectSelectionEnd_.x ||
-            subjectSelectionStart_.y != subjectSelectionEnd_.y) {
-            const RECT selection = NormalizedSubjectSelectionRect(
-                subjectSelectionStart_, subjectSelectionEnd_);
+        if (!subjectSelectionPolygon_.empty()) {
             HBRUSH clear = static_cast<HBRUSH>(GetStockObject(HOLLOW_BRUSH));
             HPEN outline = CreatePen(PS_SOLID, 3, RGB(71, 189, 255));
             HGDIOBJ oldBrush = SelectObject(dc, clear);
             HGDIOBJ oldPen = SelectObject(dc, outline);
-            Rectangle(dc, selection.left, selection.top, selection.right, selection.bottom);
+            std::vector<POINT> preview = subjectSelectionPolygon_;
+            if (preview.back().x != subjectSelectionCursor_.x ||
+                preview.back().y != subjectSelectionCursor_.y) {
+                preview.push_back(subjectSelectionCursor_);
+            }
+            if (preview.size() >= 2) {
+                Polyline(dc, preview.data(), static_cast<int>(preview.size()));
+            }
+            if (subjectSelectionPolygon_.size() >= 3) {
+                POINT closing[2] = {
+                    subjectSelectionCursor_, subjectSelectionPolygon_.front() };
+                HPEN closePen = CreatePen(PS_DASH, 2, RGB(112, 238, 137));
+                SelectObject(dc, closePen);
+                Polyline(dc, closing, 2);
+                SelectObject(dc, outline);
+                DeleteObject(closePen);
+            }
+            for (size_t i = 0; i < subjectSelectionPolygon_.size(); ++i) {
+                const POINT point = subjectSelectionPolygon_[i];
+                HBRUSH vertexBrush = CreateSolidBrush(i == 0
+                    ? RGB(112, 238, 137) : RGB(71, 189, 255));
+                HGDIOBJ oldVertexBrush = SelectObject(dc, vertexBrush);
+                Ellipse(dc, point.x - 5, point.y - 5, point.x + 6, point.y + 6);
+                SelectObject(dc, oldVertexBrush);
+                DeleteObject(vertexBrush);
+            }
             SelectObject(dc, oldPen);
             SelectObject(dc, oldBrush);
             DeleteObject(outline);
@@ -5711,6 +5855,104 @@ private:
         return result;
     }
 
+    // Select the component that best matches the lasso/previous tracked model,
+    // instead of blindly taking the largest disconnected alpha island.  This
+    // keeps small rain/snow/spark particles out while still retaining nearby
+    // detached model pieces such as a tail or accessory.
+    static std::vector<std::uint8_t> KeepScoredSubjectComponents(
+        const std::vector<std::uint8_t>& bits, int gridWidth, int gridHeight,
+        double preferredX, double preferredY, bool hasPreferred) {
+        const size_t cellCount = static_cast<size_t>(gridWidth) * gridHeight;
+        std::vector<std::uint8_t> result((cellCount + 7) / 8, 0);
+        if (gridWidth <= 0 || gridHeight <= 0 || bits.empty()) return result;
+        struct Candidate {
+            SubjectAlphaComponent bounds;
+            std::vector<int> cells;
+            double distance = 0.0;
+            double score = 0.0;
+        };
+        std::vector<std::uint8_t> visited(cellCount, 0);
+        std::vector<int> pending;
+        std::vector<Candidate> candidates;
+        const auto occupied = [&bits, cellCount](int index) {
+            return index >= 0 && static_cast<size_t>(index) < cellCount &&
+                static_cast<size_t>(index) / 8 < bits.size() &&
+                (bits[static_cast<size_t>(index) / 8] &
+                    static_cast<std::uint8_t>(1u << (index % 8))) != 0;
+        };
+        for (int start = 0; start < static_cast<int>(cellCount); ++start) {
+            if (visited[start] || !occupied(start)) continue;
+            Candidate candidate;
+            candidate.bounds.valid = true;
+            candidate.bounds.left = candidate.bounds.right = start % gridWidth;
+            candidate.bounds.top = candidate.bounds.bottom = start / gridWidth;
+            pending.clear();
+            pending.push_back(start);
+            visited[start] = 1;
+            for (size_t cursor = 0; cursor < pending.size(); ++cursor) {
+                const int index = pending[cursor];
+                const int x = index % gridWidth;
+                const int y = index / gridWidth;
+                candidate.cells.push_back(index);
+                candidate.bounds.left = (std::min)(candidate.bounds.left, x);
+                candidate.bounds.top = (std::min)(candidate.bounds.top, y);
+                candidate.bounds.right = (std::max)(candidate.bounds.right, x + 1);
+                candidate.bounds.bottom = (std::max)(candidate.bounds.bottom, y + 1);
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        if (dx == 0 && dy == 0) continue;
+                        const int nx = x + dx;
+                        const int ny = y + dy;
+                        if (nx < 0 || ny < 0 || nx >= gridWidth || ny >= gridHeight) continue;
+                        const int neighbor = ny * gridWidth + nx;
+                        if (!visited[neighbor] && occupied(neighbor)) {
+                            visited[neighbor] = 1;
+                            pending.push_back(neighbor);
+                        }
+                    }
+                }
+            }
+            candidate.bounds.cells = static_cast<int>(candidate.cells.size());
+            const double dx = candidate.bounds.CenterX() - preferredX;
+            const double dy = candidate.bounds.CenterY() - preferredY;
+            candidate.distance = std::hypot(dx, dy);
+            // Area matters, but distance to the user-selected subject center
+            // matters more than a huge isolated effect at the edge.
+            candidate.score = std::log1p(static_cast<double>(candidate.cells.size())) * 55.0 -
+                (hasPreferred ? candidate.distance * 2.0 : 0.0);
+            candidates.push_back(std::move(candidate));
+        }
+        if (candidates.empty()) return result;
+        size_t anchorIndex = 0;
+        for (size_t i = 1; i < candidates.size(); ++i) {
+            if (candidates[i].score > candidates[anchorIndex].score) anchorIndex = i;
+        }
+        const Candidate& anchor = candidates[anchorIndex];
+        const int attachMinCells = (std::max)(2, anchor.bounds.cells / 250);
+        const auto bboxGap = [&anchor](const Candidate& candidate) {
+            const int gapX = (candidate.bounds.right < anchor.bounds.left)
+                ? anchor.bounds.left - candidate.bounds.right
+                : (anchor.bounds.right < candidate.bounds.left)
+                    ? candidate.bounds.left - anchor.bounds.right : 0;
+            const int gapY = (candidate.bounds.bottom < anchor.bounds.top)
+                ? anchor.bounds.top - candidate.bounds.bottom
+                : (anchor.bounds.bottom < candidate.bounds.top)
+                    ? candidate.bounds.top - anchor.bounds.bottom : 0;
+            return (std::max)(gapX, gapY);
+        };
+        for (size_t i = 0; i < candidates.size(); ++i) {
+            const Candidate& candidate = candidates[i];
+            const bool keep = i == anchorIndex ||
+                (candidate.bounds.cells >= attachMinCells && bboxGap(candidate) <= 10);
+            if (!keep) continue;
+            for (const int index : candidate.cells) {
+                result[static_cast<size_t>(index) / 8] |=
+                    static_cast<std::uint8_t>(1u << (index % 8));
+            }
+        }
+        return result;
+    }
+
     SubjectAlphaComponent CurrentSubjectAlphaComponent(
         int gridWidth, int gridHeight) const {
         SubjectAlphaComponent empty;
@@ -5747,6 +5989,23 @@ private:
                 }
             }
         }
+        const bool hasPreferred = subjectHoverTrackingReferenceValid_;
+        double preferredX = gridWidth * 0.5;
+        double preferredY = gridHeight * 0.5;
+        if (hasPreferred) {
+            preferredX = subjectHoverTrackingCurrentCenterX_;
+            preferredY = subjectHoverTrackingCurrentCenterY_;
+        } else if (subjectHoverRegionConfigured_) {
+            preferredX = (subjectHoverRegionLeft_ + subjectHoverRegionRight_) *
+                0.0001 * gridWidth * 0.5;
+            preferredY = (subjectHoverRegionTop_ + subjectHoverRegionBottom_) *
+                0.0001 * gridHeight * 0.5;
+        }
+        const auto selected = KeepScoredSubjectComponents(
+            bits, gridWidth, gridHeight, preferredX, preferredY, true);
+        SubjectAlphaComponent selectedComponent = LargestSubjectComponent(
+            selected, gridWidth, gridHeight);
+        if (selectedComponent.valid) return selectedComponent;
         return LargestSubjectComponent(bits, gridWidth, gridHeight);
     }
 
@@ -5802,7 +6061,24 @@ private:
             (targetScale - subjectHoverTrackingScale_) * 0.25;
     }
 
-    bool CaptureSubjectHoverMask(int left, int top, int right, int bottom) {
+    static bool PointInPolygon(const std::vector<POINT>& polygon, double x, double y) {
+        if (polygon.size() < 3) return false;
+        bool inside = false;
+        for (size_t i = 0, j = polygon.size() - 1; i < polygon.size(); j = i++) {
+            const double xi = polygon[i].x;
+            const double yi = polygon[i].y;
+            const double xj = polygon[j].x;
+            const double yj = polygon[j].y;
+            const bool crosses = ((yi > y) != (yj > y)) &&
+                (x < (xj - xi) * (y - yi) / ((yj - yi) == 0.0 ? 1.0 : (yj - yi)) + xi);
+            if (crosses) inside = !inside;
+        }
+        return inside;
+    }
+
+    bool CaptureSubjectHoverMask(
+        int left, int top, int right, int bottom,
+        const std::vector<POINT>* polygon = nullptr) {
         if (!dibBits_ || dibWidth_ <= 0 || dibHeight_ <= 0) return false;
         left = (std::clamp)(left, 0, dibWidth_);
         right = (std::clamp)(right, 0, dibWidth_);
@@ -5836,6 +6112,11 @@ private:
                 bool occupied = false;
                 for (int y = cellTop; y < cellBottom && !occupied; ++y) {
                     for (int x = cellLeft; x < cellRight; ++x) {
+                        if (polygon && !PointInPolygon(
+                            *polygon, static_cast<double>(x) + 0.5,
+                            static_cast<double>(y) + 0.5)) {
+                            continue;
+                        }
                         if (PreviewBorderPixel(x, y) || DebugOverlayPixel(x, y)) continue;
                         if (pixels[(static_cast<size_t>(y) * dibWidth_ + x) * 4 + 3] > 8) {
                             occupied = true;
@@ -5852,7 +6133,10 @@ private:
         if (occupiedCells == 0) return false;
         subjectHoverMaskGridWidth_ = gridWidth;
         subjectHoverMaskGridHeight_ = gridHeight;
-        subjectHoverMaskBits_ = KeepLargestSubjectComponent(bits, gridWidth, gridHeight);
+        const double preferredX = (left + right) * 0.5 / kSubjectMaskCellPx;
+        const double preferredY = (top + bottom) * 0.5 / kSubjectMaskCellPx;
+        subjectHoverMaskBits_ = KeepScoredSubjectComponents(
+            bits, gridWidth, gridHeight, preferredX, preferredY, true);
         occupiedCells = 0;
         for (const std::uint8_t value : subjectHoverMaskBits_) {
             std::uint8_t bitsInByte = value;
@@ -5862,6 +6146,9 @@ private:
             }
         }
         if (occupiedCells == 0) return false;
+        // A fresh lasso defines a new tracking baseline; do not let the old
+        // model center bias component selection during this initial capture.
+        subjectHoverTrackingReferenceValid_ = false;
         CaptureSubjectTrackingReference();
         Log("[hover subject] locked mask cells=" + std::to_string(occupiedCells));
         return true;
@@ -5869,9 +6156,18 @@ private:
 
     void FinishSubjectSelection(bool commit) {
         if (!subjectSelectionHwnd_) return;
-        if (commit) {
-            const RECT local = NormalizedSubjectSelectionRect(
-                subjectSelectionStart_, subjectSelectionEnd_);
+        if (commit && subjectSelectionPolygon_.size() >= 3) {
+            RECT local{
+                subjectSelectionPolygon_.front().x,
+                subjectSelectionPolygon_.front().y,
+                subjectSelectionPolygon_.front().x,
+                subjectSelectionPolygon_.front().y };
+            for (const POINT point : subjectSelectionPolygon_) {
+                local.left = (std::min)(local.left, point.x);
+                local.top = (std::min)(local.top, point.y);
+                local.right = (std::max)(local.right, point.x);
+                local.bottom = (std::max)(local.bottom, point.y);
+            }
             RECT overlayRect{};
             GetWindowRect(hwnd_, &overlayRect);
             RECT selectedOnScreen{
@@ -5896,11 +6192,18 @@ private:
                     localRight * 10000 / width, 0, 10000);
                 subjectHoverRegionBottom_ = (std::clamp)(
                     localBottom * 10000 / height, 0, 10000);
+                std::vector<POINT> localPolygon;
+                localPolygon.reserve(subjectSelectionPolygon_.size());
+                for (const POINT point : subjectSelectionPolygon_) {
+                    localPolygon.push_back(POINT{
+                        point.x + subjectSelectionVirtualLeft_ - overlayRect.left,
+                        point.y + subjectSelectionVirtualTop_ - overlayRect.top });
+                }
+                const bool maskCaptured = CaptureSubjectHoverMask(
+                    localLeft, localTop, localRight, localBottom, &localPolygon);
                 subjectHoverRegionConfigured_ =
                     subjectHoverRegionLeft_ < subjectHoverRegionRight_ &&
-                    subjectHoverRegionTop_ < subjectHoverRegionBottom_ &&
-                    CaptureSubjectHoverMask(
-                        localLeft, localTop, localRight, localBottom);
+                    subjectHoverRegionTop_ < subjectHoverRegionBottom_ && maskCaptured;
                 if (subjectHoverRegionConfigured_) {
                     SaveUiSettings();
                     Log("[hover subject] region and mask saved");
@@ -5920,13 +6223,15 @@ private:
         showSubjectRegionPreview_ = false;
         showHoverExpandPreview_ = false;
         hoverExpandPreviewAlpha_ = 0.0;
+        subjectHoverTrackingReferenceValid_ = false;
+        subjectHoverTrackingLastUpdate_ = Clock::time_point{};
         RenderFrame();
         subjectSelectionVirtualLeft_ = GetSystemMetrics(SM_XVIRTUALSCREEN);
         subjectSelectionVirtualTop_ = GetSystemMetrics(SM_YVIRTUALSCREEN);
         const int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
         const int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-        subjectSelectionStart_ = POINT{};
-        subjectSelectionEnd_ = POINT{};
+        subjectSelectionPolygon_.clear();
+        subjectSelectionCursor_ = POINT{};
         subjectSelectionDragging_ = false;
         subjectSelectionHwnd_ = CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
@@ -5966,26 +6271,48 @@ private:
         case WM_SETCURSOR:
             SetCursor(LoadCursorW(nullptr, IDC_CROSS));
             return TRUE;
-        case WM_LBUTTONDOWN:
-            overlay->subjectSelectionStart_ = POINT{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            overlay->subjectSelectionEnd_ = overlay->subjectSelectionStart_;
+        case WM_LBUTTONDOWN: {
+            const POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (overlay->subjectSelectionPolygon_.size() >= 3) {
+                const POINT first = overlay->subjectSelectionPolygon_.front();
+                const int dx = point.x - first.x;
+                const int dy = point.y - first.y;
+                if (dx * dx + dy * dy <= 14 * 14) {
+                    overlay->subjectSelectionCursor_ = first;
+                    overlay->subjectSelectionDragging_ = false;
+                    overlay->FinishSubjectSelection(true);
+                    return 0;
+                }
+            }
+            overlay->subjectSelectionPolygon_.push_back(point);
+            overlay->subjectSelectionCursor_ = point;
             overlay->subjectSelectionDragging_ = true;
             SetCapture(window);
             InvalidateRect(window, nullptr, FALSE);
             return 0;
-        case WM_MOUSEMOVE:
-            if (overlay->subjectSelectionDragging_ && GetCapture() == window) {
-                overlay->subjectSelectionEnd_ = POINT{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-                InvalidateRect(window, nullptr, FALSE);
-            }
-            return 0;
-        case WM_LBUTTONUP:
-            if (overlay->subjectSelectionDragging_) {
-                overlay->subjectSelectionEnd_ = POINT{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        }
+        case WM_LBUTTONDBLCLK:
+            if (overlay->subjectSelectionPolygon_.size() >= 3) {
                 overlay->subjectSelectionDragging_ = false;
                 if (GetCapture() == window) ReleaseCapture();
                 overlay->FinishSubjectSelection(true);
             }
+            return 0;
+        case WM_MOUSEMOVE:
+            overlay->subjectSelectionCursor_ = POINT{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (overlay->subjectSelectionDragging_ && GetCapture() == window) {
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            return 0;
+        case WM_LBUTTONUP:
+            // A lasso point is committed on button-down; button-up only stops
+            // capture so the cursor can continue previewing the next edge.
+            overlay->subjectSelectionDragging_ = false;
+            if (GetCapture() == window) ReleaseCapture();
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        case WM_RBUTTONDOWN:
+            overlay->FinishSubjectSelection(false);
             return 0;
         case WM_KEYDOWN:
             if (wParam == VK_ESCAPE) {
@@ -5999,6 +6326,7 @@ private:
         case WM_DESTROY:
             if (GetCapture() == window) ReleaseCapture();
             overlay->subjectSelectionHwnd_ = nullptr;
+            overlay->subjectSelectionPolygon_.clear();
             overlay->subjectSelectionDragging_ = false;
             overlay->RenderFrame();
             if (overlay->borderPanelHwnd_) {
@@ -6013,6 +6341,9 @@ private:
 
     void PositionBorderPanel() {
         if (!borderPanelHwnd_ || !IsWindow(borderPanelHwnd_) || !hwnd_) return;
+        // Once the user unlocks and drags the personalization panel, keep its
+        // explicit position. Overlay moves/resizes should not snap it back.
+        if (personalPanelUnlocked_) return;
         RECT model{};
         GetWindowRect(hwnd_, &model);
         const int panelW = 420;
@@ -8028,7 +8359,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         DeleteObject(border);
 
         HFONT font = CreateFontW(
-            -14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            -UiFontSize(nullptr, 14), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
         HGDIOBJ oldFont = SelectObject(dc, font);
@@ -8309,7 +8640,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         DeleteObject(border);
 
         HFONT font = CreateFontW(
-            -14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            -UiFontSize(nullptr, 14), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
         HGDIOBJ oldFont = SelectObject(dc, font);
@@ -8887,7 +9218,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         }
 
         HFONT font = CreateFontW(
-            -14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            -UiFontSize(nullptr, 14), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         HGDIOBJ oldFont = SelectObject(memoryDc_, font);
@@ -9059,11 +9390,11 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         }
 
         HFONT titleFont = CreateFontW(
-            -22, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            -UiFontSize(nullptr, 22), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         HFONT bodyFont = CreateFontW(
-            -16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            -UiFontSize(nullptr, 16), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         HGDIOBJ oldFont = SelectObject(memoryDc_, titleFont);
@@ -9095,7 +9426,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             : L"VTS 安装路径：" + statusDirectory_.wstring();
         const std::wstring manualPathText = L"手动选择路径";
         HFONT manualPathFont = CreateFontW(
-            -16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+            -UiFontSize(nullptr, 16), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         SelectObject(memoryDc_, manualPathFont);
@@ -9741,7 +10072,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             FillRect(buffer, &notifRect, notifBg);
             DeleteObject(notifBg);
             HFONT notifFont = CreateFontW(
-                -15, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                -UiFontSize(nullptr, 15), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
             HGDIOBJ oldNotifFont = SelectObject(buffer, notifFont);
@@ -9809,11 +10140,11 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         }
 
         HFONT font = CreateFontW(
-            -15, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            -UiFontSize(toolbarHwnd_, 15), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         HFONT closeFont = CreateFontW(
-            -25, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            -UiFontSize(toolbarHwnd_, 25), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Symbol");
         HGDIOBJ oldFont = SelectObject(buffer, font);
@@ -9917,7 +10248,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         if (!locked_) {
             const bool compact = ToolbarUsesCompactLayout();
             HFONT debugFont = CreateFontW(
-                -13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                -UiFontSize(toolbarHwnd_, 13), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
             SelectObject(buffer, debugFont);
@@ -10739,8 +11070,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     double subjectHoverTrackingScale_ = 1.0;
     Clock::time_point subjectHoverTrackingLastUpdate_{};
     HWND subjectSelectionHwnd_ = nullptr;
-    POINT subjectSelectionStart_{};
-    POINT subjectSelectionEnd_{};
+    std::vector<POINT> subjectSelectionPolygon_;
+    POINT subjectSelectionCursor_{};
     bool subjectSelectionDragging_ = false;
     int subjectSelectionVirtualLeft_ = 0;
     int subjectSelectionVirtualTop_ = 0;
@@ -10760,6 +11091,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     Clock::time_point expressionPanelIgnoreUntil_{};
     bool borderDialogOpen_ = false;
     HWND borderPanelHwnd_ = nullptr;
+    bool personalPanelUnlocked_ = false;
     bool showHoverExpandPreview_ = false;
     bool hoverExpandEditing_ = false;
     bool showSubjectRegionPreview_ = false;
