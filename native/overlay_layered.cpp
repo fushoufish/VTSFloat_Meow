@@ -4852,15 +4852,15 @@ private:
             PanelText(dc, L"✓", subjectCheck, RGB(255, 255, 255), 14, true,
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
-        PanelText(dc, L"仅在手动框选范围内触发",
-            RECT{ 48, y, 280, y + 28 }, RGB(220, 232, 248), 13, false,
+        PanelText(dc, L"启用手动框选范围",
+            RECT{ 48, y, 195, y + 28 }, RGB(220, 232, 248), 12, false,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        const RECT subjectReselectButton{ 290, y + 1, 405, y + 27 };
+        const RECT subjectReselectButton{ 198, y + 1, 402, y + 27 };
         PanelFill(dc, subjectReselectButton, state->activeHit == 17
             ? RGB(48, 122, 193) : RGB(26, 46, 71));
-        PanelText(dc, overlay->subjectHoverRegionConfigured_ ? L"重新框选" : L"框选范围",
-            subjectReselectButton, RGB(166, 211, 255), 12, true,
-            DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        PanelText(dc, L"手动框选悬停触发范围",
+            subjectReselectButton, RGB(166, 211, 255), 11, true,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
         y += 42;
         RECT expressionCheck{ 20, y + 3, 38, y + 21 };
@@ -4945,7 +4945,7 @@ private:
         if (y >= base + 129 && y < base + 162) return 7;
         if (y >= base + 171 && y < base + 204) return 8;
         if (y >= base + 213 && y < base + 250) {
-            return x < 285 ? 16 : 17;
+            return x < 198 ? 16 : 17;
         }
         if (y >= base + 255 && y < base + 290 && x < 395) return 13;
         const int expressionOptionsTop = base + 289;
@@ -5468,9 +5468,11 @@ private:
             }
             {
                 const POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                const int hoverHit = PersonalPanelHitTest(
+                    overlay, point.x, point.y);
                 const bool showSubjectPreview =
                     state->activeHit == 0 && overlay->subjectHoverRegionConfigured_ &&
-                    PersonalPanelHitTest(overlay, point.x, point.y) == 17;
+                    (hoverHit == 16 || hoverHit == 17);
                 if (showSubjectPreview != overlay->showSubjectRegionPreview_) {
                     overlay->showSubjectRegionPreview_ = showSubjectPreview;
                     ++overlay->requested_;
