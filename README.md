@@ -32,65 +32,9 @@ Spout2是什么？→是Windows上用于在不同图形程序之间共享GPU纹�
 
 ## 3. 工作原理
 
-```mermaid
-flowchart LR
-    VTS["VTube Studio<br/>渲染 Live2D 模型"] --> SPOUT["Spout2<br/>GPU 共享纹理"]
+VTube Studio 负责渲染模型并通过 Spout2 发送 GPU 共享纹理；VTSFloat_Meow 负责接收、缩放、合成透明画面，并使用原生 Win32 分层窗口显示。程序不注入游戏或应用，也不读取游戏画面。
 
-    subgraph PIPE["VTSFloat_Meow · 原生 C++ 渲染管线"]
-        direction TB
-        GPU["Direct3D 11<br/>同一 GPU 接收"] --> CHECK{"尺寸 / 格式一致？"}
-        CHECK -->|是| COPY["直接复制"]
-        CHECK -->|否| SCALE["GPU 缩放与滤波<br/>性能 · 平衡 · 质量"]
-        COPY --> BGRA["32 位 BGRA · 预乘 Alpha"]
-        SCALE --> BGRA
-        BGRA --> COMPOSE["边框 · 透明度 · 调试信息<br/>画面合成"]
-        COMPOSE --> WINDOW["UpdateLayeredWindow<br/>透明 Win32 窗口"]
-    end
-
-    SPOUT --> GPU
-    WINDOW --> DESKTOP["Windows 桌面合成器<br/>显示在游戏 / 应用上方"]
-    API["VTube Studio Plugins API<br/>表情 · 统计 · 配置"] -.-> COMPOSE
-
-    classDef source fill:#e8f4ff,stroke:#3182ce,color:#123b5d,stroke-width:1.5px;
-    classDef pipeline fill:#f3efff,stroke:#7c5ac2,color:#30205a,stroke-width:1.5px;
-    classDef decision fill:#fff4d6,stroke:#d69e2e,color:#5c4300,stroke-width:1.5px;
-    classDef output fill:#e7f8ee,stroke:#2f855a,color:#174b2c,stroke-width:1.5px;
-    classDef api fill:#fff0f0,stroke:#d9534f,color:#6b1e1e,stroke-width:1.5px;
-    class VTS,SPOUT source;
-    class GPU,COPY,SCALE,BGRA,COMPOSE,WINDOW pipeline;
-    class CHECK decision;
-    class DESKTOP output;
-    class API api;
-```
-
-数据管线可以简单理解为：
-
-```text
-① VTube Studio 渲染 Live2D 模型
-        ↓
-② VTube Studio 通过 Spout2 输出共享纹理
-   （发送端 GPU）
-        ↓
-③ VTSFloat_Meow 使用同一 GPU
-   通过 Direct3D 11 接收纹理
-        ↓
-④ 检查纹理尺寸、格式和宽高比
-        ↓
-⑤ 进行 GPU 缩放与滤波
-        ↓
-⑥ 转换为带 Alpha 通道的
-   32 位 BGRA 图像缓冲区
-        ↓
-⑦ 叠加边框、透明度和调试信息
-        ↓
-⑧ 通过 UpdateLayeredWindow
-   提交透明 Win32 分层窗口
-        ↓
-⑨ Windows 桌面合成器
-   将窗口显示在游戏或其他应用上方
-```
-
-程序不注入任何游戏或应用，不读取游戏画面，也不参与游戏渲染管线。
+完整的渲染管线、数据流、GPU/帧率同步和性能统计说明，请参阅：[项目说明：实现原理、渲染管线与性能演进](./md/项目说明_实现原理与性能演进.md)。
 
 ## 4. 使用须知
 
@@ -173,12 +117,7 @@ Spout2 共享纹理通常只能在发送端所在的 GPU 上直接打开。VTube
 
 ## 7. 早期瓶颈与解决方向
 
-项目早期经历过几次失败路线：
-
-1. **Python/Qt 主线程渲染**：接收、缩放、绘制和窗口消息挤在同一条 GUI 线程，高帧率游戏前台运行时直接排队，拖拽和模型画面直接一起卡死。
-2. **DXGI SwapChain/Present 路线**：在高负载游戏中，交换链提交可能被桌面合成器或显卡调度阻塞数秒。
-
-当前实现改为独立的原生 C++ 渲染线程、Direct3D 11 接收、预乘 Alpha DIB 和 `UpdateLayeredWindow`。同时关闭会造成长时间等待的 Spout 可选帧同步互斥锁，由覆盖层自己的刷新调度控制节奏，避免游戏高负载时把等待传递到整个桌面。
+项目早期的失败路线、性能瓶颈、问题定位过程和当前解决方向已集中整理到：[项目说明：实现原理、渲染管线与性能演进](./md/项目说明_实现原理与性能演进.md)。
 
 ## 8. 使用前提
 
