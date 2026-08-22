@@ -896,15 +896,28 @@ public:
 
     void SetExpressionActive(const std::string& file, bool active, double fadeTime = 0.3) {
         if (file.empty()) return;
-        std::lock_guard<std::mutex> lock(expressionCommandMutex_);
-        // Keep the queue bounded and collapse repeated updates for the same
-        // expression. Hover transitions can otherwise enqueue stale toggles
-        // while VTS is reconnecting.
-        for (auto it = expressionCommands_.begin(); it != expressionCommands_.end();) {
-            if (it->file == file) it = expressionCommands_.erase(it);
-            else ++it;
+        {
+            std::lock_guard<std::mutex> lock(expressionCommandMutex_);
+            // Keep the queue bounded and collapse repeated updates for the same
+            // expression. Hover transitions can otherwise enqueue stale toggles
+            // while VTS is reconnecting.
+            for (auto it = expressionCommands_.begin(); it != expressionCommands_.end();) {
+                if (it->file == file) it = expressionCommands_.erase(it);
+                else ++it;
+            }
+            expressionCommands_.push_back(VtsExpressionCommand{ file, active, fadeTime });
         }
-        expressionCommands_.push_back(VtsExpressionCommand{ file, active, fadeTime });
+        // The queue represents the newest intended state. Update the local
+        // cache immediately instead of waiting for the WebSocket round trip;
+        // otherwise a leave/restore followed by a quick re-entry can capture
+        // the stale pre-restore value and leave the expression permanently on.
+        std::lock_guard<std::mutex> stateLock(mutex_);
+        for (auto& expression : expressions_) {
+            if (expression.file == file) {
+                expression.active = active;
+                break;
+            }
+        }
     }
 
     void ResetCache() {
@@ -1547,15 +1560,9 @@ private:
                 continue;
             }
             if (ExtractJsonString(response, "messageType") == "APIError") continue;
-            // Keep the cached state coherent for quick restoration without
-            // waiting for the next full ExpressionStateRequest.
-            std::lock_guard<std::mutex> lock(mutex_);
-            for (auto& expression : expressions_) {
-                if (expression.file == command.file) {
-                    expression.active = command.active;
-                    break;
-                }
-            }
+            // SetExpressionActive updates the cache optimistically when the
+            // command is queued. Do not overwrite it here: a newer opposite
+            // command may already be waiting while this response arrives.
         }
     }
 
@@ -8366,7 +8373,26 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         const auto now = Clock::now();
         if (shouldHover && (!hoverExpressionHovered_ || hoverExpressionRestored_)) {
             bool originalActive = false;
-            if (!vtsApi_.GetExpressionActive(hoverExpressionFile_, originalActive)) {
+            bool originalStateKnown = false;
+            if (borderDialogOpen_) {
+                if (!CapturePanelExpressionState()) {
+                    return;
+                }
+                const auto saved = std::find_if(
+                    expressionPanelInitialStates_.begin(),
+                    expressionPanelInitialStates_.end(),
+                    [this](const VtsExpressionState& state) {
+                        return state.file == hoverExpressionFile_;
+                    });
+                if (saved != expressionPanelInitialStates_.end()) {
+                    originalActive = saved->active;
+                    originalStateKnown = true;
+                }
+            } else {
+                originalStateKnown = vtsApi_.GetExpressionActive(
+                    hoverExpressionFile_, originalActive);
+            }
+            if (!originalStateKnown) {
                 // The API worker refreshes the expression list asynchronously.
                 // Do not activate until the pre-hover state is known, otherwise
                 // leaving the model could accidentally disable a user expression.
