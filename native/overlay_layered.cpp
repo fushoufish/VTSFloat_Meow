@@ -7,6 +7,7 @@
 #include <mmsystem.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 #include <dwmapi.h>
 #include <uxtheme.h>
 #include <commctrl.h>
@@ -27,6 +28,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <cwctype>
 #include <deque>
 #include <filesystem>
@@ -52,6 +54,8 @@ namespace {
 constexpr wchar_t kWindowClass[] = L"LilyVtsLayeredOverlay";
 constexpr wchar_t kToolbarClass[] = L"LilyVtsLayeredOverlayToolbar";
 constexpr wchar_t kStatusClass[] = L"LilyVtsVtsStatus";
+constexpr wchar_t kSubjectSelectionClass[] = L"LilyVtsSubjectSelection";
+constexpr wchar_t kSubjectSelectionToolbarClass[] = L"LilyVtsSubjectSelectionToolbar";
 constexpr wchar_t kWindowTitle[] = L"VTSFloat_Meow";
 constexpr wchar_t kToolbarTitle[] = L"VTSFloat_Meow Controls";
 constexpr wchar_t kInstanceName[] = L"Local\\LilyVtsLayeredOverlayInstance";
@@ -91,6 +95,15 @@ constexpr int kScalingBalanced = 1;
 constexpr int kScalingQuality = 2;
 constexpr int kDefaultHoverOpacityPercent = 45;
 constexpr int kMinimumHoverOpacityPercent = 0;
+constexpr int kSubjectMaskCellPx = 4;
+constexpr int kSubjectMaskIniChunkChars = 1800;
+constexpr double kDefaultHoverExpressionDurationSeconds = 1.0;
+constexpr UINT kExpressionSelectionPreviewWaitMs = 2500;
+constexpr UINT kExpressionSelectionPreviewTotalMs =
+    kExpressionSelectionPreviewWaitMs + 300;
+constexpr double kHoverExpressionFadeInSeconds = 0.3;
+constexpr double kHoverExpressionFadeOutSeconds = 1.0;
+constexpr UINT kExpressionStatePollIntervalMs = 600;
 constexpr int kApiNotificationHeight = 28;
 constexpr int kBgNotificationHeight = 28;
 constexpr int kHoverFadeDurationMs = 350;
@@ -464,7 +477,7 @@ constexpr int kVtsApiReconnectDelayMs = 600;
 constexpr int kVtsApiModelReadyDelayMs = 2500;
 // Port discovery deliberately uses short timeouts, but reusing those values
 // for the authenticated WebSocket makes a busy game look like an API drop.
-constexpr DWORD kVtsApiSessionIoTimeoutMs = 1500;
+constexpr DWORD kVtsApiSessionIoTimeoutMs = 1000;
 
 std::string Base64Encode(const std::vector<BYTE>& data) {
     static constexpr char alphabet[] =
@@ -482,6 +495,38 @@ std::string Base64Encode(const std::vector<BYTE>& data) {
         result += i + 2 < data.size() ? alphabet[v & 0x3F] : '=';
     }
     return result;
+}
+
+std::wstring HexEncode(const std::vector<std::uint8_t>& data) {
+    static constexpr wchar_t digits[] = L"0123456789ABCDEF";
+    std::wstring encoded;
+    encoded.resize(data.size() * 2);
+    for (size_t i = 0; i < data.size(); ++i) {
+        encoded[i * 2] = digits[(data[i] >> 4) & 0x0F];
+        encoded[i * 2 + 1] = digits[data[i] & 0x0F];
+    }
+    return encoded;
+}
+
+bool HexDecode(const std::wstring& encoded, std::vector<std::uint8_t>& data) {
+    if (encoded.size() % 2 != 0) return false;
+    auto value = [](wchar_t character) -> int {
+        if (character >= L'0' && character <= L'9') return character - L'0';
+        if (character >= L'A' && character <= L'F') return character - L'A' + 10;
+        if (character >= L'a' && character <= L'f') return character - L'a' + 10;
+        return -1;
+    };
+    data.resize(encoded.size() / 2);
+    for (size_t i = 0; i < data.size(); ++i) {
+        const int high = value(encoded[i * 2]);
+        const int low = value(encoded[i * 2 + 1]);
+        if (high < 0 || low < 0) {
+            data.clear();
+            return false;
+        }
+        data[i] = static_cast<std::uint8_t>((high << 4) | low);
+    }
+    return true;
 }
 
 std::string LoadIconAsBase64Png(HINSTANCE instance) {
@@ -734,8 +779,13 @@ bool ExtractJsonBool(const std::string& json, const std::string& key) {
     if (pos == std::string::npos) return false;
     pos = json.find(':', pos + needle.size());
     if (pos == std::string::npos) return false;
-    return json.find("true", pos) == pos + 1 ||
-           json.find("true", pos) < pos + 5;
+    ++pos;
+    while (pos < json.size() &&
+           (json[pos] == ' ' || json[pos] == '\t' ||
+            json[pos] == '\r' || json[pos] == '\n')) {
+        ++pos;
+    }
+    return json.compare(pos, 4, "true") == 0;
 }
 
 // VTS returns expression names without the file suffix in most responses,
@@ -771,6 +821,11 @@ struct VtsExpressionCommand {
     std::string file;
     bool active = false;
     double fadeTime = 0.3;
+};
+
+struct VtsExpressionState {
+    std::string file;
+    bool active = false;
 };
 
 // VTS API WebSocket client - runs in a background thread.
@@ -841,15 +896,28 @@ public:
 
     void SetExpressionActive(const std::string& file, bool active, double fadeTime = 0.3) {
         if (file.empty()) return;
-        std::lock_guard<std::mutex> lock(expressionCommandMutex_);
-        // Keep the queue bounded and collapse repeated updates for the same
-        // expression. Hover transitions can otherwise enqueue stale toggles
-        // while VTS is reconnecting.
-        for (auto it = expressionCommands_.begin(); it != expressionCommands_.end();) {
-            if (it->file == file) it = expressionCommands_.erase(it);
-            else ++it;
+        {
+            std::lock_guard<std::mutex> lock(expressionCommandMutex_);
+            // Keep the queue bounded and collapse repeated updates for the same
+            // expression. Hover transitions can otherwise enqueue stale toggles
+            // while VTS is reconnecting.
+            for (auto it = expressionCommands_.begin(); it != expressionCommands_.end();) {
+                if (it->file == file) it = expressionCommands_.erase(it);
+                else ++it;
+            }
+            expressionCommands_.push_back(VtsExpressionCommand{ file, active, fadeTime });
         }
-        expressionCommands_.push_back(VtsExpressionCommand{ file, active, fadeTime });
+        // The queue represents the newest intended state. Update the local
+        // cache immediately instead of waiting for the WebSocket round trip;
+        // otherwise a leave/restore followed by a quick re-entry can capture
+        // the stale pre-restore value and leave the expression permanently on.
+        std::lock_guard<std::mutex> stateLock(mutex_);
+        for (auto& expression : expressions_) {
+            if (expression.file == file) {
+                expression.active = active;
+                break;
+            }
+        }
     }
 
     void ResetCache() {
@@ -1005,7 +1073,8 @@ private:
             std::vector<int> ports = FindVtsListeningPorts();
             for (int port : ports) {
                 if (!running_.load()) { scanning_.store(false); return false; }
-                if (TryConnectPort(port) && ProbeIsVtsApi()) {
+                const DWORD timeout = port == kVtsApiPort ? 3000 : 1000;
+                if (TryConnectPort(port, timeout, timeout) && ProbeIsVtsApi()) {
                     scanning_.store(false);
                     scanResult_.store(1);
                     return true;
@@ -1022,8 +1091,10 @@ private:
     bool ConnectInitial() {
         if (!running_.load()) return false;
         if (portConfigured_) {
-            for (int attempt = 0; attempt < 2 && running_.load(); ++attempt) {
-                if (TryConnectPort(port_, 150, 150) && ProbeIsVtsApi()) {
+            const int attempts = port_ == kVtsApiPort ? 3 : 1;
+            const DWORD timeout = port_ == kVtsApiPort ? 3000 : 1000;
+            for (int attempt = 0; attempt < attempts && running_.load(); ++attempt) {
+                if (TryConnectPort(port_, timeout, timeout) && ProbeIsVtsApi()) {
                     return true;
                 }
                 Disconnect();
@@ -1032,16 +1103,19 @@ private:
 
         constexpr struct Candidate {
             int port;
+            int attempts;
             DWORD timeoutMs;
-        } candidates[] = { { 8001, 100 }, { 8002, 50 }, { 8000, 50 } };
+        } candidates[] = { { 8001, 3, 3000 }, { 8002, 1, 1000 }, { 8000, 1, 1000 } };
         for (const Candidate& candidate : candidates) {
             if (!running_.load()) return false;
             if (portConfigured_ && candidate.port == port_) continue;
-            if (TryConnectPort(candidate.port, candidate.timeoutMs, candidate.timeoutMs) &&
-                ProbeIsVtsApi()) {
-                return true;
+            for (int attempt = 0; attempt < candidate.attempts && running_.load(); ++attempt) {
+                if (TryConnectPort(candidate.port, candidate.timeoutMs, candidate.timeoutMs) &&
+                    ProbeIsVtsApi()) {
+                    return true;
+                }
+                Disconnect();
             }
-            Disconnect();
         }
         return false;
     }
@@ -1051,7 +1125,7 @@ private:
             return ScanRequestedPorts();
         }
         if (!portConfigured_ || !running_.load()) return false;
-        if (TryConnectPort(port_, 100, 100) && ProbeIsVtsApi()) {
+        if (TryConnectPort(port_, 1000, 1000) && ProbeIsVtsApi()) {
             return true;
         }
         Disconnect();
@@ -1122,7 +1196,7 @@ private:
         return result;
     }
 
-    bool TryConnectPort(int port, DWORD connectTimeoutMs = 200, DWORD ioTimeoutMs = 500) {
+    bool TryConnectPort(int port, DWORD connectTimeoutMs = 1000, DWORD ioTimeoutMs = 1000) {
         activePort_ = 0;
         hSession_ = WinHttpOpen(
             L"VTSFloat_Meow/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
@@ -1156,10 +1230,11 @@ private:
         hWebSocket_ = WinHttpWebSocketCompleteUpgrade(hRequest_, 0);
         if (!hWebSocket_) { CleanupHandles(); return false; }
 
-        // The timeout above is only for finding a listening port. Once the
-        // WebSocket is established, allow VTS time to answer while it is
-        // rendering or switching models.
-        DWORD sessionIoTimeout = kVtsApiSessionIoTimeoutMs;
+        // Keep the probe timeout consistent with the selected endpoint:
+        // 8001 gets the longer first-discovery window, while all other
+        // candidate ports use the one-second scan budget.
+        DWORD sessionIoTimeout = port == kVtsApiPort
+            ? 3000 : kVtsApiSessionIoTimeoutMs;
         WinHttpSetOption(
             hSession_, WINHTTP_OPTION_RECEIVE_TIMEOUT,
             &sessionIoTimeout, sizeof(sessionIoTimeout));
@@ -1381,7 +1456,10 @@ private:
     void ProcessExpressionRequests() {
         if (!hWebSocket_) return;
         if (expressionStateRequested_.exchange(false, std::memory_order_relaxed)) {
-            if (SendJson(BuildJsonRequest("ExpressionStateRequest", R"("details":true)"))) {
+            // We only need file/name/active. Requesting parameter and hotkey
+            // details can make a model with many expressions return a very
+            // large payload, delaying the menu and increasing timeout risk.
+            if (SendJson(BuildJsonRequest("ExpressionStateRequest", R"("details":false)"))) {
                 const std::string response = ReceiveJson();
                 if (!response.empty() &&
                     ExtractJsonString(response, "messageType") != "APIError") {
@@ -1448,9 +1526,14 @@ private:
                             if (!duplicate) parsed.push_back(std::move(info));
                         }
                     }
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    expressions_ = std::move(parsed);
-                    lastExpressionModelId_ = ExtractJsonString(response, "modelName");
+                    const size_t expressionCount = parsed.size();
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        expressions_ = std::move(parsed);
+                        lastExpressionModelId_ = ExtractJsonString(response, "modelName");
+                    }
+                    Log("[api] expression_state count=" +
+                        std::to_string(expressionCount));
                 }
             }
         }
@@ -1477,15 +1560,9 @@ private:
                 continue;
             }
             if (ExtractJsonString(response, "messageType") == "APIError") continue;
-            // Keep the cached state coherent for quick restoration without
-            // waiting for the next full ExpressionStateRequest.
-            std::lock_guard<std::mutex> lock(mutex_);
-            for (auto& expression : expressions_) {
-                if (expression.file == command.file) {
-                    expression.active = command.active;
-                    break;
-                }
-            }
+            // SetExpressionActive updates the cache optimistically when the
+            // command is queued. Do not overwrite it here: a newer opposite
+            // command may already be waiting while this response arrives.
         }
     }
 
@@ -1611,8 +1688,113 @@ HWND FindMainWindowForProcess(DWORD processId) {
 
 bool IsVtsDirectory(const std::filesystem::path& directory) {
     std::error_code error;
-    return std::filesystem::is_regular_file(directory / kVtsExecutableName, error) &&
-           std::filesystem::is_regular_file(directory / kVtsBatchName, error);
+    // start_without_steam.bat is optional in some VTube Studio installs.
+    // The executable alone is enough to identify a usable installation.
+    return std::filesystem::is_regular_file(directory / kVtsExecutableName, error);
+}
+
+bool TryParseNonNegativeDecimal(const std::wstring& text, double& value) {
+    if (text.empty()) {
+        return false;
+    }
+    bool hasDigit = false;
+    bool hasDot = false;
+    for (const wchar_t ch : text) {
+        if (ch >= L'0' && ch <= L'9') {
+            hasDigit = true;
+        } else if (ch == L'.' && !hasDot) {
+            hasDot = true;
+        } else {
+            return false;
+        }
+    }
+    if (!hasDigit) {
+        return false;
+    }
+    wchar_t* end = nullptr;
+    const double parsed = std::wcstod(text.c_str(), &end);
+    if (end == text.c_str() || *end != L'\0' ||
+        !std::isfinite(parsed) || parsed < 0.0) {
+        return false;
+    }
+    value = parsed;
+    return true;
+}
+
+double ReadConfigNonNegativeDecimal(
+    const wchar_t* section, const wchar_t* key, double fallback) {
+    double value = fallback;
+    const std::wstring text = ReadConfigString(section, key);
+    return TryParseNonNegativeDecimal(text, value) ? value : fallback;
+}
+
+std::wstring FormatNonNegativeDecimal(double value) {
+    if (!std::isfinite(value) || value < 0.0) {
+        value = kDefaultHoverExpressionDurationSeconds;
+    }
+    std::wostringstream output;
+    output << std::fixed << std::setprecision(3) << value;
+    std::wstring text = output.str();
+    while (text.size() > 1 && text.back() == L'0') text.pop_back();
+    if (!text.empty() && text.back() == L'.') text.pop_back();
+    return text.empty() ? L"0" : text;
+}
+
+bool HasVtsExternalLauncher(const std::filesystem::path& directory) {
+    std::error_code error;
+    return std::filesystem::is_regular_file(directory / kVtsBatchName, error);
+}
+
+bool IsVtsExecutable(const std::filesystem::path& path) {
+    return _wcsicmp(path.filename().c_str(), kVtsExecutableName) == 0;
+}
+
+std::optional<std::filesystem::path> FindVtsDirectoryInSelection(
+    const std::filesystem::path& selected) {
+    std::error_code error;
+    if (selected.empty()) {
+        return std::nullopt;
+    }
+
+    std::filesystem::path root = selected;
+    if (std::filesystem::is_regular_file(root, error)) {
+        if (IsVtsExecutable(root) && IsVtsDirectory(root.parent_path())) {
+            return root.parent_path();
+        }
+        root = root.parent_path();
+    }
+    if (!std::filesystem::is_directory(root, error)) {
+        return std::nullopt;
+    }
+
+    // Cover the common cases without a recursive scan first: selecting the
+    // install directory itself, or selecting its parent directory.
+    for (const auto& candidate : {root, root / L"VTube Studio"}) {
+        if (IsVtsDirectory(candidate)) {
+            return candidate;
+        }
+    }
+
+    // A manually selected Steam or games directory can contain VTube Studio
+    // further down. Limit traversal depth so selecting a whole drive never
+    // turns this into an expensive scan.
+    std::filesystem::recursive_directory_iterator iterator(
+        root, std::filesystem::directory_options::skip_permission_denied, error);
+    const std::filesystem::recursive_directory_iterator end;
+    while (!error && iterator != end) {
+        const auto entry = *iterator;
+        if (entry.is_directory(error) && iterator.depth() >= 5) {
+            iterator.disable_recursion_pending();
+        }
+        if (!error && entry.is_regular_file(error) && IsVtsExecutable(entry.path())) {
+            const auto directory = entry.path().parent_path();
+            if (IsVtsDirectory(directory)) {
+                return directory;
+            }
+        }
+        iterator.increment(error);
+    }
+    return std::nullopt;
 }
 
 std::optional<std::filesystem::path> ReadRegistryString(
@@ -1895,10 +2077,6 @@ public:
                     running = false;
                     break;
                 }
-                if (borderPanelHwnd_ && IsWindow(borderPanelHwnd_) &&
-                    IsDialogMessageW(borderPanelHwnd_, &message)) {
-                    continue;
-                }
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
@@ -2022,6 +2200,30 @@ private:
         statusClass.hIconSm = appIconSmall_;
         Check(RegisterClassExW(&statusClass) ? S_OK : HRESULT_FROM_WIN32(GetLastError()),
               "RegisterClassExW(status)");
+
+        WNDCLASSEXW subjectSelectionClass{};
+        subjectSelectionClass.cbSize = sizeof(subjectSelectionClass);
+        subjectSelectionClass.style = CS_DBLCLKS;
+        subjectSelectionClass.hInstance = instance_;
+        subjectSelectionClass.lpfnWndProc = &LayeredOverlay::SubjectSelectionWindowProc;
+        subjectSelectionClass.lpszClassName = kSubjectSelectionClass;
+        subjectSelectionClass.hCursor = LoadCursorW(nullptr, IDC_CROSS);
+        subjectSelectionClass.hbrBackground = nullptr;
+        Check(RegisterClassExW(&subjectSelectionClass)
+                ? S_OK : HRESULT_FROM_WIN32(GetLastError()),
+              "RegisterClassExW(subject selection)");
+
+        WNDCLASSEXW subjectToolbarClass{};
+        subjectToolbarClass.cbSize = sizeof(subjectToolbarClass);
+        subjectToolbarClass.hInstance = instance_;
+        subjectToolbarClass.lpfnWndProc =
+            &LayeredOverlay::SubjectSelectionToolbarWindowProc;
+        subjectToolbarClass.lpszClassName = kSubjectSelectionToolbarClass;
+        subjectToolbarClass.hCursor = LoadCursorW(nullptr, IDC_HAND);
+        subjectToolbarClass.hbrBackground = nullptr;
+        Check(RegisterClassExW(&subjectToolbarClass)
+                ? S_OK : HRESULT_FROM_WIN32(GetLastError()),
+              "RegisterClassExW(subject selection toolbar)");
     }
 
     void CreateOverlayWindow() {
@@ -2146,6 +2348,18 @@ private:
             statusDirectory_ = directory;
             statusFrameDirty_ = true;
         }
+        if (mode != VtsStatusMode::Hidden && !statusDismissed_) {
+            // The VTS status page replaces the model surface. Runtime-only
+            // notices (API, opaque-background and GPU warnings) refer to a
+            // live model frame and become misleading once VTS/Spout is gone.
+            opaqueFrameCount_ = 0;
+            opaqueBackgroundDetected_ = false;
+            bgWarningCloseRect_ = RECT{};
+            bgWarningDontShowRect_ = RECT{};
+            gpuWarningShown_ = false;
+            gpuWarningDontShowRect_ = RECT{};
+            showingApiSuccess_ = false;
+        }
         if (mode == VtsStatusMode::Hidden || statusDismissed_) {
             statusFrameDirty_ = true;
             ApplyClickThrough();
@@ -2173,8 +2387,23 @@ private:
         const auto directory = FindVtsDirectory();
         const auto running = FindRunningVts();
         if (!directory) {
+            if (hasReceivedModel_ && locked_) {
+                // The model had been visible and VTS is now gone. Return to
+                // edit mode so the toolbar is immediately available instead
+                // of leaving a click-through locked overlay on the desktop.
+                SetLocked(false);
+                Log("[vts status] VTS missing; unlocked editor");
+            }
+            // A previous model frame must not keep API/renderer warnings
+            // alive while the status page is explaining that VTS is closed.
+            hasReceivedModel_ = false;
             SetVtsStatusMode(VtsStatusMode::WaitingForVts);
         } else if (!running) {
+            if (hasReceivedModel_ && locked_) {
+                SetLocked(false);
+                Log("[vts status] VTS closed; unlocked editor");
+            }
+            hasReceivedModel_ = false;
             SetVtsStatusMode(VtsStatusMode::LaunchChoices, *directory);
         } else {
             SetVtsStatusMode(VtsStatusMode::WaitingForSpout, *directory);
@@ -2195,6 +2424,11 @@ private:
             PollVtsStatus(true);
             return;
         }
+        if (external && !HasVtsExternalLauncher(*directory)) {
+            // The status page does not expose this action when the optional
+            // batch file is absent, but keep this guard for all call paths.
+            return;
+        }
         const auto target = *directory / (external ? kVtsBatchName : kVtsExecutableName);
         const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(
             hwnd_, L"open", target.c_str(), nullptr,
@@ -2203,6 +2437,119 @@ private:
             Log("[vts status] failed to launch selected VTS entry");
         }
         statusDismissed_ = false;
+        PollVtsStatus(true);
+    }
+
+    std::optional<std::filesystem::path> PickVtsFolder() const {
+        HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        const bool mustUninitialize = SUCCEEDED(initialized);
+        ComPtr<IFileOpenDialog> dialog;
+        const HRESULT created = CoCreateInstance(
+            CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+            IID_PPV_ARGS(&dialog));
+        if (FAILED(created)) {
+            if (mustUninitialize) CoUninitialize();
+            return std::nullopt;
+        }
+        FILEOPENDIALOGOPTIONS options{};
+        dialog->GetOptions(&options);
+        dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM |
+                           FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR);
+        dialog->SetTitle(L"选择 VTube Studio 安装文件夹");
+        const HRESULT shown = dialog->Show(hwnd_);
+        if (FAILED(shown)) {
+            if (mustUninitialize) CoUninitialize();
+            return std::nullopt;
+        }
+        ComPtr<IShellItem> result;
+        std::optional<std::filesystem::path> path;
+        if (SUCCEEDED(dialog->GetResult(&result))) {
+            PWSTR rawPath = nullptr;
+            if (SUCCEEDED(result->GetDisplayName(SIGDN_FILESYSPATH, &rawPath)) && rawPath) {
+                path = std::filesystem::path(rawPath);
+                CoTaskMemFree(rawPath);
+            }
+        }
+        if (mustUninitialize) CoUninitialize();
+        return path;
+    }
+
+    std::optional<std::filesystem::path> PickVtsExecutable() const {
+        HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        const bool mustUninitialize = SUCCEEDED(initialized);
+        ComPtr<IFileOpenDialog> dialog;
+        const HRESULT created = CoCreateInstance(
+            CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+            IID_PPV_ARGS(&dialog));
+        if (FAILED(created)) {
+            if (mustUninitialize) CoUninitialize();
+            return std::nullopt;
+        }
+        const COMDLG_FILTERSPEC filters[] = {
+            { L"VTube Studio.exe", L"VTube Studio.exe" },
+            { L"可执行文件", L"*.exe" },
+        };
+        FILEOPENDIALOGOPTIONS options{};
+        dialog->GetOptions(&options);
+        dialog->SetOptions(options | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST |
+                           FOS_FILEMUSTEXIST | FOS_NOCHANGEDIR);
+        dialog->SetFileTypes(ARRAYSIZE(filters), filters);
+        dialog->SetFileTypeIndex(1);
+        dialog->SetTitle(L"选择 VTube Studio.exe");
+        const HRESULT shown = dialog->Show(hwnd_);
+        if (FAILED(shown)) {
+            if (mustUninitialize) CoUninitialize();
+            return std::nullopt;
+        }
+        ComPtr<IShellItem> result;
+        std::optional<std::filesystem::path> path;
+        if (SUCCEEDED(dialog->GetResult(&result))) {
+            PWSTR rawPath = nullptr;
+            if (SUCCEEDED(result->GetDisplayName(SIGDN_FILESYSPATH, &rawPath)) && rawPath) {
+                path = std::filesystem::path(rawPath);
+                CoTaskMemFree(rawPath);
+            }
+        }
+        if (mustUninitialize) CoUninitialize();
+        return path;
+    }
+
+    void ChooseVtsLaunchPath() {
+        const TASKDIALOG_BUTTON choices[] = {
+            { 1, L"选择安装文件夹" },
+            { 2, L"选择 VTube Studio.exe" },
+        };
+        TASKDIALOGCONFIG dialog{};
+        dialog.cbSize = sizeof(dialog);
+        dialog.hwndParent = hwnd_;
+        dialog.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION;
+        dialog.pszWindowTitle = L"VTSFloat_Meow";
+        dialog.pszMainInstruction = L"添加 VTube Studio 启动路径";
+        dialog.pszContent = L"可以选择 VTube Studio 的安装文件夹，或直接选择 VTube Studio.exe。\n程序会自动查找并保存正确的安装目录。";
+        dialog.cButtons = ARRAYSIZE(choices);
+        dialog.pButtons = choices;
+        dialog.nDefaultButton = 1;
+        int selected = 0;
+        if (FAILED(TaskDialogIndirect(&dialog, &selected, nullptr, nullptr)) || selected == 0) {
+            return;
+        }
+        const auto selectedPath = selected == 1 ? PickVtsFolder() : PickVtsExecutable();
+        if (!selectedPath) {
+            return;
+        }
+        const auto directory = FindVtsDirectoryInSelection(*selectedPath);
+        if (!directory) {
+            statusPathLookupFailed_ = true;
+            statusFrameDirty_ = true;
+            InvalidateRect(hwnd_, nullptr, FALSE);
+            Log("[vts status] no VTube Studio executable in selected path");
+            return;
+        }
+        WriteConfigString(L"vts", L"install_dir", directory->wstring());
+        statusPathLookupFailed_ = false;
+        statusDismissed_ = false;
+        lastVtsStatusCheck_ = Clock::time_point{};
+        Log("[vts status] install_dir set manually");
         PollVtsStatus(true);
     }
 
@@ -2233,6 +2580,98 @@ private:
         if (hotkeyVk_ < 1 || hotkeyVk_ > 0xFE || hotkeyModifiers_ == 0) {
             hotkeyModifiers_ = MOD_CONTROL | MOD_SHIFT;
             hotkeyVk_ = 'L';
+        }
+    }
+
+    void LoadSubjectHoverMask() {
+        subjectHoverMaskGridWidth_ = ReadConfigInt(
+            L"opacity", L"subject_hover_mask_width", 0);
+        subjectHoverMaskGridHeight_ = ReadConfigInt(
+            L"opacity", L"subject_hover_mask_height", 0);
+        const int chunks = ReadConfigInt(
+            L"opacity", L"subject_hover_mask_chunks", 0);
+        if (subjectHoverMaskGridWidth_ <= 0 || subjectHoverMaskGridHeight_ <= 0 ||
+            chunks <= 0 || chunks > 64) {
+            subjectHoverMaskBits_.clear();
+            subjectHoverRegionConfigured_ = false;
+            subjectHoverTrackingReferenceValid_ = false;
+            return;
+        }
+        std::wstring encoded;
+        encoded.reserve(static_cast<size_t>(chunks) * kSubjectMaskIniChunkChars);
+        for (int i = 0; i < chunks; ++i) {
+            const std::wstring key = L"subject_hover_mask_" + std::to_wstring(i);
+            encoded += ReadConfigString(L"opacity", key.c_str());
+        }
+        const size_t requiredBytes =
+            (static_cast<size_t>(subjectHoverMaskGridWidth_) *
+                subjectHoverMaskGridHeight_ + 7) / 8;
+        if (!HexDecode(encoded, subjectHoverMaskBits_) ||
+            subjectHoverMaskBits_.size() != requiredBytes) {
+            subjectHoverMaskBits_.clear();
+            subjectHoverMaskGridWidth_ = 0;
+            subjectHoverMaskGridHeight_ = 0;
+            subjectHoverRegionConfigured_ = false;
+            subjectHoverTrackingReferenceValid_ = false;
+            return;
+        }
+        subjectHoverTrackingReferenceCenterX_ =
+            ReadConfigInt(L"opacity", L"subject_hover_track_center_x_milli", 0) / 1000.0;
+        subjectHoverTrackingReferenceCenterY_ =
+            ReadConfigInt(L"opacity", L"subject_hover_track_center_y_milli", 0) / 1000.0;
+        subjectHoverTrackingReferenceWidth_ =
+            ReadConfigInt(L"opacity", L"subject_hover_track_width_milli", 0) / 1000.0;
+        subjectHoverTrackingReferenceHeight_ =
+            ReadConfigInt(L"opacity", L"subject_hover_track_height_milli", 0) / 1000.0;
+        subjectHoverTrackingReferenceValid_ =
+            subjectHoverTrackingReferenceWidth_ > 0.0 &&
+            subjectHoverTrackingReferenceHeight_ > 0.0;
+        subjectHoverTrackingCurrentCenterX_ = subjectHoverTrackingReferenceCenterX_;
+        subjectHoverTrackingCurrentCenterY_ = subjectHoverTrackingReferenceCenterY_;
+        subjectHoverTrackingScale_ = 1.0;
+    }
+
+    void SaveSubjectHoverMask() const {
+        const int previousChunks = ReadConfigInt(
+            L"opacity", L"subject_hover_mask_chunks", 0);
+        const bool valid = subjectHoverRegionConfigured_ &&
+            subjectHoverMaskGridWidth_ > 0 && subjectHoverMaskGridHeight_ > 0 &&
+            !subjectHoverMaskBits_.empty();
+        const std::wstring encoded = valid
+            ? HexEncode(subjectHoverMaskBits_) : std::wstring{};
+        const int chunks = encoded.empty() ? 0 : static_cast<int>(
+            (encoded.size() + kSubjectMaskIniChunkChars - 1) /
+            kSubjectMaskIniChunkChars);
+        WriteConfigInt(L"opacity", L"subject_hover_mask_width",
+            valid ? subjectHoverMaskGridWidth_ : 0);
+        WriteConfigInt(L"opacity", L"subject_hover_mask_height",
+            valid ? subjectHoverMaskGridHeight_ : 0);
+        WriteConfigInt(L"opacity", L"subject_hover_track_center_x_milli",
+            valid && subjectHoverTrackingReferenceValid_
+                ? static_cast<int>(std::lround(subjectHoverTrackingReferenceCenterX_ * 1000.0))
+                : 0);
+        WriteConfigInt(L"opacity", L"subject_hover_track_center_y_milli",
+            valid && subjectHoverTrackingReferenceValid_
+                ? static_cast<int>(std::lround(subjectHoverTrackingReferenceCenterY_ * 1000.0))
+                : 0);
+        WriteConfigInt(L"opacity", L"subject_hover_track_width_milli",
+            valid && subjectHoverTrackingReferenceValid_
+                ? static_cast<int>(std::lround(subjectHoverTrackingReferenceWidth_ * 1000.0))
+                : 0);
+        WriteConfigInt(L"opacity", L"subject_hover_track_height_milli",
+            valid && subjectHoverTrackingReferenceValid_
+                ? static_cast<int>(std::lround(subjectHoverTrackingReferenceHeight_ * 1000.0))
+                : 0);
+        WriteConfigInt(L"opacity", L"subject_hover_mask_chunks", chunks);
+        for (int i = 0; i < chunks; ++i) {
+            const size_t offset = static_cast<size_t>(i) * kSubjectMaskIniChunkChars;
+            const std::wstring key = L"subject_hover_mask_" + std::to_wstring(i);
+            WriteConfigString(L"opacity", key.c_str(),
+                encoded.substr(offset, kSubjectMaskIniChunkChars));
+        }
+        for (int i = chunks; i < previousChunks; ++i) {
+            const std::wstring key = L"subject_hover_mask_" + std::to_wstring(i);
+            WriteConfigString(L"opacity", key.c_str(), L"");
         }
     }
 
@@ -2270,10 +2709,30 @@ private:
             ReadConfigInt(L"opacity", L"model_percent", 100), 10, 100);
         hoverExpandPx_ = (std::clamp)(
             ReadConfigInt(L"opacity", L"hover_expand_px", 0), -500, 500);
+        excludeEffectsFromHover_ = ReadConfigInt(
+            L"opacity", L"exclude_effects_from_hover", 0) != 0;
+        subjectHoverRegionConfigured_ = ReadConfigInt(
+            L"opacity", L"subject_hover_region_configured", 0) != 0;
+        subjectHoverRegionLeft_ = (std::clamp)(
+            ReadConfigInt(L"opacity", L"subject_hover_region_left", 0), 0, 10000);
+        subjectHoverRegionTop_ = (std::clamp)(
+            ReadConfigInt(L"opacity", L"subject_hover_region_top", 0), 0, 10000);
+        subjectHoverRegionRight_ = (std::clamp)(
+            ReadConfigInt(L"opacity", L"subject_hover_region_right", 10000), 0, 10000);
+        subjectHoverRegionBottom_ = (std::clamp)(
+            ReadConfigInt(L"opacity", L"subject_hover_region_bottom", 10000), 0, 10000);
+        if (subjectHoverRegionLeft_ >= subjectHoverRegionRight_ ||
+            subjectHoverRegionTop_ >= subjectHoverRegionBottom_) {
+            subjectHoverRegionConfigured_ = false;
+        }
+        LoadSubjectHoverMask();
         hoverExpressionEnabled_ = ReadConfigInt(
             L"expression", L"hover_enabled", 0) != 0;
         hoverExpressionFile_ = WideToUtf8(ReadConfigString(
             L"expression", L"hover_file").c_str());
+        hoverExpressionDurationSeconds_ = ReadConfigNonNegativeDecimal(
+            L"expression", L"hover_duration_seconds",
+            kDefaultHoverExpressionDurationSeconds);
         aspectLocked_ = ReadConfigInt(L"window", L"lock_aspect", 1) != 0;
         const int borderSchema = ReadConfigInt(L"border", L"schema", 1);
         const int savedBorderMode = ReadConfigInt(
@@ -2309,14 +2768,28 @@ private:
         WriteConfigInt(L"opacity", L"locked_hover_percent", hoverOpacityPercent_);
         WriteConfigInt(L"opacity", L"model_percent", modelOpacityPercent_);
         WriteConfigInt(L"opacity", L"hover_expand_px", hoverExpandPx_);
+        WriteConfigInt(
+            L"opacity", L"exclude_effects_from_hover",
+            excludeEffectsFromHover_ ? 1 : 0);
+        WriteConfigInt(
+            L"opacity", L"subject_hover_region_configured",
+            subjectHoverRegionConfigured_ ? 1 : 0);
+        WriteConfigInt(L"opacity", L"subject_hover_region_left", subjectHoverRegionLeft_);
+        WriteConfigInt(L"opacity", L"subject_hover_region_top", subjectHoverRegionTop_);
+        WriteConfigInt(L"opacity", L"subject_hover_region_right", subjectHoverRegionRight_);
+        WriteConfigInt(L"opacity", L"subject_hover_region_bottom", subjectHoverRegionBottom_);
         WriteConfigInt(L"expression", L"hover_enabled", hoverExpressionEnabled_ ? 1 : 0);
         WriteConfigString(L"expression", L"hover_file", Utf8ToWide(hoverExpressionFile_));
+        WriteConfigString(
+            L"expression", L"hover_duration_seconds",
+            FormatNonNegativeDecimal(hoverExpressionDurationSeconds_));
         WriteConfigInt(L"window", L"lock_aspect", aspectLocked_ ? 1 : 0);
         WriteConfigInt(L"border", L"schema", 2);
         WriteConfigInt(L"border", L"mode", borderMode_);
         WriteConfigInt(
             L"border", L"custom_color", static_cast<int>(customBorderColor_));
         WriteConfigInt(L"border", L"thickness", borderThickness_);
+        SaveSubjectHoverMask();
     }
 
     void ResetSettingsToDefaults() {
@@ -2351,9 +2824,21 @@ private:
         hoverOpacityPercent_ = kDefaultHoverOpacityPercent;
         modelOpacityPercent_ = 100;
         hoverExpandPx_ = 0;
+        excludeEffectsFromHover_ = false;
+        subjectHoverRegionConfigured_ = false;
+        subjectHoverRegionLeft_ = 0;
+        subjectHoverRegionTop_ = 0;
+        subjectHoverRegionRight_ = 10000;
+        subjectHoverRegionBottom_ = 10000;
+        subjectHoverMaskGridWidth_ = 0;
+        subjectHoverMaskGridHeight_ = 0;
+        subjectHoverMaskBits_.clear();
+        subjectHoverTrackingReferenceValid_ = false;
+        subjectHoverTrackingScale_ = 1.0;
         CancelHoverExpression();
         hoverExpressionEnabled_ = false;
         hoverExpressionFile_.clear();
+        hoverExpressionDurationSeconds_ = kDefaultHoverExpressionDurationSeconds;
         aspectLocked_ = true;
         borderMode_ = kBorderModeNormal;
         customBorderColor_ = kDefaultCustomBorderColor;
@@ -2552,12 +3037,21 @@ private:
 
         SetOverlayVisible(true);
         SetLocked(false);
+        const int width = kResetWidth;
+        // "主屏居中" is also a resize operation.  Do not force its legacy
+        // 1280x720 box when aspect lock is enabled: VTS' transparent Spout
+        // canvas is commonly 1280x773, and 720 would visibly squash it.
+        const int height = aspectLocked_ && sourceWidth_ && sourceHeight_
+            ? (std::max)(1, static_cast<int>(
+                (static_cast<std::uint64_t>(width) * sourceHeight_ +
+                    sourceWidth_ / 2) / sourceWidth_))
+            : kResetHeight;
         const int x = info.rcWork.left +
-            (info.rcWork.right - info.rcWork.left - kResetWidth) / 2;
+            (info.rcWork.right - info.rcWork.left - width) / 2;
         const int y = info.rcWork.top +
-            (info.rcWork.bottom - info.rcWork.top - kResetHeight) / 2;
+            (info.rcWork.bottom - info.rcWork.top - height) / 2;
         SetWindowPos(
-            hwnd_, HWND_TOPMOST, x, y, kResetWidth, kResetHeight,
+            hwnd_, HWND_TOPMOST, x, y, width, height,
             SWP_NOACTIVATE | SWP_SHOWWINDOW);
         SaveUiSettings();
         initialAspectApplied_ = true;
@@ -3759,8 +4253,27 @@ private:
         int originalHoverOpacityPercent = kDefaultHoverOpacityPercent;
         int originalModelOpacityPercent = 100;
         int originalHoverExpandPx = 0;
+        bool originalExcludeEffectsFromHover = false;
+        bool originalSubjectHoverRegionConfigured = false;
+        int originalSubjectHoverRegionLeft = 0;
+        int originalSubjectHoverRegionTop = 0;
+        int originalSubjectHoverRegionRight = 10000;
+        int originalSubjectHoverRegionBottom = 10000;
+        int originalSubjectHoverMaskGridWidth = 0;
+        int originalSubjectHoverMaskGridHeight = 0;
+        std::vector<std::uint8_t> originalSubjectHoverMaskBits;
+        bool originalSubjectHoverTrackingReferenceValid = false;
+        double originalSubjectHoverTrackingReferenceCenterX = 0.0;
+        double originalSubjectHoverTrackingReferenceCenterY = 0.0;
+        double originalSubjectHoverTrackingReferenceWidth = 0.0;
+        double originalSubjectHoverTrackingReferenceHeight = 0.0;
         bool originalHoverExpressionEnabled = false;
         std::string originalHoverExpressionFile;
+        double originalHoverExpressionDurationSeconds =
+            kDefaultHoverExpressionDurationSeconds;
+        bool editingHoverExpressionDuration = false;
+        bool replaceHoverExpressionDurationOnNextInput = false;
+        std::wstring hoverExpressionDurationInput;
         std::vector<std::uint32_t> wheelPixels;
         int wheelBitmapWidth = 0;
         int wheelBitmapHeight = 0;
@@ -3769,6 +4282,10 @@ private:
         double colorSaturation = 0.0;
         int colorValuePercent = 100;
         int activeHit = 0;
+        bool trackingMouseLeave = false;
+        bool draggingPanel = false;
+        POINT dragStartCursor{};
+        POINT dragStartWindow{};
     };
 
     static RainbowColor HsvWheelColor(
@@ -4088,14 +4605,41 @@ private:
     }
 
     static int PersonalPanelHeight(const LayeredOverlay* overlay) {
-        return overlay && overlay->borderMode_ == kBorderModeCustom ? 700 : 520;
+        return overlay && overlay->borderMode_ == kBorderModeCustom ? 738 : 518;
+    }
+
+    static int UiFontSize(HWND window, int baseSize) {
+        if (baseSize <= 0) return baseSize;
+        HMONITOR monitor = nullptr;
+        if (window) {
+            monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+        } else {
+            POINT cursor{};
+            GetCursorPos(&cursor);
+            monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+        }
+        MONITORINFO info{};
+        info.cbSize = sizeof(info);
+        if (!monitor || !GetMonitorInfoW(monitor, &info)) return baseSize;
+        const int width = info.rcWork.right - info.rcWork.left;
+        double scale = 1.0;
+        // The overlay uses fixed pixel-sized controls.  Reduce text slightly
+        // on 2K/4K work areas so it does not dominate the compact toolbar and
+        // personalization panel; 1080p keeps the original sizing.
+        if (width >= 3400) {
+            scale = 0.80;
+        } else if (width >= 2200) {
+            scale = 0.88;
+        }
+        return (std::max)(9, static_cast<int>(std::lround(baseSize * scale)));
     }
 
     static void PanelText(
         HDC dc, const std::wstring& text, RECT rect, COLORREF color,
         int pixelHeight = 15, bool bold = false, UINT flags = DT_LEFT | DT_VCENTER) {
         HFONT font = CreateFontW(
-            -pixelHeight, 0, 0, 0, bold ? FW_SEMIBOLD : FW_NORMAL, FALSE, FALSE,
+            -UiFontSize(nullptr, pixelHeight), 0, 0, 0,
+            bold ? FW_SEMIBOLD : FW_NORMAL, FALSE, FALSE,
             FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         HGDIOBJ old = SelectObject(dc, font);
@@ -4163,7 +4707,7 @@ private:
 
         RECT header{ 0, 0, client.right, 44 };
         PanelFill(dc, header, RGB(28, 48, 75));
-        PanelText(dc, L"个性化", RECT{ 16, 0, 180, 44 }, RGB(240, 246, 255), 18, true,
+        PanelText(dc, L"个性化", RECT{ 16, 0, 300, 44 }, RGB(240, 246, 255), 18, true,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         PanelText(dc, L"×", RECT{ client.right - 44, 0, client.right - 8, 44 },
             RGB(240, 246, 255), 25, false, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -4232,9 +4776,7 @@ private:
                 state->activeHit == 4);
             y = 330;
         } else {
-            PanelText(dc, L"当前模式不需要色盘", RECT{ 22, 112, 390, 144 },
-                RGB(126, 157, 193), 14, false);
-            y = 145;
+            y = 105;
         }
 
         PanelText(dc, L"边框粗细", RECT{ 20, y, 125, y + 28 }, RGB(166, 198, 232), 13, true);
@@ -4260,19 +4802,42 @@ private:
         PanelText(dc, L"鼠标经过模型时将模型透明化", RECT{ 48, y, 350, y + 28 },
             RGB(220, 232, 248), 13, false);
 
-        y += 38;
+        // Keep the fade toggle and its opacity slider on separate rows.  These
+        // controls used to share the same y coordinate, which made the labels
+        // and slider appear on top of each other in the personalization panel.
+        y += 42;
         PanelText(dc, L"悬停不透明度", RECT{ 20, y, 145, y + 28 }, RGB(166, 198, 232), 13, true);
         PanelSlider(dc, RECT{ 130, y + 10, 355, y + 20 }, overlay->hoverOpacityPercent_, 0, 100,
             state->activeHit == 7);
         PanelText(dc, std::to_wstring(overlay->hoverOpacityPercent_) + L"%", RECT{ 365, y, 410, y + 28 },
             RGB(240, 246, 255), 13, true, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
-        y += 38;
+        y += 42;
         PanelText(dc, L"悬停扩展", RECT{ 20, y, 125, y + 28 }, RGB(166, 198, 232), 13, true);
         PanelSlider(dc, RECT{ 130, y + 10, 330, y + 20 }, overlay->hoverExpandPx_, -500, 500,
             state->activeHit == 8);
         PanelText(dc, std::to_wstring(overlay->hoverExpandPx_) + L"px", RECT{ 340, y, 410, y + 28 },
             RGB(240, 246, 255), 13, true, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+
+        y += 42;
+        // The feature switch is deliberately separate from the selection
+        // action. Re-selecting a subject must not silently enable the mode.
+        RECT subjectCheck{ 20, y + 3, 38, y + 21 };
+        PanelFill(dc, subjectCheck, overlay->excludeEffectsFromHover_
+            ? RGB(55, 139, 221) : RGB(41, 58, 80));
+        if (overlay->excludeEffectsFromHover_) {
+            PanelText(dc, L"✓", subjectCheck, RGB(255, 255, 255), 14, true,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        PanelText(dc, L"启用手动框选范围",
+            RECT{ 48, y, 195, y + 28 }, RGB(220, 232, 248), 12, false,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        const RECT subjectReselectButton{ 198, y + 1, 402, y + 27 };
+        PanelFill(dc, subjectReselectButton, state->activeHit == 17
+            ? RGB(48, 122, 193) : RGB(26, 46, 71));
+        PanelText(dc, L"手动框选悬停触发范围",
+            subjectReselectButton, RGB(166, 211, 255), 11, true,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
         y += 42;
         RECT expressionCheck{ 20, y + 3, 38, y + 21 };
@@ -4282,12 +4847,42 @@ private:
             PanelText(dc, L"✓", expressionCheck, RGB(255, 255, 255), 14, true,
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
-        PanelText(dc, L"鼠标悬停时触发表情（4秒后恢复）",
+        PanelText(dc, L"鼠标移入时触发表情，移出后立即恢复",
             RECT{ 48, y, 390, y + 28 }, RGB(220, 232, 248), 13, false,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
         y += 34;
-        RECT expressionButton{ 20, y, 258, y + 32 };
+        if (overlay->hoverExpressionEnabled_) {
+            // Align the row with the other settings while keeping the value
+            // centered inside its edit box.
+            const RECT durationLabel{ 20, y + 2, 150, y + 28 };
+            const RECT durationInput{ 160, y + 2, 275, y + 28 };
+            const RECT durationUnit{ 283, y + 2, 303, y + 28 };
+            PanelText(dc, L"表情恢复延时", durationLabel,
+                RGB(166, 198, 232), 13, true,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            PanelFill(dc, durationInput, state->editingHoverExpressionDuration
+                ? RGB(34, 78, 124) : RGB(26, 46, 71));
+            HPEN durationBorder = CreatePen(
+                PS_SOLID, 1, state->editingHoverExpressionDuration
+                    ? RGB(68, 164, 255) : RGB(54, 82, 116));
+            HGDIOBJ oldPen = SelectObject(dc, durationBorder);
+            HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+            Rectangle(dc, durationInput.left, durationInput.top,
+                durationInput.right, durationInput.bottom);
+            SelectObject(dc, oldBrush);
+            SelectObject(dc, oldPen);
+            DeleteObject(durationBorder);
+            const std::wstring durationText = state->editingHoverExpressionDuration
+                ? state->hoverExpressionDurationInput
+                : FormatNonNegativeDecimal(overlay->hoverExpressionDurationSeconds_);
+            PanelText(dc, durationText, durationInput, RGB(240, 246, 255),
+                13, false, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            PanelText(dc, L"秒", durationUnit, RGB(220, 232, 248), 13, false,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            y += 38;
+        }
+        RECT expressionButton{ 20, y, 405, y + 32 };
         PanelFill(dc, expressionButton, RGB(26, 46, 71));
         std::wstring expressionLabel = L"选择表情";
         if (!overlay->hoverExpressionFile_.empty()) {
@@ -4296,10 +4891,6 @@ private:
         }
         PanelText(dc, expressionLabel, expressionButton, RGB(240, 246, 255), 12, true,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        RECT previewButton{ 266, y, 405, y + 32 };
-        PanelFill(dc, previewButton, RGB(32, 91, 151));
-        PanelText(dc, L"预览 4 秒", previewButton, RGB(240, 246, 255), 12, true,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
         const int footerY = client.bottom - 48;
         PanelFill(dc, RECT{ 16, footerY - 8, client.right - 16, footerY - 7 }, RGB(38, 58, 82));
@@ -4327,15 +4918,27 @@ private:
         if (y >= 52 && y < 84 && x >= modeLeft && x < 420 - 16) {
             return 10 + (x - modeLeft) / modeWidth;
         }
-        int base = overlay->borderMode_ == kBorderModeCustom ? 330 : 145;
+        int base = overlay->borderMode_ == kBorderModeCustom ? 330 : 105;
         if (y >= base && y < base + 30) return 5;
         if (y >= base + 45 && y < base + 75) return 6;
         if (y >= base + 87 && y < base + 120 && x < 350) return 9;
-        if (y >= base + 125 && y < base + 160) return 7;
-        if (y >= base + 163 && y < base + 200) return 8;
-        if (y >= base + 200 && y < base + 235 && x < 395) return 13;
-        if (y >= base + 235 && y < base + 280) {
-            return x < 262 ? 14 : 15;
+        if (y >= base + 129 && y < base + 162) return 7;
+        if (y >= base + 171 && y < base + 204) return 8;
+        if (y >= base + 213 && y < base + 250) {
+            return x < 198 ? 16 : 17;
+        }
+        if (y >= base + 255 && y < base + 290 && x < 395) return 13;
+        const int expressionOptionsTop = base + 289;
+        if (overlay->hoverExpressionEnabled_ &&
+            y >= expressionOptionsTop && y < expressionOptionsTop + 34 &&
+            x >= 160 && x < 275) {
+            return 15;
+        }
+        const int expressionButtonTop = expressionOptionsTop +
+            (overlay->hoverExpressionEnabled_ ? 38 : 0);
+        if (y >= expressionButtonTop && y < expressionButtonTop + 40 &&
+            x >= 20 && x < 405) {
+            return 14;
         }
         if (overlay->borderMode_ == kBorderModeCustom) {
             const RECT wheel = PersonalWheelRect(overlay);
@@ -4433,9 +5036,25 @@ private:
         overlay->hoverOpacityPercent_ = kDefaultHoverOpacityPercent;
         overlay->modelOpacityPercent_ = 100;
         overlay->hoverExpandPx_ = 0;
+        overlay->excludeEffectsFromHover_ = false;
+        overlay->subjectHoverRegionConfigured_ = false;
+        overlay->subjectHoverRegionLeft_ = 0;
+        overlay->subjectHoverRegionTop_ = 0;
+        overlay->subjectHoverRegionRight_ = 10000;
+        overlay->subjectHoverRegionBottom_ = 10000;
+        overlay->subjectHoverMaskGridWidth_ = 0;
+        overlay->subjectHoverMaskGridHeight_ = 0;
+        overlay->subjectHoverMaskBits_.clear();
+        overlay->subjectHoverTrackingReferenceValid_ = false;
+        overlay->subjectHoverTrackingScale_ = 1.0;
         overlay->CancelHoverExpression();
         overlay->hoverExpressionEnabled_ = false;
         overlay->hoverExpressionFile_.clear();
+        overlay->hoverExpressionDurationSeconds_ =
+            kDefaultHoverExpressionDurationSeconds;
+        state->editingHoverExpressionDuration = false;
+        state->hoverExpressionDurationInput = FormatNonNegativeDecimal(
+            overlay->hoverExpressionDurationSeconds_);
         overlay->RestorePanelExpressionPreview();
         overlay->hoverOpacityPreviewActive_ = true;
         SetTimer(panel, 91, 1000, nullptr);
@@ -4456,10 +5075,39 @@ private:
         overlay->hoverOpacityPercent_ = state->originalHoverOpacityPercent;
         overlay->modelOpacityPercent_ = state->originalModelOpacityPercent;
         overlay->hoverExpandPx_ = state->originalHoverExpandPx;
+        overlay->excludeEffectsFromHover_ = state->originalExcludeEffectsFromHover;
+        overlay->subjectHoverRegionConfigured_ = state->originalSubjectHoverRegionConfigured;
+        overlay->subjectHoverRegionLeft_ = state->originalSubjectHoverRegionLeft;
+        overlay->subjectHoverRegionTop_ = state->originalSubjectHoverRegionTop;
+        overlay->subjectHoverRegionRight_ = state->originalSubjectHoverRegionRight;
+        overlay->subjectHoverRegionBottom_ = state->originalSubjectHoverRegionBottom;
+        overlay->subjectHoverMaskGridWidth_ = state->originalSubjectHoverMaskGridWidth;
+        overlay->subjectHoverMaskGridHeight_ = state->originalSubjectHoverMaskGridHeight;
+        overlay->subjectHoverMaskBits_ = state->originalSubjectHoverMaskBits;
+        overlay->subjectHoverTrackingReferenceValid_ =
+            state->originalSubjectHoverTrackingReferenceValid;
+        overlay->subjectHoverTrackingReferenceCenterX_ =
+            state->originalSubjectHoverTrackingReferenceCenterX;
+        overlay->subjectHoverTrackingReferenceCenterY_ =
+            state->originalSubjectHoverTrackingReferenceCenterY;
+        overlay->subjectHoverTrackingReferenceWidth_ =
+            state->originalSubjectHoverTrackingReferenceWidth;
+        overlay->subjectHoverTrackingReferenceHeight_ =
+            state->originalSubjectHoverTrackingReferenceHeight;
+        overlay->subjectHoverTrackingCurrentCenterX_ =
+            overlay->subjectHoverTrackingReferenceCenterX_;
+        overlay->subjectHoverTrackingCurrentCenterY_ =
+            overlay->subjectHoverTrackingReferenceCenterY_;
+        overlay->subjectHoverTrackingScale_ = 1.0;
         overlay->hoverExpressionEnabled_ = state->originalHoverExpressionEnabled;
         overlay->hoverExpressionFile_ = state->originalHoverExpressionFile;
+        overlay->hoverExpressionDurationSeconds_ =
+            state->originalHoverExpressionDurationSeconds;
         overlay->RestorePanelExpressionPreview();
         overlay->hoverOpacityPreviewActive_ = false;
+        // Subject selection is persisted immediately. Cancelling the panel
+        // must therefore write the captured original mask/settings back too.
+        overlay->SaveUiSettings();
         ++overlay->requested_;
         overlay->RenderFrame();
         Log("[toolbar] border_settings_cancel");
@@ -4493,8 +5141,10 @@ private:
             }
         }
         RECT button{ 20, 0, 258, 0 };
-        const int base = overlay->borderMode_ == kBorderModeCustom ? 330 : 145;
-        button.top = base + 239;
+        const int base = overlay->borderMode_ == kBorderModeCustom ? 330 : 105;
+        // The expression button follows the checkbox and optional duration
+        // row in the same fixed-spacing layout used by DrawPersonalPanel.
+        button.top = base + (overlay->hoverExpressionEnabled_ ? 327 : 289);
         button.bottom = button.top + 32;
         POINT popup{ button.left, button.bottom };
         ClientToScreen(panel, &popup);
@@ -4510,7 +5160,17 @@ private:
         }
         overlay->hoverExpressionFile_ = expressions[command - kExpressionBase].file;
         if (overlay->PreviewExpressionFromPanel()) {
-            SetTimer(panel, 94, 4000, nullptr);
+            SetTimer(panel, 94, kExpressionSelectionPreviewTotalMs, nullptr);
+        }
+        RefreshPersonalPanel(panel);
+    }
+
+    static void ApplyHoverExpressionDurationInput(
+        HWND panel, BorderDialogState* state) {
+        if (!state || !state->overlay) return;
+        double seconds = 0.0;
+        if (TryParseNonNegativeDecimal(state->hoverExpressionDurationInput, seconds)) {
+            state->overlay->hoverExpressionDurationSeconds_ = seconds;
         }
         RefreshPersonalPanel(panel);
     }
@@ -4531,6 +5191,75 @@ private:
         case WM_PAINT:
             DrawPersonalPanel(panel, state);
             return 0;
+        case WM_GETDLGCODE:
+            if (state->editingHoverExpressionDuration) {
+                return DLGC_WANTALLKEYS | DLGC_WANTCHARS;
+            }
+            break;
+        case WM_SETCURSOR:
+            if (LOWORD(lParam) == HTCLIENT) {
+                POINT point{};
+                GetCursorPos(&point);
+                ScreenToClient(panel, &point);
+                const int hit = PersonalPanelHitTest(overlay, point.x, point.y);
+                if (hit == 15) {
+                    SetCursor(LoadCursorW(nullptr, IDC_IBEAM));
+                    return TRUE;
+                }
+                if (point.y < 44 && hit == 0) {
+                    SetCursor(LoadCursorW(nullptr, IDC_SIZEALL));
+                    return TRUE;
+                }
+            }
+            break;
+        case WM_KEYDOWN:
+            if (state->editingHoverExpressionDuration) {
+                if (wParam == VK_RETURN) {
+                    state->editingHoverExpressionDuration = false;
+                    state->replaceHoverExpressionDurationOnNextInput = false;
+                    RefreshPersonalPanel(panel);
+                    return 0;
+                }
+                if (wParam == VK_ESCAPE) {
+                    state->editingHoverExpressionDuration = false;
+                    state->replaceHoverExpressionDurationOnNextInput = false;
+                    state->hoverExpressionDurationInput = FormatNonNegativeDecimal(
+                        overlay->hoverExpressionDurationSeconds_);
+                    RefreshPersonalPanel(panel);
+                    return 0;
+                }
+            }
+            break;
+        case WM_CHAR:
+            if (state->editingHoverExpressionDuration) {
+                const wchar_t character = static_cast<wchar_t>(wParam);
+                if (character == L'\b') {
+                    if (state->replaceHoverExpressionDurationOnNextInput) {
+                        state->hoverExpressionDurationInput.clear();
+                        state->replaceHoverExpressionDurationOnNextInput = false;
+                    } else if (!state->hoverExpressionDurationInput.empty()) {
+                        state->hoverExpressionDurationInput.pop_back();
+                    }
+                    ApplyHoverExpressionDurationInput(panel, state);
+                    return 0;
+                }
+                const bool isDigit = character >= L'0' && character <= L'9';
+                const bool isFirstDot = character == L'.' &&
+                    state->hoverExpressionDurationInput.find(L'.') == std::wstring::npos;
+                if (isDigit || isFirstDot) {
+                    if (state->replaceHoverExpressionDurationOnNextInput) {
+                        state->hoverExpressionDurationInput.clear();
+                        state->replaceHoverExpressionDurationOnNextInput = false;
+                    }
+                    state->hoverExpressionDurationInput.push_back(character);
+                    ApplyHoverExpressionDurationInput(panel, state);
+                }
+                // Deliberately consume minus signs, operators, spaces and
+                // paste-style expressions: this field only accepts a plain
+                // non-negative decimal number of seconds.
+                return 0;
+            }
+            break;
         case WM_TIMER:
             if (wParam == 91) {
                 KillTimer(panel, 91);
@@ -4548,6 +5277,11 @@ private:
                 return 0;
             }
             if (wParam == 93) {
+                // Capture the user's complete expression setup as soon as
+                // VTS returns it, rather than when a later preview happens.
+                // This is the state we must restore after preview/cancel.
+                overlay->CapturePanelExpressionState();
+                overlay->UpdatePanelExpressionState();
                 RefreshPersonalPanel(panel);
                 return 0;
             }
@@ -4561,6 +5295,22 @@ private:
             const int x = GET_X_LPARAM(lParam);
             const int y = GET_Y_LPARAM(lParam);
             const int hit = PersonalPanelHitTest(overlay, x, y);
+            if (hit != 15) {
+                state->editingHoverExpressionDuration = false;
+                state->replaceHoverExpressionDurationOnNextInput = false;
+            }
+            if (y < 44 && hit == 0) {
+                RECT windowRect{};
+                GetWindowRect(panel, &windowRect);
+                POINT cursor{};
+                GetCursorPos(&cursor);
+                overlay->personalPanelManuallyPositioned_ = true;
+                state->draggingPanel = true;
+                state->dragStartCursor = cursor;
+                state->dragStartWindow = POINT{ windowRect.left, windowRect.top };
+                SetCapture(panel);
+                return 0;
+            }
             if (hit == 1) {
                 RestorePersonalPanel(panel, state);
                 return 0;
@@ -4614,26 +5364,51 @@ private:
                 RefreshPersonalPanel(panel);
                 return 0;
             }
+            if (hit == 16) {
+                if (!overlay->subjectHoverRegionConfigured_) {
+                    overlay->showSubjectRegionPreview_ = false;
+                    overlay->ShowSubjectSelectionOverlay();
+                    return 0;
+                }
+                overlay->excludeEffectsFromHover_ = !overlay->excludeEffectsFromHover_;
+                overlay->showSubjectRegionPreview_ = false;
+                ++overlay->requested_;
+                overlay->RenderFrame();
+                RefreshPersonalPanel(panel);
+                return 0;
+            }
+            if (hit == 17) {
+                overlay->showSubjectRegionPreview_ = false;
+                overlay->ShowSubjectSelectionOverlay();
+                return 0;
+            }
             if (hit == 13) {
                 overlay->hoverExpressionEnabled_ = !overlay->hoverExpressionEnabled_;
                 if (!overlay->hoverExpressionEnabled_) {
                     overlay->CancelHoverExpression();
+                    state->editingHoverExpressionDuration = false;
                 } else {
                     overlay->vtsApi_.RequestExpressionState();
+                    state->hoverExpressionDurationInput = FormatNonNegativeDecimal(
+                        overlay->hoverExpressionDurationSeconds_);
                 }
                 ++overlay->requested_;
                 overlay->RenderFrame();
                 RefreshPersonalPanel(panel);
                 return 0;
             }
-            if (hit == 14) {
-                ShowExpressionMenu(panel, state);
+            if (hit == 15) {
+                state->editingHoverExpressionDuration = true;
+                state->replaceHoverExpressionDurationOnNextInput = true;
+                state->hoverExpressionDurationInput = FormatNonNegativeDecimal(
+                    overlay->hoverExpressionDurationSeconds_);
+                SetForegroundWindow(panel);
+                SetFocus(panel);
+                RefreshPersonalPanel(panel);
                 return 0;
             }
-            if (hit == 15) {
-                if (overlay->PreviewExpressionFromPanel()) {
-                    SetTimer(panel, 94, 4000, nullptr);
-                }
+            if (hit == 14) {
+                ShowExpressionMenu(panel, state);
                 return 0;
             }
             if (hit == 20) {
@@ -4647,7 +5422,7 @@ private:
             if (hit == 22) {
                 overlay->EndHoverOpacityPreview();
                 KillTimer(panel, 94);
-                overlay->RestorePanelExpressionPreview();
+                overlay->EndPanelExpressionSession();
                 overlay->SaveUiSettings();
                 Log("[toolbar] border_settings_saved mode=" + std::to_string(overlay->borderMode_) +
                     " thickness=" + std::to_string(overlay->borderThickness_));
@@ -4657,6 +5432,37 @@ private:
             return 0;
         }
         case WM_MOUSEMOVE:
+            if (!state->trackingMouseLeave) {
+                TRACKMOUSEEVENT tracking{};
+                tracking.cbSize = sizeof(tracking);
+                tracking.dwFlags = TME_LEAVE;
+                tracking.hwndTrack = panel;
+                state->trackingMouseLeave = TrackMouseEvent(&tracking) != FALSE;
+            }
+            if (state->draggingPanel && GetCapture() == panel) {
+                POINT cursor{};
+                GetCursorPos(&cursor);
+                const int x = state->dragStartWindow.x +
+                    cursor.x - state->dragStartCursor.x;
+                const int y = state->dragStartWindow.y +
+                    cursor.y - state->dragStartCursor.y;
+                SetWindowPos(panel, HWND_TOPMOST, x, y, 0, 0,
+                    SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                return 0;
+            }
+            {
+                const POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                const int hoverHit = PersonalPanelHitTest(
+                    overlay, point.x, point.y);
+                const bool showSubjectPreview =
+                    state->activeHit == 0 && overlay->subjectHoverRegionConfigured_ &&
+                    (hoverHit == 16 || hoverHit == 17);
+                if (showSubjectPreview != overlay->showSubjectRegionPreview_) {
+                    overlay->showSubjectRegionPreview_ = showSubjectPreview;
+                    ++overlay->requested_;
+                    overlay->RenderFrame();
+                }
+            }
             if (state->activeHit == 3 && GetCapture() == panel) {
                 POINT cursor{};
                 GetCursorPos(&cursor);
@@ -4672,7 +5478,20 @@ private:
                 return 0;
             }
             break;
+        case WM_MOUSELEAVE:
+            state->trackingMouseLeave = false;
+            if (overlay->showSubjectRegionPreview_) {
+                overlay->showSubjectRegionPreview_ = false;
+                ++overlay->requested_;
+                overlay->RenderFrame();
+            }
+            return 0;
         case WM_LBUTTONUP:
+            if (state->draggingPanel) {
+                state->draggingPanel = false;
+                if (GetCapture() == panel) ReleaseCapture();
+                return 0;
+            }
             if (state->activeHit != 0) {
                 POINT cursor{};
                 GetCursorPos(&cursor);
@@ -4700,6 +5519,7 @@ private:
             }
             break;
         case WM_CAPTURECHANGED:
+            state->draggingPanel = false;
             if (state->activeHit == 8) {
                 overlay->hoverExpandEditing_ = false;
                 overlay->showHoverExpandPreview_ = false;
@@ -4730,12 +5550,17 @@ private:
             KillTimer(panel, 93);
             KillTimer(panel, 94);
             if (GetCapture() == panel) ReleaseCapture();
-            overlay->RestorePanelExpressionPreview();
+            // Do not let a lock-mode hover command survive the panel close and
+            // overwrite the preview's final baseline restoration.
+            overlay->CancelHoverExpression();
+            overlay->EndPanelExpressionSession();
             overlay->borderDialogOpen_ = false;
             overlay->hoverOpacityPreviewActive_ = false;
             overlay->showHoverExpandPreview_ = false;
             overlay->hoverExpandEditing_ = false;
             overlay->hoverExpandPreviewAlpha_ = 0.0;
+            overlay->showSubjectRegionPreview_ = false;
+            overlay->personalPanelManuallyPositioned_ = false;
             overlay->borderPanelHwnd_ = nullptr;
             delete state;
             return 0;
@@ -4760,11 +5585,37 @@ private:
         state->originalHoverOpacityPercent = hoverOpacityPercent_;
         state->originalModelOpacityPercent = modelOpacityPercent_;
         state->originalHoverExpandPx = hoverExpandPx_;
+        state->originalExcludeEffectsFromHover = excludeEffectsFromHover_;
+        state->originalSubjectHoverRegionConfigured = subjectHoverRegionConfigured_;
+        state->originalSubjectHoverRegionLeft = subjectHoverRegionLeft_;
+        state->originalSubjectHoverRegionTop = subjectHoverRegionTop_;
+        state->originalSubjectHoverRegionRight = subjectHoverRegionRight_;
+        state->originalSubjectHoverRegionBottom = subjectHoverRegionBottom_;
+        state->originalSubjectHoverMaskGridWidth = subjectHoverMaskGridWidth_;
+        state->originalSubjectHoverMaskGridHeight = subjectHoverMaskGridHeight_;
+        state->originalSubjectHoverMaskBits = subjectHoverMaskBits_;
+        state->originalSubjectHoverTrackingReferenceValid =
+            subjectHoverTrackingReferenceValid_;
+        state->originalSubjectHoverTrackingReferenceCenterX =
+            subjectHoverTrackingReferenceCenterX_;
+        state->originalSubjectHoverTrackingReferenceCenterY =
+            subjectHoverTrackingReferenceCenterY_;
+        state->originalSubjectHoverTrackingReferenceWidth =
+            subjectHoverTrackingReferenceWidth_;
+        state->originalSubjectHoverTrackingReferenceHeight =
+            subjectHoverTrackingReferenceHeight_;
         state->originalHoverExpressionEnabled = hoverExpressionEnabled_;
         state->originalHoverExpressionFile = hoverExpressionFile_;
+        state->originalHoverExpressionDurationSeconds = hoverExpressionDurationSeconds_;
+        state->hoverExpressionDurationInput = FormatNonNegativeDecimal(
+            hoverExpressionDurationSeconds_);
         CustomColorHueSaturation(customBorderColor_, state->colorHue, state->colorSaturation);
         state->colorValuePercent = CustomColorValuePercent(customBorderColor_);
+        // Freeze any existing lock-mode hover session before state 1 is
+        // captured for personalization previews.
+        CancelHoverExpression();
         borderDialogOpen_ = true;
+        personalPanelManuallyPositioned_ = false;
         Log("[toolbar] border_panel_open");
 
         static const wchar_t kPersonalPanelClass[] = L"LilyVtsPersonalizationPanel";
@@ -4779,7 +5630,10 @@ private:
             registered = RegisterClassW(&wc) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
         }
         borderPanelHwnd_ = CreateWindowExW(
-            WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+            // The custom duration input needs keyboard focus. TOOLWINDOW
+            // keeps this panel out of Alt+Tab; unlike the model surface it
+            // must be allowed to activate while the user edits a value.
+            WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
             kPersonalPanelClass, L"个性化", WS_POPUP,
             0, 0, 420, PersonalPanelHeight(this), toolbarHwnd_, nullptr, instance_, state);
         if (!borderPanelHwnd_) {
@@ -4792,13 +5646,913 @@ private:
             SWP_NOACTIVATE | SWP_SHOWWINDOW);
         PositionBorderPanel();
         ShowWindow(borderPanelHwnd_, SW_SHOWNOACTIVATE);
+        BeginPanelExpressionSession();
         vtsApi_.RequestExpressionState();
-        SetTimer(borderPanelHwnd_, 93, 500, nullptr);
+        SetTimer(borderPanelHwnd_, 93, kExpressionStatePollIntervalMs, nullptr);
         InvalidateRect(borderPanelHwnd_, nullptr, FALSE);
+    }
+
+    struct SubjectSelectionSnapshot {
+        std::vector<std::vector<POINT>> polygons;
+        std::vector<POINT> currentPolygon;
+    };
+
+    struct SubjectSelectionToolbarLayout {
+        RECT panel{};
+        RECT undo{};
+        RECT redo{};
+        RECT count{};
+        RECT finish{};
+    };
+
+    static SubjectSelectionToolbarLayout SubjectSelectionToolbar() {
+        const int left = 0;
+        const int top = 0;
+        SubjectSelectionToolbarLayout layout;
+        layout.panel = RECT{ left, top, left + 438, top + 56 };
+        layout.count = RECT{ left + 10, top + 8, left + 194, top + 48 };
+        layout.undo = RECT{ left + 202, top + 8, left + 242, top + 48 };
+        layout.redo = RECT{ left + 248, top + 8, left + 288, top + 48 };
+        layout.finish = RECT{ left + 298, top + 8, left + 428, top + 48 };
+        return layout;
+    }
+
+    void RefreshSubjectSelectionUi() {
+        if (subjectSelectionHwnd_) {
+            InvalidateRect(subjectSelectionHwnd_, nullptr, FALSE);
+        }
+        if (subjectSelectionToolbarHwnd_) {
+            InvalidateRect(subjectSelectionToolbarHwnd_, nullptr, FALSE);
+        }
+    }
+
+    SubjectSelectionSnapshot CurrentSubjectSelectionSnapshot() const {
+        return SubjectSelectionSnapshot{
+            subjectSelectionPolygons_, subjectSelectionPolygon_ };
+    }
+
+    void RestoreSubjectSelectionSnapshot(const SubjectSelectionSnapshot& snapshot) {
+        subjectSelectionPolygons_ = snapshot.polygons;
+        subjectSelectionPolygon_ = snapshot.currentPolygon;
+        if (!subjectSelectionPolygon_.empty()) {
+            subjectSelectionCursor_ = subjectSelectionPolygon_.back();
+        }
+    }
+
+    void RecordSubjectSelectionEdit() {
+        subjectSelectionUndo_.push_back(CurrentSubjectSelectionSnapshot());
+        if (subjectSelectionUndo_.size() > 128) {
+            subjectSelectionUndo_.erase(subjectSelectionUndo_.begin());
+        }
+        subjectSelectionRedo_.clear();
+    }
+
+    void UndoSubjectSelectionEdit() {
+        if (subjectSelectionUndo_.empty()) return;
+        subjectSelectionRedo_.push_back(CurrentSubjectSelectionSnapshot());
+        RestoreSubjectSelectionSnapshot(subjectSelectionUndo_.back());
+        subjectSelectionUndo_.pop_back();
+        RefreshSubjectSelectionUi();
+    }
+
+    void RedoSubjectSelectionEdit() {
+        if (subjectSelectionRedo_.empty()) return;
+        subjectSelectionUndo_.push_back(CurrentSubjectSelectionSnapshot());
+        RestoreSubjectSelectionSnapshot(subjectSelectionRedo_.back());
+        subjectSelectionRedo_.pop_back();
+        RefreshSubjectSelectionUi();
+    }
+
+    void CompleteCurrentSubjectPolygon() {
+        if (subjectSelectionPolygon_.size() < 3) return;
+        RecordSubjectSelectionEdit();
+        subjectSelectionPolygons_.push_back(subjectSelectionPolygon_);
+        subjectSelectionPolygon_.clear();
+        subjectSelectionDragging_ = false;
+        if (GetCapture() == subjectSelectionHwnd_) ReleaseCapture();
+        RefreshSubjectSelectionUi();
+    }
+
+    void DrawSubjectSelectionOverlay(HWND window) {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(window, &paint);
+        RECT client{};
+        GetClientRect(window, &client);
+        HBRUSH shade = CreateSolidBrush(RGB(8, 14, 24));
+        FillRect(dc, &client, shade);
+        DeleteObject(shade);
+
+        HFONT titleFont = CreateFontW(-UiFontSize(window, 22), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE,
+            FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
+        HFONT hintFont = CreateFontW(-UiFontSize(window, 15), 0, 0, 0, FW_NORMAL, FALSE, FALSE,
+            FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
+        HGDIOBJ oldFont = SelectObject(dc, titleFont);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(240, 248, 255));
+        RECT title{ 28, 24, client.right - 28, 54 };
+        DrawTextW(dc, L"手动框选悬停范围（支持多选）", -1, &title,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(dc, hintFont);
+        SetTextColor(dc, RGB(185, 213, 244));
+        RECT hint{ 28, 57, client.right - 28, 84 };
+        DrawTextW(dc, L"逐点点击勾勒范围；双击或点击起点完成一个范围，然后可继续框选。回车完成全部，Esc 取消。",
+            -1, &hint, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        SelectObject(dc, oldFont);
+        DeleteObject(titleFont);
+        DeleteObject(hintFont);
+
+        for (size_t polygonIndex = 0;
+            polygonIndex < subjectSelectionPolygons_.size(); ++polygonIndex) {
+            const auto& polygon = subjectSelectionPolygons_[polygonIndex];
+            if (polygon.size() < 3) continue;
+            HBRUSH clear = static_cast<HBRUSH>(GetStockObject(HOLLOW_BRUSH));
+            HPEN completedPen = CreatePen(PS_SOLID, 3, RGB(112, 238, 137));
+            HGDIOBJ oldBrush = SelectObject(dc, clear);
+            HGDIOBJ oldPen = SelectObject(dc, completedPen);
+            Polygon(dc, polygon.data(), static_cast<int>(polygon.size()));
+            SelectObject(dc, oldPen);
+            SelectObject(dc, oldBrush);
+            DeleteObject(completedPen);
+            RECT numberRect{
+                polygon.front().x + 10, polygon.front().y - 18,
+                polygon.front().x + 70, polygon.front().y + 18 };
+            PanelText(dc, std::to_wstring(polygonIndex + 1), numberRect,
+                RGB(146, 255, 166), 15, true,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        }
+
+        if (!subjectSelectionPolygon_.empty()) {
+            HBRUSH clear = static_cast<HBRUSH>(GetStockObject(HOLLOW_BRUSH));
+            HPEN outline = CreatePen(PS_SOLID, 3, RGB(71, 189, 255));
+            HGDIOBJ oldBrush = SelectObject(dc, clear);
+            HGDIOBJ oldPen = SelectObject(dc, outline);
+            std::vector<POINT> preview = subjectSelectionPolygon_;
+            if (preview.back().x != subjectSelectionCursor_.x ||
+                preview.back().y != subjectSelectionCursor_.y) {
+                preview.push_back(subjectSelectionCursor_);
+            }
+            if (preview.size() >= 2) {
+                Polyline(dc, preview.data(), static_cast<int>(preview.size()));
+            }
+            if (subjectSelectionPolygon_.size() >= 3) {
+                POINT closing[2] = {
+                    subjectSelectionCursor_, subjectSelectionPolygon_.front() };
+                HPEN closePen = CreatePen(PS_DASH, 2, RGB(112, 238, 137));
+                SelectObject(dc, closePen);
+                Polyline(dc, closing, 2);
+                SelectObject(dc, outline);
+                DeleteObject(closePen);
+            }
+            for (size_t i = 0; i < subjectSelectionPolygon_.size(); ++i) {
+                const POINT point = subjectSelectionPolygon_[i];
+                HBRUSH vertexBrush = CreateSolidBrush(i == 0
+                    ? RGB(112, 238, 137) : RGB(71, 189, 255));
+                HGDIOBJ oldVertexBrush = SelectObject(dc, vertexBrush);
+                const int radius = i == 0 ? 11 : 7;
+                Ellipse(dc, point.x - radius, point.y - radius,
+                    point.x + radius + 1, point.y + radius + 1);
+                SelectObject(dc, oldVertexBrush);
+                DeleteObject(vertexBrush);
+            }
+            SelectObject(dc, oldPen);
+            SelectObject(dc, oldBrush);
+            DeleteObject(outline);
+        }
+
+        EndPaint(window, &paint);
+    }
+
+    void DrawSubjectSelectionToolbar(HWND window) {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(window, &paint);
+        const SubjectSelectionToolbarLayout toolbar = SubjectSelectionToolbar();
+        PanelFill(dc, toolbar.panel, RGB(18, 31, 49));
+        HPEN toolbarBorder = CreatePen(PS_SOLID, 1, RGB(66, 103, 143));
+        HGDIOBJ oldToolbarPen = SelectObject(dc, toolbarBorder);
+        HGDIOBJ oldToolbarBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+        Rectangle(dc, toolbar.panel.left, toolbar.panel.top,
+            toolbar.panel.right, toolbar.panel.bottom);
+        SelectObject(dc, oldToolbarBrush);
+        SelectObject(dc, oldToolbarPen);
+        DeleteObject(toolbarBorder);
+
+        const bool canUndo = !subjectSelectionUndo_.empty();
+        const bool canRedo = !subjectSelectionRedo_.empty();
+        PanelFill(dc, toolbar.undo, canUndo ? RGB(30, 55, 84) : RGB(22, 38, 58));
+        PanelFill(dc, toolbar.redo, canRedo ? RGB(30, 55, 84) : RGB(22, 38, 58));
+        PanelText(dc, L"↶", toolbar.undo,
+            canUndo ? RGB(230, 241, 255) : RGB(75, 94, 116), 23, false,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        PanelText(dc, L"↷", toolbar.redo,
+            canRedo ? RGB(230, 241, 255) : RGB(75, 94, 116), 23, false,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        PanelText(dc,
+            L"当前框选主体数量：" + std::to_wstring(subjectSelectionPolygons_.size()),
+            toolbar.count, RGB(210, 226, 245), 14, true,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        PanelFill(dc, toolbar.finish, RGB(36, 103, 171));
+        PanelText(dc, L"完成  Enter", toolbar.finish, RGB(245, 250, 255), 14, true,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        EndPaint(window, &paint);
+    }
+
+    struct SubjectAlphaComponent {
+        bool valid = false;
+        int left = 0;
+        int top = 0;
+        int right = 0;
+        int bottom = 0;
+        int cells = 0;
+
+        double CenterX() const { return (left + right) * 0.5; }
+        double CenterY() const { return (top + bottom) * 0.5; }
+        double Width() const { return static_cast<double>(right - left); }
+        double Height() const { return static_cast<double>(bottom - top); }
+    };
+
+    static SubjectAlphaComponent LargestSubjectComponent(
+        const std::vector<std::uint8_t>& bits, int gridWidth, int gridHeight) {
+        SubjectAlphaComponent largest;
+        if (gridWidth <= 0 || gridHeight <= 0 || bits.empty()) return largest;
+        const size_t cellCount = static_cast<size_t>(gridWidth) * gridHeight;
+        std::vector<std::uint8_t> visited(cellCount, 0);
+        std::vector<int> pending;
+        pending.reserve(1024);
+        const auto occupied = [&bits, cellCount](int index) {
+            return index >= 0 && static_cast<size_t>(index) < cellCount &&
+                static_cast<size_t>(index) / 8 < bits.size() &&
+                (bits[static_cast<size_t>(index) / 8] &
+                    static_cast<std::uint8_t>(1u << (index % 8))) != 0;
+        };
+        for (int start = 0; start < static_cast<int>(cellCount); ++start) {
+            if (visited[start] || !occupied(start)) continue;
+            SubjectAlphaComponent component;
+            component.valid = true;
+            component.left = component.right = start % gridWidth;
+            component.top = component.bottom = start / gridWidth;
+            pending.clear();
+            pending.push_back(start);
+            visited[start] = 1;
+            for (size_t cursor = 0; cursor < pending.size(); ++cursor) {
+                const int index = pending[cursor];
+                const int x = index % gridWidth;
+                const int y = index / gridWidth;
+                component.left = (std::min)(component.left, x);
+                component.top = (std::min)(component.top, y);
+                component.right = (std::max)(component.right, x + 1);
+                component.bottom = (std::max)(component.bottom, y + 1);
+                ++component.cells;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        if (dx == 0 && dy == 0) continue;
+                        const int nx = x + dx;
+                        const int ny = y + dy;
+                        if (nx < 0 || ny < 0 || nx >= gridWidth || ny >= gridHeight) continue;
+                        const int neighbor = ny * gridWidth + nx;
+                        if (!visited[neighbor] && occupied(neighbor)) {
+                            visited[neighbor] = 1;
+                            pending.push_back(neighbor);
+                        }
+                    }
+                }
+            }
+            if (component.cells > largest.cells) largest = component;
+        }
+        return largest;
+    }
+
+    static std::vector<std::uint8_t> KeepLargestSubjectComponent(
+        const std::vector<std::uint8_t>& bits, int gridWidth, int gridHeight) {
+        const size_t cellCount = static_cast<size_t>(gridWidth) * gridHeight;
+        std::vector<std::uint8_t> result((cellCount + 7) / 8, 0);
+        if (gridWidth <= 0 || gridHeight <= 0 || bits.empty()) return result;
+        std::vector<std::uint8_t> visited(cellCount, 0);
+        std::vector<int> pending;
+        std::vector<int> best;
+        const auto occupied = [&bits, cellCount](int index) {
+            return index >= 0 && static_cast<size_t>(index) < cellCount &&
+                static_cast<size_t>(index) / 8 < bits.size() &&
+                (bits[static_cast<size_t>(index) / 8] &
+                    static_cast<std::uint8_t>(1u << (index % 8))) != 0;
+        };
+        for (int start = 0; start < static_cast<int>(cellCount); ++start) {
+            if (visited[start] || !occupied(start)) continue;
+            pending.clear();
+            pending.push_back(start);
+            visited[start] = 1;
+            for (size_t cursor = 0; cursor < pending.size(); ++cursor) {
+                const int index = pending[cursor];
+                const int x = index % gridWidth;
+                const int y = index / gridWidth;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        if (dx == 0 && dy == 0) continue;
+                        const int nx = x + dx;
+                        const int ny = y + dy;
+                        if (nx < 0 || ny < 0 || nx >= gridWidth || ny >= gridHeight) continue;
+                        const int neighbor = ny * gridWidth + nx;
+                        if (!visited[neighbor] && occupied(neighbor)) {
+                            visited[neighbor] = 1;
+                            pending.push_back(neighbor);
+                        }
+                    }
+                }
+            }
+            if (pending.size() > best.size()) best = pending;
+        }
+        for (const int index : best) {
+            result[static_cast<size_t>(index) / 8] |=
+                static_cast<std::uint8_t>(1u << (index % 8));
+        }
+        return result;
+    }
+
+    // Select the component that best matches the lasso/previous tracked model,
+    // instead of blindly taking the largest disconnected alpha island.  This
+    // keeps small rain/snow/spark particles out while still retaining nearby
+    // detached model pieces such as a tail or accessory.
+    static std::vector<std::uint8_t> KeepScoredSubjectComponents(
+        const std::vector<std::uint8_t>& bits, int gridWidth, int gridHeight,
+        double preferredX, double preferredY, bool hasPreferred) {
+        const size_t cellCount = static_cast<size_t>(gridWidth) * gridHeight;
+        std::vector<std::uint8_t> result((cellCount + 7) / 8, 0);
+        if (gridWidth <= 0 || gridHeight <= 0 || bits.empty()) return result;
+        struct Candidate {
+            SubjectAlphaComponent bounds;
+            std::vector<int> cells;
+            double distance = 0.0;
+            double score = 0.0;
+        };
+        std::vector<std::uint8_t> visited(cellCount, 0);
+        std::vector<int> pending;
+        std::vector<Candidate> candidates;
+        const auto occupied = [&bits, cellCount](int index) {
+            return index >= 0 && static_cast<size_t>(index) < cellCount &&
+                static_cast<size_t>(index) / 8 < bits.size() &&
+                (bits[static_cast<size_t>(index) / 8] &
+                    static_cast<std::uint8_t>(1u << (index % 8))) != 0;
+        };
+        for (int start = 0; start < static_cast<int>(cellCount); ++start) {
+            if (visited[start] || !occupied(start)) continue;
+            Candidate candidate;
+            candidate.bounds.valid = true;
+            candidate.bounds.left = candidate.bounds.right = start % gridWidth;
+            candidate.bounds.top = candidate.bounds.bottom = start / gridWidth;
+            pending.clear();
+            pending.push_back(start);
+            visited[start] = 1;
+            for (size_t cursor = 0; cursor < pending.size(); ++cursor) {
+                const int index = pending[cursor];
+                const int x = index % gridWidth;
+                const int y = index / gridWidth;
+                candidate.cells.push_back(index);
+                candidate.bounds.left = (std::min)(candidate.bounds.left, x);
+                candidate.bounds.top = (std::min)(candidate.bounds.top, y);
+                candidate.bounds.right = (std::max)(candidate.bounds.right, x + 1);
+                candidate.bounds.bottom = (std::max)(candidate.bounds.bottom, y + 1);
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        if (dx == 0 && dy == 0) continue;
+                        const int nx = x + dx;
+                        const int ny = y + dy;
+                        if (nx < 0 || ny < 0 || nx >= gridWidth || ny >= gridHeight) continue;
+                        const int neighbor = ny * gridWidth + nx;
+                        if (!visited[neighbor] && occupied(neighbor)) {
+                            visited[neighbor] = 1;
+                            pending.push_back(neighbor);
+                        }
+                    }
+                }
+            }
+            candidate.bounds.cells = static_cast<int>(candidate.cells.size());
+            const double dx = candidate.bounds.CenterX() - preferredX;
+            const double dy = candidate.bounds.CenterY() - preferredY;
+            candidate.distance = std::hypot(dx, dy);
+            // Area matters, but distance to the user-selected subject center
+            // matters more than a huge isolated effect at the edge.
+            candidate.score = std::log1p(static_cast<double>(candidate.cells.size())) * 55.0 -
+                (hasPreferred ? candidate.distance * 2.0 : 0.0);
+            candidates.push_back(std::move(candidate));
+        }
+        if (candidates.empty()) return result;
+        size_t anchorIndex = 0;
+        for (size_t i = 1; i < candidates.size(); ++i) {
+            if (candidates[i].score > candidates[anchorIndex].score) anchorIndex = i;
+        }
+        const Candidate& anchor = candidates[anchorIndex];
+        const int attachMinCells = (std::max)(2, anchor.bounds.cells / 250);
+        const auto bboxGap = [&anchor](const Candidate& candidate) {
+            const int gapX = (candidate.bounds.right < anchor.bounds.left)
+                ? anchor.bounds.left - candidate.bounds.right
+                : (anchor.bounds.right < candidate.bounds.left)
+                    ? candidate.bounds.left - anchor.bounds.right : 0;
+            const int gapY = (candidate.bounds.bottom < anchor.bounds.top)
+                ? anchor.bounds.top - candidate.bounds.bottom
+                : (anchor.bounds.bottom < candidate.bounds.top)
+                    ? candidate.bounds.top - anchor.bounds.bottom : 0;
+            return (std::max)(gapX, gapY);
+        };
+        for (size_t i = 0; i < candidates.size(); ++i) {
+            const Candidate& candidate = candidates[i];
+            const bool keep = i == anchorIndex ||
+                (candidate.bounds.cells >= attachMinCells && bboxGap(candidate) <= 10);
+            if (!keep) continue;
+            for (const int index : candidate.cells) {
+                result[static_cast<size_t>(index) / 8] |=
+                    static_cast<std::uint8_t>(1u << (index % 8));
+            }
+        }
+        return result;
+    }
+
+    SubjectAlphaComponent CurrentSubjectAlphaComponent(
+        int gridWidth, int gridHeight) const {
+        SubjectAlphaComponent empty;
+        if (gridWidth <= 0 || gridHeight <= 0 || dibWidth_ <= 0 || dibHeight_ <= 0) {
+            return empty;
+        }
+        const bool haveRawModel = !hoverPreviewBasePixels_.empty() &&
+            hoverPreviewBaseWidth_ == dibWidth_ &&
+            hoverPreviewBaseHeight_ == dibHeight_;
+        if (!haveRawModel && !dibBits_) return empty;
+        const auto* pixels = haveRawModel
+            ? hoverPreviewBasePixels_.data()
+            : static_cast<const std::uint8_t*>(dibBits_);
+        std::vector<std::uint8_t> bits(
+            (static_cast<size_t>(gridWidth) * gridHeight + 7) / 8, 0);
+        for (int gy = 0; gy < gridHeight; ++gy) {
+            const int top = gy * dibHeight_ / gridHeight;
+            const int bottom = (std::max)(top + 1, (gy + 1) * dibHeight_ / gridHeight);
+            for (int gx = 0; gx < gridWidth; ++gx) {
+                const int left = gx * dibWidth_ / gridWidth;
+                const int right = (std::max)(left + 1, (gx + 1) * dibWidth_ / gridWidth);
+                bool occupied = false;
+                for (int y = top; y < (std::min)(bottom, dibHeight_) && !occupied; ++y) {
+                    for (int x = left; x < (std::min)(right, dibWidth_); ++x) {
+                        if (pixels[(static_cast<size_t>(y) * dibWidth_ + x) * 4 + 3] > 8) {
+                            occupied = true;
+                            break;
+                        }
+                    }
+                }
+                if (occupied) {
+                    const size_t index = static_cast<size_t>(gy) * gridWidth + gx;
+                    bits[index / 8] |= static_cast<std::uint8_t>(1u << (index % 8));
+                }
+            }
+        }
+        const bool hasPreferred = subjectHoverTrackingReferenceValid_;
+        double preferredX = gridWidth * 0.5;
+        double preferredY = gridHeight * 0.5;
+        if (hasPreferred) {
+            preferredX = subjectHoverTrackingCurrentCenterX_;
+            preferredY = subjectHoverTrackingCurrentCenterY_;
+        } else if (subjectHoverRegionConfigured_) {
+            preferredX = (subjectHoverRegionLeft_ + subjectHoverRegionRight_) *
+                0.0001 * gridWidth * 0.5;
+            preferredY = (subjectHoverRegionTop_ + subjectHoverRegionBottom_) *
+                0.0001 * gridHeight * 0.5;
+        }
+        const auto selected = KeepScoredSubjectComponents(
+            bits, gridWidth, gridHeight, preferredX, preferredY, true);
+        SubjectAlphaComponent selectedComponent = LargestSubjectComponent(
+            selected, gridWidth, gridHeight);
+        if (selectedComponent.valid) return selectedComponent;
+        return LargestSubjectComponent(bits, gridWidth, gridHeight);
+    }
+
+    void CaptureSubjectTrackingReference() {
+        const SubjectAlphaComponent component = CurrentSubjectAlphaComponent(
+            subjectHoverMaskGridWidth_, subjectHoverMaskGridHeight_);
+        if (!component.valid || component.cells < 4) {
+            subjectHoverTrackingReferenceValid_ = false;
+            return;
+        }
+        subjectHoverTrackingReferenceCenterX_ = component.CenterX();
+        subjectHoverTrackingReferenceCenterY_ = component.CenterY();
+        subjectHoverTrackingReferenceWidth_ = component.Width();
+        subjectHoverTrackingReferenceHeight_ = component.Height();
+        subjectHoverTrackingCurrentCenterX_ = component.CenterX();
+        subjectHoverTrackingCurrentCenterY_ = component.CenterY();
+        subjectHoverTrackingScale_ = 1.0;
+        subjectHoverTrackingReferenceValid_ = true;
+    }
+
+    void UpdateSubjectHoverTracking() {
+        if (!excludeEffectsFromHover_ || !subjectHoverRegionConfigured_ ||
+            subjectHoverMaskGridWidth_ <= 0 || subjectHoverMaskGridHeight_ <= 0 ||
+            subjectHoverMaskBits_.empty()) {
+            return;
+        }
+        const auto now = Clock::now();
+        if (subjectHoverTrackingLastUpdate_ != Clock::time_point{} &&
+            now - subjectHoverTrackingLastUpdate_ < std::chrono::milliseconds(33)) {
+            return;
+        }
+        subjectHoverTrackingLastUpdate_ = now;
+        const SubjectAlphaComponent component = CurrentSubjectAlphaComponent(
+            subjectHoverMaskGridWidth_, subjectHoverMaskGridHeight_);
+        if (!component.valid || component.cells < 4) return;
+        if (!subjectHoverTrackingReferenceValid_) {
+            CaptureSubjectTrackingReference();
+            return;
+        }
+        const double scaleX = component.Width() /
+            (std::max)(1.0, subjectHoverTrackingReferenceWidth_);
+        const double scaleY = component.Height() /
+            (std::max)(1.0, subjectHoverTrackingReferenceHeight_);
+        const double targetScale = (scaleX + scaleY) * 0.5;
+        // A transient full-screen effect must not be allowed to replace the
+        // tracked model. Normal VTS model scaling stays well inside this range.
+        if (targetScale < 0.35 || targetScale > 3.0) return;
+        subjectHoverTrackingCurrentCenterX_ = component.CenterX();
+        subjectHoverTrackingCurrentCenterY_ = component.CenterY();
+        // Position follows the received frame immediately. Scale is smoothed
+        // slightly because blinking and hair physics change the alpha bounds.
+        subjectHoverTrackingScale_ +=
+            (targetScale - subjectHoverTrackingScale_) * 0.25;
+    }
+
+    static bool PointInPolygon(const std::vector<POINT>& polygon, double x, double y) {
+        if (polygon.size() < 3) return false;
+        bool inside = false;
+        for (size_t i = 0, j = polygon.size() - 1; i < polygon.size(); j = i++) {
+            const double xi = polygon[i].x;
+            const double yi = polygon[i].y;
+            const double xj = polygon[j].x;
+            const double yj = polygon[j].y;
+            const bool crosses = ((yi > y) != (yj > y)) &&
+                (x < (xj - xi) * (y - yi) / ((yj - yi) == 0.0 ? 1.0 : (yj - yi)) + xi);
+            if (crosses) inside = !inside;
+        }
+        return inside;
+    }
+
+    bool CaptureSubjectHoverMask(
+        const std::vector<std::vector<POINT>>& localPolygons) {
+        if (dibWidth_ <= 0 || dibHeight_ <= 0 || localPolygons.empty()) return false;
+        const int gridWidth =
+            (dibWidth_ + kSubjectMaskCellPx - 1) / kSubjectMaskCellPx;
+        const int gridHeight =
+            (dibHeight_ + kSubjectMaskCellPx - 1) / kSubjectMaskCellPx;
+        std::vector<std::uint8_t> bits(
+            (static_cast<size_t>(gridWidth) * gridHeight + 7) / 8, 0);
+        size_t occupiedCells = 0;
+        for (int gy = 0; gy < gridHeight; ++gy) {
+            const double y = (static_cast<double>(gy) + 0.5) * dibHeight_ / gridHeight;
+            for (int gx = 0; gx < gridWidth; ++gx) {
+                const double x = (static_cast<double>(gx) + 0.5) * dibWidth_ / gridWidth;
+                bool inside = false;
+                for (const auto& polygon : localPolygons) {
+                    if (PointInPolygon(polygon, x, y)) {
+                        inside = true;
+                        break;
+                    }
+                }
+                if (!inside) continue;
+                const size_t index = static_cast<size_t>(gy) * gridWidth + gx;
+                bits[index / 8] |= static_cast<std::uint8_t>(1u << (index % 8));
+                ++occupiedCells;
+            }
+        }
+        if (occupiedCells == 0) return false;
+        subjectHoverMaskGridWidth_ = gridWidth;
+        subjectHoverMaskGridHeight_ = gridHeight;
+        subjectHoverMaskBits_ = std::move(bits);
+        subjectHoverTrackingReferenceValid_ = false;
+        subjectHoverTrackingScale_ = 1.0;
+        Log("[hover subject] manual regions=" +
+            std::to_string(localPolygons.size()) +
+            " cells=" + std::to_string(occupiedCells));
+        return true;
+    }
+
+    void FinishSubjectSelection(bool commit) {
+        if (!subjectSelectionHwnd_) return;
+        if (commit) {
+            std::vector<std::vector<POINT>> polygons = subjectSelectionPolygons_;
+            if (subjectSelectionPolygon_.size() >= 3) {
+                polygons.push_back(subjectSelectionPolygon_);
+            }
+            if (!polygons.empty()) {
+            RECT overlayRect{};
+            GetWindowRect(hwnd_, &overlayRect);
+                const int width = (std::max)(1L, overlayRect.right - overlayRect.left);
+                const int height = (std::max)(1L, overlayRect.bottom - overlayRect.top);
+                std::vector<std::vector<POINT>> localPolygons;
+                localPolygons.reserve(polygons.size());
+                int localLeft = width;
+                int localTop = height;
+                int localRight = 0;
+                int localBottom = 0;
+                for (const auto& polygon : polygons) {
+                    if (polygon.size() < 3) continue;
+                    std::vector<POINT> localPolygon;
+                    localPolygon.reserve(polygon.size());
+                    for (const POINT point : polygon) {
+                        const POINT localPoint{
+                            point.x + subjectSelectionVirtualLeft_ - overlayRect.left,
+                            point.y + subjectSelectionVirtualTop_ - overlayRect.top };
+                        localPolygon.push_back(localPoint);
+                        localLeft = (std::min)(localLeft, static_cast<int>(localPoint.x));
+                        localTop = (std::min)(localTop, static_cast<int>(localPoint.y));
+                        localRight = (std::max)(localRight, static_cast<int>(localPoint.x));
+                        localBottom = (std::max)(localBottom, static_cast<int>(localPoint.y));
+                    }
+                    localPolygons.push_back(std::move(localPolygon));
+                }
+                localLeft = (std::clamp)(localLeft, 0, width);
+                localTop = (std::clamp)(localTop, 0, height);
+                localRight = (std::clamp)(localRight, 0, width);
+                localBottom = (std::clamp)(localBottom, 0, height);
+                const int newRegionLeft = (std::clamp)(
+                    localLeft * 10000 / width, 0, 10000);
+                const int newRegionTop = (std::clamp)(
+                    localTop * 10000 / height, 0, 10000);
+                const int newRegionRight = (std::clamp)(
+                    localRight * 10000 / width, 0, 10000);
+                const int newRegionBottom = (std::clamp)(
+                    localBottom * 10000 / height, 0, 10000);
+                const bool maskCaptured = localLeft < localRight && localTop < localBottom &&
+                    CaptureSubjectHoverMask(localPolygons);
+                if (maskCaptured && newRegionLeft < newRegionRight &&
+                    newRegionTop < newRegionBottom) {
+                    subjectHoverRegionLeft_ = newRegionLeft;
+                    subjectHoverRegionTop_ = newRegionTop;
+                    subjectHoverRegionRight_ = newRegionRight;
+                    subjectHoverRegionBottom_ = newRegionBottom;
+                    subjectHoverRegionConfigured_ = true;
+                    SaveUiSettings();
+                    Log("[hover subject] manual multi-region mask saved");
+                }
+            }
+        }
+        if (subjectSelectionToolbarHwnd_ && IsWindow(subjectSelectionToolbarHwnd_)) {
+            const HWND toolbar = subjectSelectionToolbarHwnd_;
+            subjectSelectionToolbarHwnd_ = nullptr;
+            DestroyWindow(toolbar);
+        }
+        if (subjectSelectionHwnd_ && IsWindow(subjectSelectionHwnd_)) {
+            DestroyWindow(subjectSelectionHwnd_);
+        }
+    }
+
+    void ShowSubjectSelectionOverlay() {
+        if (subjectSelectionHwnd_ && IsWindow(subjectSelectionHwnd_)) {
+            SetForegroundWindow(subjectSelectionHwnd_);
+            return;
+        }
+        // Remove temporary preview layers while the user manually defines the
+        // hover regions. The received model frame remains frozen underneath.
+        showSubjectRegionPreview_ = false;
+        showHoverExpandPreview_ = false;
+        hoverExpandPreviewAlpha_ = 0.0;
+        subjectHoverTrackingReferenceValid_ = false;
+        subjectHoverTrackingLastUpdate_ = Clock::time_point{};
+        RenderFrame();
+        subjectSelectionVirtualLeft_ = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        subjectSelectionVirtualTop_ = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        const int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        const int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        subjectSelectionPolygons_.clear();
+        subjectSelectionPolygon_.clear();
+        subjectSelectionUndo_.clear();
+        subjectSelectionRedo_.clear();
+        subjectSelectionCursor_ = POINT{};
+        subjectSelectionDragging_ = false;
+        subjectSelectionHwnd_ = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
+            kSubjectSelectionClass, L"VTSFloat_Meow - 手动框选悬停范围", WS_POPUP,
+            subjectSelectionVirtualLeft_, subjectSelectionVirtualTop_, width, height,
+            nullptr, nullptr, instance_, this);
+        if (!subjectSelectionHwnd_) {
+            Log("[hover subject] selection window failed error=" +
+                std::to_string(GetLastError()));
+            return;
+        }
+        SetLayeredWindowAttributes(subjectSelectionHwnd_, 0, 128, LWA_ALPHA);
+        SetWindowPos(subjectSelectionHwnd_, HWND_TOPMOST,
+            subjectSelectionVirtualLeft_, subjectSelectionVirtualTop_, width, height,
+            SWP_SHOWWINDOW);
+        const SubjectSelectionToolbarLayout toolbar = SubjectSelectionToolbar();
+        const int toolbarWidth = toolbar.panel.right - toolbar.panel.left;
+        const int toolbarHeight = toolbar.panel.bottom - toolbar.panel.top;
+        const int toolbarX = subjectSelectionVirtualLeft_ +
+            (std::max)(16, width - toolbarWidth - 24);
+        const int toolbarY = subjectSelectionVirtualTop_ + 20;
+        subjectSelectionToolbarHwnd_ = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            kSubjectSelectionToolbarClass, L"VTSFloat_Meow - 框选控制", WS_POPUP,
+            toolbarX, toolbarY, toolbarWidth, toolbarHeight,
+            subjectSelectionHwnd_, nullptr, instance_, this);
+        if (subjectSelectionToolbarHwnd_) {
+            SetWindowPos(subjectSelectionToolbarHwnd_, HWND_TOPMOST,
+                toolbarX, toolbarY, toolbarWidth, toolbarHeight,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        } else {
+            Log("[hover subject] selection toolbar failed error=" +
+                std::to_string(GetLastError()));
+        }
+        SetForegroundWindow(subjectSelectionHwnd_);
+        SetFocus(subjectSelectionHwnd_);
+    }
+
+    static LRESULT CALLBACK SubjectSelectionWindowProc(
+        HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+        auto* overlay = reinterpret_cast<LayeredOverlay*>(
+            GetWindowLongPtrW(window, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            overlay = static_cast<LayeredOverlay*>(create->lpCreateParams);
+            SetWindowLongPtrW(window, GWLP_USERDATA,
+                reinterpret_cast<LONG_PTR>(overlay));
+        }
+        if (!overlay) return DefWindowProcW(window, message, wParam, lParam);
+        switch (message) {
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT:
+            overlay->DrawSubjectSelectionOverlay(window);
+            return 0;
+        case WM_SETCURSOR:
+            SetCursor(LoadCursorW(nullptr, IDC_CROSS));
+            return TRUE;
+        case WM_LBUTTONDOWN: {
+            const POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (overlay->subjectSelectionPolygon_.size() >= 3) {
+                const POINT first = overlay->subjectSelectionPolygon_.front();
+                const int dx = point.x - first.x;
+                const int dy = point.y - first.y;
+                if (dx * dx + dy * dy <= 22 * 22) {
+                    overlay->subjectSelectionCursor_ = first;
+                    overlay->CompleteCurrentSubjectPolygon();
+                    return 0;
+                }
+            }
+            overlay->RecordSubjectSelectionEdit();
+            overlay->subjectSelectionPolygon_.push_back(point);
+            overlay->subjectSelectionCursor_ = point;
+            overlay->subjectSelectionDragging_ = true;
+            SetCapture(window);
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        }
+        case WM_LBUTTONDBLCLK: {
+            if (overlay->subjectSelectionPolygon_.size() >= 3) {
+                overlay->CompleteCurrentSubjectPolygon();
+            }
+            return 0;
+        }
+        case WM_MOUSEMOVE:
+            overlay->subjectSelectionCursor_ = POINT{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (!overlay->subjectSelectionPolygon_.empty()) {
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            return 0;
+        case WM_LBUTTONUP:
+            // A lasso point is committed on button-down; button-up only stops
+            // capture so the cursor can continue previewing the next edge.
+            overlay->subjectSelectionDragging_ = false;
+            if (GetCapture() == window) ReleaseCapture();
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        case WM_RBUTTONDOWN:
+            overlay->UndoSubjectSelectionEdit();
+            return 0;
+        case WM_KEYDOWN:
+            if ((GetKeyState(VK_CONTROL) & 0x8000) != 0 && wParam == 'Z') {
+                if ((GetKeyState(VK_SHIFT) & 0x8000) != 0) {
+                    overlay->RedoSubjectSelectionEdit();
+                } else {
+                    overlay->UndoSubjectSelectionEdit();
+                }
+                return 0;
+            }
+            if ((GetKeyState(VK_CONTROL) & 0x8000) != 0 && wParam == 'Y') {
+                overlay->RedoSubjectSelectionEdit();
+                return 0;
+            }
+            if (wParam == VK_RETURN) {
+                overlay->FinishSubjectSelection(true);
+                return 0;
+            }
+            if (wParam == VK_ESCAPE) {
+                overlay->FinishSubjectSelection(false);
+                return 0;
+            }
+            break;
+        case WM_CLOSE:
+            overlay->FinishSubjectSelection(false);
+            return 0;
+        case WM_DESTROY:
+            if (GetCapture() == window) ReleaseCapture();
+            if (overlay->subjectSelectionToolbarHwnd_ &&
+                IsWindow(overlay->subjectSelectionToolbarHwnd_)) {
+                const HWND toolbar = overlay->subjectSelectionToolbarHwnd_;
+                overlay->subjectSelectionToolbarHwnd_ = nullptr;
+                DestroyWindow(toolbar);
+            }
+            overlay->subjectSelectionHwnd_ = nullptr;
+            overlay->subjectSelectionPolygons_.clear();
+            overlay->subjectSelectionPolygon_.clear();
+            overlay->subjectSelectionUndo_.clear();
+            overlay->subjectSelectionRedo_.clear();
+            overlay->subjectSelectionDragging_ = false;
+            overlay->RenderFrame();
+            if (overlay->borderPanelHwnd_) {
+                RefreshPersonalPanel(overlay->borderPanelHwnd_);
+            }
+            return 0;
+        default:
+            break;
+        }
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+
+    static LRESULT CALLBACK SubjectSelectionToolbarWindowProc(
+        HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+        auto* overlay = reinterpret_cast<LayeredOverlay*>(
+            GetWindowLongPtrW(window, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            overlay = static_cast<LayeredOverlay*>(create->lpCreateParams);
+            SetWindowLongPtrW(window, GWLP_USERDATA,
+                reinterpret_cast<LONG_PTR>(overlay));
+        }
+        if (!overlay) return DefWindowProcW(window, message, wParam, lParam);
+        switch (message) {
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT:
+            overlay->DrawSubjectSelectionToolbar(window);
+            return 0;
+        case WM_SETCURSOR: {
+            POINT point{};
+            GetCursorPos(&point);
+            ScreenToClient(window, &point);
+            const auto toolbar = SubjectSelectionToolbar();
+            const bool action = PtInRect(&toolbar.undo, point) ||
+                PtInRect(&toolbar.redo, point) || PtInRect(&toolbar.finish, point);
+            SetCursor(LoadCursorW(nullptr, action ? IDC_HAND : IDC_ARROW));
+            return TRUE;
+        }
+        case WM_LBUTTONDOWN: {
+            SetFocus(window);
+            const POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            const auto toolbar = SubjectSelectionToolbar();
+            if (PtInRect(&toolbar.undo, point)) {
+                overlay->UndoSubjectSelectionEdit();
+            } else if (PtInRect(&toolbar.redo, point)) {
+                overlay->RedoSubjectSelectionEdit();
+            } else if (PtInRect(&toolbar.finish, point)) {
+                overlay->FinishSubjectSelection(true);
+            }
+            return 0;
+        }
+        case WM_KEYDOWN:
+            if ((GetKeyState(VK_CONTROL) & 0x8000) != 0 && wParam == 'Z') {
+                if ((GetKeyState(VK_SHIFT) & 0x8000) != 0) {
+                    overlay->RedoSubjectSelectionEdit();
+                } else {
+                    overlay->UndoSubjectSelectionEdit();
+                }
+                return 0;
+            }
+            if ((GetKeyState(VK_CONTROL) & 0x8000) != 0 && wParam == 'Y') {
+                overlay->RedoSubjectSelectionEdit();
+                return 0;
+            }
+            if (wParam == VK_RETURN) {
+                overlay->FinishSubjectSelection(true);
+                return 0;
+            }
+            if (wParam == VK_ESCAPE) {
+                overlay->FinishSubjectSelection(false);
+                return 0;
+            }
+            break;
+        case WM_CLOSE:
+            overlay->FinishSubjectSelection(false);
+            return 0;
+        case WM_DESTROY:
+            if (overlay->subjectSelectionToolbarHwnd_ == window) {
+                overlay->subjectSelectionToolbarHwnd_ = nullptr;
+            }
+            return 0;
+        default:
+            break;
+        }
+        return DefWindowProcW(window, message, wParam, lParam);
     }
 
     void PositionBorderPanel() {
         if (!borderPanelHwnd_ || !IsWindow(borderPanelHwnd_) || !hwnd_) return;
+        // Once the user drags the personalization panel during this session,
+        // keep its explicit position. Reopening the panel resets this flag and
+        // places it beside the model again.
+        if (personalPanelManuallyPositioned_) return;
         RECT model{};
         GetWindowRect(hwnd_, &model);
         const int panelW = 420;
@@ -5573,6 +7327,17 @@ private:
             requested = static_cast<int>(
                 gpuAdapters_[command - kAdapterCommandBase].index);
         }
+        const int currentGpu = senderGpuIndex_ >= 0 ? senderGpuIndex_ : activeGpuIndex_;
+        if (requested >= 0 &&
+            (gpuAdapters_.size() <= 1 || requested == currentGpu ||
+             requested == activeGpuIndex_)) {
+            MessageBoxW(
+                toolbarHwnd_,
+                L"当前已经在使用这个 GPU，无需重启。",
+                L"VTSFloat_Meow",
+                MB_OK | MB_ICONINFORMATION);
+            return;
+        }
         if (requested >= 0 && requested != senderGpuIndex_) {
             RestartVtsOnGpu(requested);
             return;
@@ -5792,6 +7557,105 @@ private:
                << " fallback=" << (gpuSelectionFallback_ ? 1 : 0)
                << " mode=UpdateLayeredWindow no_dwm_flush";
         Log(gpuLog.str());
+    }
+
+    // The overlay can be started before VTube Studio.  In that case there is
+    // no Spout sender yet, so CreateGraphics() initially chooses the saved or
+    // minimum-power adapter.  If VTube Studio is subsequently launched on a
+    // different adapter, the DX11 share handle cannot be opened by that
+    // already-created device.  Recreate the receiver/device once the sender
+    // becomes visible so a script restart is not required.
+    bool TryRebindGraphicsToSpoutSender() {
+        if (GetCurrentThreadId() != uiThreadId_ || spoutRebindInProgress_) {
+            return false;
+        }
+        const auto now = Clock::now();
+        if (now - lastSpoutRebindCheck_ < std::chrono::milliseconds(500)) {
+            return false;
+        }
+        lastSpoutRebindCheck_ = now;
+
+        char senderName[256]{};
+        if (!receiver_.GetActiveSender(senderName) || senderName[0] == '\0') {
+            return false;
+        }
+        const int senderAdapterIndex = receiver_.GetSenderAdapter(senderName);
+        if (senderAdapterIndex < 0) {
+            return false;
+        }
+
+        ComPtr<IDXGIFactory6> factory;
+        ComPtr<IDXGIAdapter1> senderAdapter;
+        if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory))) ||
+            FAILED(factory->EnumAdapters1(
+                static_cast<UINT>(senderAdapterIndex), &senderAdapter))) {
+            return false;
+        }
+        DXGI_ADAPTER_DESC1 senderDescription{};
+        senderAdapter->GetDesc1(&senderDescription);
+
+        DXGI_ADAPTER_DESC1 activeDescription{};
+        bool sameAdapter = false;
+        if (activeAdapter3_ && SUCCEEDED(activeAdapter3_->GetDesc1(&activeDescription))) {
+            sameAdapter = activeDescription.AdapterLuid.HighPart ==
+                    senderDescription.AdapterLuid.HighPart &&
+                activeDescription.AdapterLuid.LowPart ==
+                    senderDescription.AdapterLuid.LowPart;
+        }
+        if (sameAdapter) {
+            return false;
+        }
+
+        Log("[spout] sender appeared on a different GPU; rebinding receiver to " +
+            WideToUtf8(senderDescription.Description));
+        spoutRebindInProgress_ = true;
+        receiver_.ReleaseReceiver();
+        receiver_.CloseDirectX11();
+
+        // Release all resources that retain the old adapter/device before
+        // CreateGraphics() selects the sender's adapter.
+        staging_.Reset();
+        scaleInputView_.Reset();
+        scaleInput_.Reset();
+        scaleOutputView_.Reset();
+        scaleOutput_.Reset();
+        scaleOutputReadback_.Reset();
+        scaleVertexShader_.Reset();
+        scalePixelShader_.Reset();
+        scaleSampler_.Reset();
+        scalePointSampler_.Reset();
+        scaleSettingsBuffer_.Reset();
+        scaleRasterizer_.Reset();
+        scaleMapX_.clear();
+        scaleMapY_.clear();
+        scaleMapWidth_ = scaleMapHeight_ = 0;
+        scaleMapSourceWidth_ = scaleMapSourceHeight_ = 0;
+        scaleSourceWidth_ = scaleSourceHeight_ = 0;
+        scaleSourceFormat_ = DXGI_FORMAT_UNKNOWN;
+        scaleOutputWidth_ = scaleOutputHeight_ = 0;
+        gpuScalerUnavailable_ = false;
+        sourceWidth_ = sourceHeight_ = 0;
+        sourceFormat_ = DXGI_FORMAT_UNKNOWN;
+        initialAspectApplied_ = false;
+        spoutFrameSyncDisabled_ = false;
+        if (gpuUsageQuery_) {
+            PdhCloseQuery(gpuUsageQuery_);
+            gpuUsageQuery_ = nullptr;
+            gpuUsageCounter_ = nullptr;
+        }
+        activeAdapter3_.Reset();
+        context_.Reset();
+        device_.Reset();
+
+        bool rebound = false;
+        try {
+            CreateGraphics();
+            rebound = true;
+        } catch (const std::exception& error) {
+            Log(std::string("[spout] automatic GPU rebind failed: ") + error.what());
+        }
+        spoutRebindInProgress_ = false;
+        return rebound;
     }
 
     void RecreateStaging(ID3D11Texture2D* source) {
@@ -6189,7 +8053,55 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         return true;
     }
 
-    bool IsCursorOverModel() const {
+    RECT SubjectHoverRegionPixels(int width, int height) const {
+        if (!excludeEffectsFromHover_ || !subjectHoverRegionConfigured_ ||
+            width <= 0 || height <= 0) {
+            return RECT{ 0, 0, width, height };
+        }
+        return RECT{
+            subjectHoverRegionLeft_ * width / 10000,
+            subjectHoverRegionTop_ * height / 10000,
+            subjectHoverRegionRight_ * width / 10000,
+            subjectHoverRegionBottom_ * height / 10000,
+        };
+    }
+
+    bool IsInsideSubjectHoverRegion(int x, int y, int width, int height) const {
+        const RECT region = SubjectHoverRegionPixels(width, height);
+        return x >= region.left && x < region.right &&
+            y >= region.top && y < region.bottom;
+    }
+
+    bool IsLockedSubjectMaskPixel(int x, int y, int width, int height) const {
+        if (!excludeEffectsFromHover_ || !subjectHoverRegionConfigured_) {
+            return false;
+        }
+        if (x < 0 || y < 0 || x >= width || y >= height ||
+            subjectHoverMaskGridWidth_ <= 0 || subjectHoverMaskGridHeight_ <= 0 ||
+            subjectHoverMaskBits_.empty()) {
+            return false;
+        }
+        const double maskGridX =
+            (static_cast<double>(x) + 0.5) * subjectHoverMaskGridWidth_ /
+            (std::max)(1, width);
+        const double maskGridY =
+            (static_cast<double>(y) + 0.5) * subjectHoverMaskGridHeight_ /
+            (std::max)(1, height);
+        const int gridX = static_cast<int>(std::floor(maskGridX));
+        const int gridY = static_cast<int>(std::floor(maskGridY));
+        if (gridX < 0 || gridY < 0 ||
+            gridX >= subjectHoverMaskGridWidth_ ||
+            gridY >= subjectHoverMaskGridHeight_) {
+            return false;
+        }
+        const size_t index = static_cast<size_t>(gridY) *
+            subjectHoverMaskGridWidth_ + gridX;
+        return index / 8 < subjectHoverMaskBits_.size() &&
+            (subjectHoverMaskBits_[index / 8] &
+                static_cast<std::uint8_t>(1u << (index % 8))) != 0;
+    }
+
+    bool IsCursorOverModel() {
         if (!dibBits_ || dibWidth_ <= 0 || dibHeight_ <= 0 || !hwnd_) {
             return false;
         }
@@ -6214,6 +8126,12 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             if (PreviewBorderPixel(xx, yy)) return 0;
             // Performance/debug pixels do not count as model either.
             if (DebugOverlayPixel(xx, yy)) return 0;
+            if (excludeEffectsFromHover_ && subjectHoverRegionConfigured_) {
+                // Use the tracked subject shape. The reference mask is moved
+                // and scaled from the live dominant connected component, so
+                // it follows VTS model movement without accepting isolated FX.
+                return IsLockedSubjectMaskPixel(xx, yy, w, h) ? 255 : 0;
+            }
             return pixels[(static_cast<size_t>(yy) * w + xx) * 4 + 3];
         };
         if (expand == 0) {
@@ -6386,8 +8304,17 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             return;
         }
         vtsApi_.SetExpressionActive(
-            hoverExpressionFile_, hoverExpressionOriginalActive_, 0.35);
+            hoverExpressionFile_, hoverExpressionOriginalActive_,
+            kHoverExpressionFadeOutSeconds);
         hoverExpressionRestored_ = true;
+        if (borderDialogOpen_) {
+            // Ignore the API cache while our restore command is in flight;
+            // otherwise the low-frequency baseline scan could mistake the
+            // hover transition for a user edit.
+            expressionPanelIgnoreUntil_ = Clock::now() +
+                std::chrono::milliseconds(1200);
+            expressionPanelNextPollAt_ = expressionPanelIgnoreUntil_;
+        }
     }
 
     void CancelHoverExpression() {
@@ -6395,16 +8322,42 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         hoverExpressionHovered_ = false;
         hoverExpressionRestored_ = false;
         hoverExpressionOriginalActive_ = false;
+        hoverExpressionLeaving_ = false;
         hoverExpressionRestoreAt_ = Clock::time_point{};
     }
 
     void UpdateHoverExpression() {
-        const bool shouldHover = locked_ && !borderDialogOpen_ &&
+        // Hover preview is also available while personalization is open. The
+        // explicit 2.5-second selection preview has priority; once it restores
+        // the saved baseline, the configured region behaves like locked mode.
+        const bool hoverInteractionAvailable = locked_ || borderDialogOpen_;
+        const bool shouldHover = hoverInteractionAvailable &&
+            !expressionPanelPreviewActive_ &&
             hoverExpressionEnabled_ && !hoverExpressionFile_.empty() &&
             hasReceivedModel_ && vtsApi_.IsConnected() && IsCursorOverModel();
-        if (shouldHover && !hoverExpressionHovered_) {
+        const auto now = Clock::now();
+        if (shouldHover && (!hoverExpressionHovered_ || hoverExpressionRestored_)) {
             bool originalActive = false;
-            if (!vtsApi_.GetExpressionActive(hoverExpressionFile_, originalActive)) {
+            bool originalStateKnown = false;
+            if (borderDialogOpen_) {
+                if (!CapturePanelExpressionState()) {
+                    return;
+                }
+                const auto saved = std::find_if(
+                    expressionPanelInitialStates_.begin(),
+                    expressionPanelInitialStates_.end(),
+                    [this](const VtsExpressionState& state) {
+                        return state.file == hoverExpressionFile_;
+                    });
+                if (saved != expressionPanelInitialStates_.end()) {
+                    originalActive = saved->active;
+                    originalStateKnown = true;
+                }
+            } else {
+                originalStateKnown = vtsApi_.GetExpressionActive(
+                    hoverExpressionFile_, originalActive);
+            }
+            if (!originalStateKnown) {
                 // The API worker refreshes the expression list asynchronously.
                 // Do not activate until the pre-hover state is known, otherwise
                 // leaving the model could accidentally disable a user expression.
@@ -6414,27 +8367,149 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             hoverExpressionOriginalActive_ = originalActive;
             hoverExpressionHovered_ = true;
             hoverExpressionRestored_ = false;
-            hoverExpressionRestoreAt_ = Clock::now() + std::chrono::seconds(4);
-            vtsApi_.SetExpressionActive(hoverExpressionFile_, true, 0.3);
+            hoverExpressionLeaving_ = false;
+            hoverExpressionRestoreAt_ = Clock::time_point{};
+            vtsApi_.SetExpressionActive(
+                hoverExpressionFile_, true, kHoverExpressionFadeInSeconds);
+        } else if (shouldHover && hoverExpressionHovered_) {
+            // Re-entering before the leave delay expires cancels the pending
+            // restore, so the expression remains active without a new toggle.
+            hoverExpressionLeaving_ = false;
+            hoverExpressionRestoreAt_ = Clock::time_point{};
         } else if (!shouldHover && hoverExpressionHovered_) {
-            CancelHoverExpression();
-        } else if (hoverExpressionHovered_ && !hoverExpressionRestored_ &&
-            Clock::now() >= hoverExpressionRestoreAt_) {
-            // Keep the hover edge latched until the pointer leaves, so a
-            // stationary pointer does not retrigger the expression every 4s.
-            RestoreHoverExpression();
+            if (!hoverExpressionLeaving_) {
+                // The configured delay starts only after the pointer leaves
+                // the model hit region. It does not shorten the expression's
+                // visible time while the pointer remains over the model.
+                hoverExpressionLeaving_ = true;
+                hoverExpressionRestoreAt_ = now +
+                    std::chrono::duration_cast<Clock::duration>(
+                        std::chrono::duration<double>(
+                            hoverExpressionDurationSeconds_));
+            } else if (!hoverExpressionRestored_ &&
+                       now >= hoverExpressionRestoreAt_) {
+                // Restore the exact state captured on entry with the smooth
+                // one-second fade-out. Keep the session latched until re-entry
+                // so a delayed API response cannot trigger a second toggle.
+                RestoreHoverExpression();
+            }
         }
     }
 
-    void RestorePanelExpressionPreview() {
-        if (!expressionPanelPreviewActive_ || expressionPanelPreviewFile_.empty()) {
+    static std::vector<VtsExpressionState> MakeExpressionStateSnapshot(
+        const std::vector<VtsApiClient::ExpressionInfo>& expressions) {
+        std::vector<VtsExpressionState> snapshot;
+        snapshot.reserve(expressions.size());
+        for (const auto& expression : expressions) {
+            if (!expression.file.empty()) {
+                snapshot.push_back(VtsExpressionState{
+                    expression.file, expression.active });
+            }
+        }
+        return snapshot;
+    }
+
+    static bool ExpressionStateSnapshotsEqual(
+        const std::vector<VtsExpressionState>& left,
+        const std::vector<VtsExpressionState>& right) {
+        if (left.size() != right.size()) return false;
+        for (const auto& state : left) {
+            const auto match = std::find_if(
+                right.begin(), right.end(),
+                [&state](const VtsExpressionState& other) {
+                    return other.file == state.file;
+                });
+            if (match == right.end() || match->active != state.active) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // VTS does not emit a general expression-state-changed event. While the
+    // personalization panel is open, refresh at a low rate and treat changes
+    // that are not caused by our preview/hover commands as the new restore
+    // baseline (state 2 replaces state 1).
+    void UpdatePanelExpressionState() {
+        if (!borderDialogOpen_ || !vtsApi_.IsConnected()) return;
+        const auto now = Clock::now();
+        if (now < expressionPanelNextPollAt_) return;
+        expressionPanelNextPollAt_ = now +
+            std::chrono::milliseconds(kExpressionStatePollIntervalMs);
+        vtsApi_.RequestExpressionState();
+
+        if (!expressionPanelStateCaptured_ || expressionPanelPreviewActive_ ||
+            (hoverExpressionHovered_ && !hoverExpressionRestored_) ||
+            now < expressionPanelIgnoreUntil_) {
             return;
         }
-        vtsApi_.SetExpressionActive(
-            expressionPanelPreviewFile_, expressionPanelPreviewOriginalActive_, 0.35);
+        const auto expressions = vtsApi_.GetExpressions();
+        const auto current = MakeExpressionStateSnapshot(expressions);
+        if (current.empty() || ExpressionStateSnapshotsEqual(
+                current, expressionPanelInitialStates_)) {
+            return;
+        }
+        // This is the user's externally changed configuration. Keep the
+        // latest complete set so subsequent previews restore state 2 exactly.
+        expressionPanelInitialStates_ = current;
+    }
+
+    // The personalization panel must never leave an expression "worn" after
+    // a preview. VTS permits several expressions to be active at once, so a
+    // one-file bool is insufficient: snapshot the full state that existed
+    // when the panel opened, preview one expression, then restore every file.
+    void BeginPanelExpressionSession() {
+        RestorePanelExpressionPreview();
+        expressionPanelInitialStates_.clear();
+        expressionPanelStateCaptured_ = false;
         expressionPanelPreviewActive_ = false;
-        expressionPanelPreviewOriginalActive_ = false;
-        expressionPanelPreviewFile_.clear();
+        expressionPanelNextPollAt_ = Clock::now();
+        expressionPanelIgnoreUntil_ = Clock::time_point{};
+    }
+
+    bool CapturePanelExpressionState() {
+        if (expressionPanelStateCaptured_) {
+            return true;
+        }
+        const auto expressions = vtsApi_.GetExpressions();
+        if (expressions.empty()) {
+            // State refresh is asynchronous. Keep the panel usable, but do
+            // not apply a preview until there is a reliable restore point.
+            vtsApi_.RequestExpressionState();
+            return false;
+        }
+        expressionPanelInitialStates_ = MakeExpressionStateSnapshot(expressions);
+        expressionPanelStateCaptured_ = !expressionPanelInitialStates_.empty();
+        if (!expressionPanelStateCaptured_) {
+            vtsApi_.RequestExpressionState();
+        } else {
+            expressionPanelNextPollAt_ = Clock::now() +
+                std::chrono::milliseconds(kExpressionStatePollIntervalMs);
+        }
+        return expressionPanelStateCaptured_;
+    }
+
+    void RestorePanelExpressionPreview() {
+        if (!expressionPanelPreviewActive_ || !expressionPanelStateCaptured_) {
+            return;
+        }
+        for (const auto& state : expressionPanelInitialStates_) {
+            vtsApi_.SetExpressionActive(
+                state.file, state.active, kHoverExpressionFadeOutSeconds);
+        }
+        expressionPanelPreviewActive_ = false;
+        expressionPanelIgnoreUntil_ = Clock::now() +
+            std::chrono::milliseconds(1200);
+        expressionPanelNextPollAt_ = expressionPanelIgnoreUntil_;
+    }
+
+    void EndPanelExpressionSession() {
+        RestorePanelExpressionPreview();
+        expressionPanelPreviewActive_ = false;
+        expressionPanelStateCaptured_ = false;
+        expressionPanelInitialStates_.clear();
+        expressionPanelNextPollAt_ = Clock::time_point{};
+        expressionPanelIgnoreUntil_ = Clock::time_point{};
     }
 
     bool PreviewExpressionFromPanel() {
@@ -6442,21 +8517,47 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             vtsApi_.RequestExpressionState();
             return false;
         }
-        RestorePanelExpressionPreview();
-        bool originalActive = false;
-        if (!vtsApi_.GetExpressionActive(hoverExpressionFile_, originalActive)) {
+        if (expressionPanelPreviewActive_) {
+            RestorePanelExpressionPreview();
+        }
+        if (!CapturePanelExpressionState()) {
+            return false;
+        }
+        const auto selected = std::find_if(
+            expressionPanelInitialStates_.begin(), expressionPanelInitialStates_.end(),
+            [this](const VtsExpressionState& state) {
+                return state.file == hoverExpressionFile_;
+            });
+        if (selected == expressionPanelInitialStates_.end()) {
+            // VTS changed model or expression list while the panel was open.
+            // Refresh first instead of guessing which state should be restored.
+            expressionPanelStateCaptured_ = false;
+            expressionPanelInitialStates_.clear();
             vtsApi_.RequestExpressionState();
             return false;
         }
-        expressionPanelPreviewFile_ = hoverExpressionFile_;
-        expressionPanelPreviewOriginalActive_ = originalActive;
+
+        // An already active expression is already present in the saved
+        // configuration, so selecting it does not need a temporary preview.
+        if (selected->active) {
+            return false;
+        }
+
+        // Isolate the selected expression for the preview. The latest user
+        // baseline (state 1 or state 2) is preserved above and restored as a
+        // group afterwards.
         expressionPanelPreviewActive_ = true;
-        vtsApi_.SetExpressionActive(expressionPanelPreviewFile_, true, 0.3);
+        for (const auto& state : expressionPanelInitialStates_) {
+            vtsApi_.SetExpressionActive(
+                state.file, state.file == hoverExpressionFile_,
+                kHoverExpressionFadeInSeconds);
+        }
         return true;
     }
 
     void DrawBgWarningOverlay(int width, int height) {
-        if (locked_ || !opaqueBackgroundDetected_ || bgWarningPermanentlyDismissed_) {
+        if (locked_ || statusMode_ != VtsStatusMode::Hidden ||
+            !opaqueBackgroundDetected_ || bgWarningPermanentlyDismissed_) {
             bgWarningCloseRect_ = RECT{};
             bgWarningDontShowRect_ = RECT{};
             return;
@@ -6478,7 +8579,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         DeleteObject(border);
 
         HFONT font = CreateFontW(
-            -14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            -UiFontSize(nullptr, 14), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
         HGDIOBJ oldFont = SelectObject(dc, font);
@@ -6573,6 +8674,9 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             if (x < 0 || y < 0 || x >= width || y >= height) return 0;
             if (isBorderRegion(x, y)) return 0;
             if (DebugOverlayPixel(x, y)) return 0;
+            if (excludeEffectsFromHover_ && subjectHoverRegionConfigured_) {
+                return IsLockedSubjectMaskPixel(x, y, width, height) ? 255 : 0;
+            }
             return modelPixels[(static_cast<size_t>(y) * width + x) * 4 + 3];
         };
         auto isModel = [&](int x, int y) { return alphaAt(x, y) > 128; };
@@ -6632,26 +8736,9 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                     dist[static_cast<size_t>(y + 1) * width + x - 1] + 1);
             }
         }
-        // For negative expand: first dim all model pixels to 40% alpha so
-        // the inner blue band is visible without dimming the highlight itself.
-        if (!outside) {
-            for (int y = 0; y < height; ++y) {
-                for (int x = 0; x < width; ++x) {
-                    if (isBorderRegion(x, y) || DebugOverlayPixel(x, y)) continue;
-                    auto* p = pixels + (static_cast<size_t>(y) * width + x) * 4;
-                    if (p[3] > 8) {
-                        // Reduce alpha to 40% but keep premultiplied colors proportional
-                        const int newA = static_cast<int>(p[3]) * 40 / 100;
-                        if (p[3] > 0) {
-                            p[0] = static_cast<std::uint8_t>(p[0] * newA / p[3]);
-                            p[1] = static_cast<std::uint8_t>(p[1] * newA / p[3]);
-                            p[2] = static_cast<std::uint8_t>(p[2] * newA / p[3]);
-                            p[3] = static_cast<std::uint8_t>(newA);
-                        }
-                    }
-                }
-            }
-        }
+        // Never dim the whole model to make the inset preview stand out.
+        // Model opacity must always come from the user's normal/hover opacity
+        // settings; this layer only paints the red/blue boundary indicator.
         // Fill pixels where dist <= absR (band from edge outward/inward)
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
@@ -6663,8 +8750,75 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         }
     }
 
+    void DrawSubjectRegionPreview(int width, int height) {
+        if (!showSubjectRegionPreview_ || !subjectHoverRegionConfigured_ ||
+            !dibBits_ || width <= 0 || height <= 0) {
+            return;
+        }
+        constexpr int thickness = 8;
+        auto* pixels = static_cast<std::uint8_t*>(dibBits_);
+        auto isSelectedModel = [&](int x, int y) {
+            if (x < 0 || y < 0 || x >= width || y >= height) return false;
+            if (PreviewBorderPixel(x, y) || DebugOverlayPixel(x, y)) return false;
+            return IsLockedSubjectMaskPixel(x, y, width, height);
+        };
+
+        std::vector<int> distance(static_cast<size_t>(width) * height, 0);
+        constexpr int farAway = thickness + 2;
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                distance[static_cast<size_t>(y) * width + x] =
+                    isSelectedModel(x, y) ? 0 : farAway;
+            }
+        }
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                int& value = distance[static_cast<size_t>(y) * width + x];
+                if (value == 0) continue;
+                if (x > 0) value = (std::min)(value,
+                    distance[static_cast<size_t>(y) * width + x - 1] + 1);
+                if (y > 0) value = (std::min)(value,
+                    distance[static_cast<size_t>(y - 1) * width + x] + 1);
+                if (x > 0 && y > 0) value = (std::min)(value,
+                    distance[static_cast<size_t>(y - 1) * width + x - 1] + 1);
+                if (x + 1 < width && y > 0) value = (std::min)(value,
+                    distance[static_cast<size_t>(y - 1) * width + x + 1] + 1);
+            }
+        }
+        for (int y = height - 1; y >= 0; --y) {
+            for (int x = width - 1; x >= 0; --x) {
+                int& value = distance[static_cast<size_t>(y) * width + x];
+                if (value == 0) continue;
+                if (x + 1 < width) value = (std::min)(value,
+                    distance[static_cast<size_t>(y) * width + x + 1] + 1);
+                if (y + 1 < height) value = (std::min)(value,
+                    distance[static_cast<size_t>(y + 1) * width + x] + 1);
+                if (x + 1 < width && y + 1 < height) value = (std::min)(value,
+                    distance[static_cast<size_t>(y + 1) * width + x + 1] + 1);
+                if (x > 0 && y + 1 < height) value = (std::min)(value,
+                    distance[static_cast<size_t>(y + 1) * width + x - 1] + 1);
+            }
+        }
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                const int value = distance[static_cast<size_t>(y) * width + x];
+                if (value <= 0 || value > thickness ||
+                    PreviewBorderPixel(x, y) || DebugOverlayPixel(x, y)) {
+                    continue;
+                }
+                auto* pixel = pixels +
+                    (static_cast<size_t>(y) * width + x) * 4;
+                pixel[0] = 70;
+                pixel[1] = 255;
+                pixel[2] = 70;
+                pixel[3] = 255;
+            }
+        }
+    }
+
     void DrawGpuWarningOverlay(int width, int height) {
-        if (locked_ || !gpuWarningShown_ || gpuWarningPermanentlyDismissed_) {
+        if (locked_ || statusMode_ != VtsStatusMode::Hidden ||
+            !gpuWarningShown_ || gpuWarningPermanentlyDismissed_) {
             gpuWarningDontShowRect_ = RECT{};
             return;
         }
@@ -6687,7 +8841,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         DeleteObject(border);
 
         HFONT font = CreateFontW(
-            -14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            -UiFontSize(nullptr, 14), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
         HGDIOBJ oldFont = SelectObject(dc, font);
@@ -6725,6 +8879,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         DrawBgWarningOverlay(width, height);
         DrawGpuWarningOverlay(width, height);
         DrawHoverExpandPreview(width, height);
+        DrawSubjectRegionPreview(width, height);
         const auto updateStarted = Clock::now();
         POINT destination{ rect.left, rect.top };
         SIZE size{ width, height };
@@ -6757,7 +8912,9 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     }
 
     void RenderFrame() {
-        if (!overlayVisible_) {
+        // The subject-picker intentionally freezes the last model frame while
+        // the user draws the hit region, just like a screenshot selection.
+        if (!overlayVisible_ || subjectSelectionHwnd_) {
             return;
         }
         UpdateHoverOpacity();
@@ -6777,6 +8934,10 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         };
         const auto receiveStarted = Clock::now();
         if (!receiver_.ReceiveTexture()) {
+            // VTS may have been launched after this process and can publish
+            // Spout from another GPU.  Rebind before presenting the waiting
+            // page; the next frame can then be received without restarting.
+            TryRebindGraphicsToSpoutSender();
             PollVtsStatus();
             presentVtsStatus();
             return;
@@ -7257,7 +9418,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         }
 
         HFONT font = CreateFontW(
-            -14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            -UiFontSize(nullptr, 14), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         HGDIOBJ oldFont = SelectObject(memoryDc_, font);
@@ -7372,6 +9533,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         const RECT panel{ left, top, left + panelWidth, top + panelHeight };
         statusExeRect_ = RECT{};
         statusBatchRect_ = RECT{};
+        statusAddPathRect_ = RECT{};
+        statusManualPathRect_ = RECT{};
         const auto fill = [this](const RECT& rect, BYTE r, BYTE g, BYTE b, BYTE a) {
             const BYTE blue = static_cast<BYTE>((b * a + 127) / 255);
             const BYTE green = static_cast<BYTE>((g * a + 127) / 255);
@@ -7392,28 +9555,46 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             PutPixel(panel.right - 1, y, 24, 132, 255);
         }
 
-        const bool canLaunch = statusMode_ == VtsStatusMode::LaunchChoices;
+        const bool canLaunch = statusMode_ == VtsStatusMode::LaunchChoices &&
+            !statusDirectory_.empty();
+        const bool hasExternalLauncher = canLaunch &&
+            HasVtsExternalLauncher(statusDirectory_);
+        const bool needsPath = statusDirectory_.empty();
+        const int buttonTop = panel.bottom - 94;
+        const int buttonHeight = 42;
         if (canLaunch) {
-            const int gap = 14;
             const int buttonTop = panel.bottom - 94;
-            const int buttonHeight = 42;
-            const int buttonWidth = (panelWidth - 48 - gap) / 2;
-            statusExeRect_ = RECT{
-                panel.left + 24, buttonTop,
-                panel.left + 24 + buttonWidth, buttonTop + buttonHeight };
-            statusBatchRect_ = RECT{
-                statusExeRect_.right + gap, buttonTop,
-                statusExeRect_.right + gap + buttonWidth, buttonTop + buttonHeight };
+            if (hasExternalLauncher) {
+                const int gap = 14;
+                const int buttonWidth = (panelWidth - 48 - gap) / 2;
+                statusExeRect_ = RECT{
+                    panel.left + 24, buttonTop,
+                    panel.left + 24 + buttonWidth, buttonTop + buttonHeight };
+                statusBatchRect_ = RECT{
+                    statusExeRect_.right + gap, buttonTop,
+                    statusExeRect_.right + gap + buttonWidth, buttonTop + buttonHeight };
+            } else {
+                statusExeRect_ = RECT{
+                    panel.left + 24, buttonTop,
+                    panel.right - 24, buttonTop + buttonHeight };
+            }
             fill(statusExeRect_, 33, 74, 118, 255);
-            fill(statusBatchRect_, 33, 74, 118, 255);
+            if (hasExternalLauncher) {
+                fill(statusBatchRect_, 33, 74, 118, 255);
+            }
+        } else if (needsPath) {
+            statusAddPathRect_ = RECT{
+                panel.left + 24, buttonTop,
+                panel.right - 24, buttonTop + buttonHeight };
+            fill(statusAddPathRect_, 33, 74, 118, 255);
         }
 
         HFONT titleFont = CreateFontW(
-            -22, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            -UiFontSize(nullptr, 22), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         HFONT bodyFont = CreateFontW(
-            -16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            -UiFontSize(nullptr, 16), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         HGDIOBJ oldFont = SelectObject(memoryDc_, titleFont);
@@ -7439,11 +9620,36 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         RECT pathRect{ panel.left + 24, panel.bottom - 42,
                        panel.right - 24, panel.bottom - 14 };
         const std::wstring pathText = statusDirectory_.empty()
-            ? L"尚未找到 VTube Studio 安装目录，请先安装或启动一次 VTube Studio。"
+            ? (statusPathLookupFailed_
+                ? L"所选位置未找到 VTube Studio，请重新选择路径。"
+                : L"尚未找到 VTube Studio 安装目录，请先安装或启动一次 VTube Studio。")
             : L"VTS 安装路径：" + statusDirectory_.wstring();
+        const std::wstring manualPathText = L"手动选择路径";
+        HFONT manualPathFont = CreateFontW(
+            -UiFontSize(nullptr, 16), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        SelectObject(memoryDc_, manualPathFont);
+        SIZE manualPathSize{};
+        GetTextExtentPoint32W(
+            memoryDc_, manualPathText.c_str(),
+            static_cast<int>(manualPathText.size()), &manualPathSize);
+        const int manualLeft = (std::max)(
+            pathRect.left + 160,
+            pathRect.right - static_cast<int>(manualPathSize.cx));
+        statusManualPathRect_ = RECT{
+            manualLeft, pathRect.top, pathRect.right, pathRect.bottom };
+        RECT pathTextRect = pathRect;
+        pathTextRect.right = (std::max)(
+            static_cast<int>(pathTextRect.left), manualLeft - 12);
+        SelectObject(memoryDc_, bodyFont);
         SetTextColor(memoryDc_, RGB(164, 204, 240));
-        DrawTextW(memoryDc_, pathText.c_str(), -1, &pathRect,
+        DrawTextW(memoryDc_, pathText.c_str(), -1, &pathTextRect,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        SelectObject(memoryDc_, manualPathFont);
+        SetTextColor(memoryDc_, RGB(54, 157, 255));
+        DrawTextW(memoryDc_, manualPathText.c_str(), -1, &statusManualPathRect_,
+                  DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
         if (canLaunch) {
             SetTextColor(memoryDc_, RGB(240, 246, 255));
@@ -7451,12 +9657,20 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             const std::wstring batchLabel = L"从外部启动 VTS";
             DrawTextW(memoryDc_, exeLabel.c_str(), -1, &statusExeRect_,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-            DrawTextW(memoryDc_, batchLabel.c_str(), -1, &statusBatchRect_,
-                      DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            if (hasExternalLauncher) {
+                DrawTextW(memoryDc_, batchLabel.c_str(), -1, &statusBatchRect_,
+                          DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            }
+        } else if (needsPath) {
+            SetTextColor(memoryDc_, RGB(240, 246, 255));
+            const std::wstring addPathLabel = L"添加启动路径";
+            DrawTextW(memoryDc_, addPathLabel.c_str(), -1, &statusAddPathRect_,
+                      DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
         SelectObject(memoryDc_, oldFont);
         DeleteObject(titleFont);
         DeleteObject(bodyFont);
+        DeleteObject(manualPathFont);
 
         // GDI text on a 32-bit DIB may leave alpha at zero. Make glyph pixels
         // opaque after drawing so they survive UpdateLayeredWindow blending.
@@ -7778,6 +9992,9 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
 
     bool ShowApiNotification() const {
         if (locked_) return false;
+        // During the VTS/Spout waiting page, an API disconnect is expected;
+        // that page already tells the user what needs to be started.
+        if (statusMode_ != VtsStatusMode::Hidden) return false;
         if (!hasReceivedModel_) return false;
         if (!apiStartedAfterModel_) return false;
         if (holdNotificationForScanResult_) return true;
@@ -8013,6 +10230,13 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             ToolbarButton::Close,
         };
         for (ToolbarButton button : buttons) {
+            // While the status page is waiting for VTS/Spout, the overlay
+            // must not be hidden through the toolbar. The user can still
+            // close it with X, or hide/show it from the tray double-click.
+            if (button == ToolbarButton::Hide &&
+                statusMode_ != VtsStatusMode::Hidden && !statusDismissed_) {
+                continue;
+            }
             RECT rect = ToolbarButtonRect(button);
             if (PtInRect(&rect, point)) {
                 return button;
@@ -8048,7 +10272,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             FillRect(buffer, &notifRect, notifBg);
             DeleteObject(notifBg);
             HFONT notifFont = CreateFontW(
-                -15, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                -UiFontSize(nullptr, 15), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
             HGDIOBJ oldNotifFont = SelectObject(buffer, notifFont);
@@ -8116,11 +10340,11 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         }
 
         HFONT font = CreateFontW(
-            -15, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            -UiFontSize(toolbarHwnd_, 15), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         HFONT closeFont = CreateFontW(
-            -25, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            -UiFontSize(toolbarHwnd_, 25), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Symbol");
         HGDIOBJ oldFont = SelectObject(buffer, font);
@@ -8129,10 +10353,13 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
 
         const auto drawButton = [&](ToolbarButton button, const std::wstring& label) {
             RECT rect = ToolbarButtonRect(button);
+            const bool disabled = button == ToolbarButton::Hide &&
+                statusMode_ != VtsStatusMode::Hidden && !statusDismissed_;
             COLORREF color = button == ToolbarButton::Lock
                 ? RGB(33, 49, 72)
                 : RGB(20, 36, 58);
-            if (button == toolbarHovered_) {
+            if (disabled) color = RGB(14, 25, 40);
+            if (!disabled && button == toolbarHovered_) {
                 if (button == ToolbarButton::Close) {
                     color = RGB(205, 55, 62);
                 } else if (button == ToolbarButton::Lock) {
@@ -8141,7 +10368,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                     color = RGB(26, 70, 116);
                 }
             }
-            if (button == toolbarPressed_) {
+            if (!disabled && button == toolbarPressed_) {
                 if (button == ToolbarButton::Close) {
                     color = RGB(170, 35, 42);
                 } else if (button == ToolbarButton::Lock) {
@@ -8153,7 +10380,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             HBRUSH brush = CreateSolidBrush(color);
             FillRect(buffer, &rect, brush);
             DeleteObject(brush);
-            SetTextColor(buffer, RGB(240, 246, 255));
+            SetTextColor(buffer, disabled ? RGB(105, 126, 151) : RGB(240, 246, 255));
             HGDIOBJ previousFont = nullptr;
             if (button == ToolbarButton::Close) {
                 previousFont = SelectObject(buffer, closeFont);
@@ -8221,7 +10448,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         if (!locked_) {
             const bool compact = ToolbarUsesCompactLayout();
             HFONT debugFont = CreateFontW(
-                -13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                -UiFontSize(toolbarHwnd_, 13), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
             SelectObject(buffer, debugFont);
@@ -8386,6 +10613,10 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             }
             break;
         case ToolbarButton::Hide:
+            if (statusMode_ != VtsStatusMode::Hidden && !statusDismissed_) {
+                Log("[toolbar] hide blocked while waiting for VTS");
+                break;
+            }
             Log("[toolbar] action=hide_to_tray");
             CancelFpsCapture();
             CancelHotkeyCapture();
@@ -8724,6 +10955,14 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 POINT p{};
                 GetCursorPos(&p);
                 ScreenToClient(hwnd_, &p);
+                if (statusMode_ != VtsStatusMode::Hidden && !statusDismissed_ &&
+                    (PtInRect(&statusExeRect_, p) ||
+                     PtInRect(&statusBatchRect_, p) ||
+                     PtInRect(&statusAddPathRect_, p) ||
+                     PtInRect(&statusManualPathRect_, p))) {
+                    SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                    return TRUE;
+                }
                 if ((opaqueBackgroundDetected_ && !bgWarningPermanentlyDismissed_ &&
                     (PtInRect(&bgWarningCloseRect_, p) ||
                      PtInRect(&bgWarningDontShowRect_, p))) ||
@@ -8738,11 +10977,13 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             if (statusMode_ != VtsStatusMode::Hidden && !statusDismissed_) {
                 POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
                 statusPressedButton_ = PtInRect(&statusExeRect_, point) ? 1
-                    : (PtInRect(&statusBatchRect_, point) ? 2 : 0);
-            if (statusPressedButton_ != 0) {
-                SetCapture(hwnd_);
-                statusFrameDirty_ = true;
-                InvalidateRect(hwnd_, nullptr, FALSE);
+                    : (PtInRect(&statusBatchRect_, point) ? 2
+                    : ((PtInRect(&statusAddPathRect_, point) ||
+                        PtInRect(&statusManualPathRect_, point)) ? 3 : 0));
+                if (statusPressedButton_ != 0) {
+                    SetCapture(hwnd_);
+                    statusFrameDirty_ = true;
+                    InvalidateRect(hwnd_, nullptr, FALSE);
                     return 0;
                 }
             }
@@ -8784,6 +11025,10 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 if ((pressed == 1 && PtInRect(&statusExeRect_, point)) ||
                     (pressed == 2 && PtInRect(&statusBatchRect_, point))) {
                     LaunchVtsFromStatus(pressed == 2);
+                } else if (pressed == 3 &&
+                    (PtInRect(&statusAddPathRect_, point) ||
+                     PtInRect(&statusManualPathRect_, point))) {
+                    ChooseVtsLaunchPath();
                 }
                 return 0;
             }
@@ -8798,7 +11043,9 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             ScreenToClient(hwnd_, &point);
             if (statusInteractive) {
                 if (PtInRect(&statusExeRect_, point) ||
-                    PtInRect(&statusBatchRect_, point)) {
+                    PtInRect(&statusBatchRect_, point) ||
+                    PtInRect(&statusAddPathRect_, point) ||
+                    PtInRect(&statusManualPathRect_, point)) {
                     return HTCLIENT;
                 }
                 return HTTRANSPARENT;
@@ -8972,7 +11219,10 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     HWND statusLaunchBatch_ = nullptr;
     RECT statusExeRect_{};
     RECT statusBatchRect_{};
+    RECT statusAddPathRect_{};
+    RECT statusManualPathRect_{};
     int statusPressedButton_ = 0;
+    bool statusPathLookupFailed_ = false;
     bool statusFrameDirty_ = true;
     int statusDrawWidth_ = 0;
     int statusDrawHeight_ = 0;
@@ -9001,19 +11251,54 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     int hoverOpacityPercent_ = kDefaultHoverOpacityPercent;
     int modelOpacityPercent_ = 100;
     int hoverExpandPx_ = 0;
+    bool excludeEffectsFromHover_ = false;
+    bool subjectHoverRegionConfigured_ = false;
+    int subjectHoverRegionLeft_ = 0;
+    int subjectHoverRegionTop_ = 0;
+    int subjectHoverRegionRight_ = 10000;
+    int subjectHoverRegionBottom_ = 10000;
+    int subjectHoverMaskGridWidth_ = 0;
+    int subjectHoverMaskGridHeight_ = 0;
+    std::vector<std::uint8_t> subjectHoverMaskBits_;
+    bool subjectHoverTrackingReferenceValid_ = false;
+    double subjectHoverTrackingReferenceCenterX_ = 0.0;
+    double subjectHoverTrackingReferenceCenterY_ = 0.0;
+    double subjectHoverTrackingReferenceWidth_ = 0.0;
+    double subjectHoverTrackingReferenceHeight_ = 0.0;
+    double subjectHoverTrackingCurrentCenterX_ = 0.0;
+    double subjectHoverTrackingCurrentCenterY_ = 0.0;
+    double subjectHoverTrackingScale_ = 1.0;
+    Clock::time_point subjectHoverTrackingLastUpdate_{};
+    HWND subjectSelectionHwnd_ = nullptr;
+    HWND subjectSelectionToolbarHwnd_ = nullptr;
+    std::vector<std::vector<POINT>> subjectSelectionPolygons_;
+    std::vector<POINT> subjectSelectionPolygon_;
+    std::vector<SubjectSelectionSnapshot> subjectSelectionUndo_;
+    std::vector<SubjectSelectionSnapshot> subjectSelectionRedo_;
+    POINT subjectSelectionCursor_{};
+    bool subjectSelectionDragging_ = false;
+    int subjectSelectionVirtualLeft_ = 0;
+    int subjectSelectionVirtualTop_ = 0;
     bool hoverExpressionEnabled_ = false;
     std::string hoverExpressionFile_;
+    double hoverExpressionDurationSeconds_ =
+        kDefaultHoverExpressionDurationSeconds;
     bool hoverExpressionHovered_ = false;
+    bool hoverExpressionLeaving_ = false;
     bool hoverExpressionRestored_ = false;
     bool hoverExpressionOriginalActive_ = false;
     Clock::time_point hoverExpressionRestoreAt_{};
     bool expressionPanelPreviewActive_ = false;
-    bool expressionPanelPreviewOriginalActive_ = false;
-    std::string expressionPanelPreviewFile_;
+    bool expressionPanelStateCaptured_ = false;
+    std::vector<VtsExpressionState> expressionPanelInitialStates_;
+    Clock::time_point expressionPanelNextPollAt_{};
+    Clock::time_point expressionPanelIgnoreUntil_{};
     bool borderDialogOpen_ = false;
     HWND borderPanelHwnd_ = nullptr;
+    bool personalPanelManuallyPositioned_ = false;
     bool showHoverExpandPreview_ = false;
     bool hoverExpandEditing_ = false;
+    bool showSubjectRegionPreview_ = false;
     Clock::time_point hoverExpandPreviewUntil_{};
     Clock::time_point hoverExpandFadeStarted_ = Clock::now();
     double hoverExpandPreviewAlpha_ = 0.0;
@@ -9076,6 +11361,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
 
     spoutDX receiver_;
     bool spoutFrameSyncDisabled_ = false;
+    bool spoutRebindInProgress_ = false;
+    Clock::time_point lastSpoutRebindCheck_{};
     ComPtr<ID3D11Device> device_;
     ComPtr<ID3D11DeviceContext> context_;
     ComPtr<IDXGIAdapter3> activeAdapter3_;
