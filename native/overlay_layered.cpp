@@ -4853,13 +4853,14 @@ private:
 
         y += 34;
         if (overlay->hoverExpressionEnabled_) {
-            // Keep the label, value and unit as one visually centered row.
-            const RECT durationLabel{ 62, y + 2, 202, y + 28 };
-            const RECT durationInput{ 214, y + 2, 329, y + 28 };
-            const RECT durationUnit{ 337, y + 2, 357, y + 28 };
+            // Align the row with the other settings while keeping the value
+            // centered inside its edit box.
+            const RECT durationLabel{ 20, y + 2, 150, y + 28 };
+            const RECT durationInput{ 160, y + 2, 275, y + 28 };
+            const RECT durationUnit{ 283, y + 2, 303, y + 28 };
             PanelText(dc, L"表情恢复延时", durationLabel,
                 RGB(166, 198, 232), 13, true,
-                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             PanelFill(dc, durationInput, state->editingHoverExpressionDuration
                 ? RGB(34, 78, 124) : RGB(26, 46, 71));
             HPEN durationBorder = CreatePen(
@@ -4930,7 +4931,7 @@ private:
         const int expressionOptionsTop = base + 289;
         if (overlay->hoverExpressionEnabled_ &&
             y >= expressionOptionsTop && y < expressionOptionsTop + 34 &&
-            x >= 214 && x < 329) {
+            x >= 160 && x < 275) {
             return 15;
         }
         const int expressionButtonTop = expressionOptionsTop +
