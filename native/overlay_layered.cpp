@@ -55,6 +55,7 @@ constexpr wchar_t kWindowClass[] = L"LilyVtsLayeredOverlay";
 constexpr wchar_t kToolbarClass[] = L"LilyVtsLayeredOverlayToolbar";
 constexpr wchar_t kStatusClass[] = L"LilyVtsVtsStatus";
 constexpr wchar_t kSubjectSelectionClass[] = L"LilyVtsSubjectSelection";
+constexpr wchar_t kSubjectSelectionToolbarClass[] = L"LilyVtsSubjectSelectionToolbar";
 constexpr wchar_t kWindowTitle[] = L"VTSFloat_Meow";
 constexpr wchar_t kToolbarTitle[] = L"VTSFloat_Meow Controls";
 constexpr wchar_t kInstanceName[] = L"Local\\LilyVtsLayeredOverlayInstance";
@@ -2208,6 +2209,18 @@ private:
         Check(RegisterClassExW(&subjectSelectionClass)
                 ? S_OK : HRESULT_FROM_WIN32(GetLastError()),
               "RegisterClassExW(subject selection)");
+
+        WNDCLASSEXW subjectToolbarClass{};
+        subjectToolbarClass.cbSize = sizeof(subjectToolbarClass);
+        subjectToolbarClass.hInstance = instance_;
+        subjectToolbarClass.lpfnWndProc =
+            &LayeredOverlay::SubjectSelectionToolbarWindowProc;
+        subjectToolbarClass.lpszClassName = kSubjectSelectionToolbarClass;
+        subjectToolbarClass.hCursor = LoadCursorW(nullptr, IDC_HAND);
+        subjectToolbarClass.hbrBackground = nullptr;
+        Check(RegisterClassExW(&subjectToolbarClass)
+                ? S_OK : HRESULT_FROM_WIN32(GetLastError()),
+              "RegisterClassExW(subject selection toolbar)");
     }
 
     void CreateOverlayWindow() {
@@ -5681,19 +5694,25 @@ private:
         RECT finish{};
     };
 
-    static SubjectSelectionToolbarLayout SubjectSelectionToolbar(HWND window) {
-        RECT client{};
-        GetClientRect(window, &client);
-        const int width = 438;
-        const int left = (std::max)(16L, client.right - width - 24L);
-        const int top = 20;
+    static SubjectSelectionToolbarLayout SubjectSelectionToolbar() {
+        const int left = 0;
+        const int top = 0;
         SubjectSelectionToolbarLayout layout;
-        layout.panel = RECT{ left, top, left + width, top + 56 };
+        layout.panel = RECT{ left, top, left + 438, top + 56 };
         layout.count = RECT{ left + 10, top + 8, left + 194, top + 48 };
         layout.undo = RECT{ left + 202, top + 8, left + 242, top + 48 };
         layout.redo = RECT{ left + 248, top + 8, left + 288, top + 48 };
         layout.finish = RECT{ left + 298, top + 8, left + 428, top + 48 };
         return layout;
+    }
+
+    void RefreshSubjectSelectionUi() {
+        if (subjectSelectionHwnd_) {
+            InvalidateRect(subjectSelectionHwnd_, nullptr, FALSE);
+        }
+        if (subjectSelectionToolbarHwnd_) {
+            InvalidateRect(subjectSelectionToolbarHwnd_, nullptr, FALSE);
+        }
     }
 
     SubjectSelectionSnapshot CurrentSubjectSelectionSnapshot() const {
@@ -5722,7 +5741,7 @@ private:
         subjectSelectionRedo_.push_back(CurrentSubjectSelectionSnapshot());
         RestoreSubjectSelectionSnapshot(subjectSelectionUndo_.back());
         subjectSelectionUndo_.pop_back();
-        if (subjectSelectionHwnd_) InvalidateRect(subjectSelectionHwnd_, nullptr, FALSE);
+        RefreshSubjectSelectionUi();
     }
 
     void RedoSubjectSelectionEdit() {
@@ -5730,7 +5749,7 @@ private:
         subjectSelectionUndo_.push_back(CurrentSubjectSelectionSnapshot());
         RestoreSubjectSelectionSnapshot(subjectSelectionRedo_.back());
         subjectSelectionRedo_.pop_back();
-        if (subjectSelectionHwnd_) InvalidateRect(subjectSelectionHwnd_, nullptr, FALSE);
+        RefreshSubjectSelectionUi();
     }
 
     void CompleteCurrentSubjectPolygon() {
@@ -5740,7 +5759,7 @@ private:
         subjectSelectionPolygon_.clear();
         subjectSelectionDragging_ = false;
         if (GetCapture() == subjectSelectionHwnd_) ReleaseCapture();
-        if (subjectSelectionHwnd_) InvalidateRect(subjectSelectionHwnd_, nullptr, FALSE);
+        RefreshSubjectSelectionUi();
     }
 
     static void DrawSubjectHistoryGlyph(
@@ -5857,7 +5876,13 @@ private:
             DeleteObject(outline);
         }
 
-        const SubjectSelectionToolbarLayout toolbar = SubjectSelectionToolbar(window);
+        EndPaint(window, &paint);
+    }
+
+    void DrawSubjectSelectionToolbar(HWND window) {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(window, &paint);
+        const SubjectSelectionToolbarLayout toolbar = SubjectSelectionToolbar();
         PanelFill(dc, toolbar.panel, RGB(18, 31, 49));
         HPEN toolbarBorder = CreatePen(PS_SOLID, 1, RGB(66, 103, 143));
         HGDIOBJ oldToolbarPen = SelectObject(dc, toolbarBorder);
@@ -6317,7 +6342,14 @@ private:
                 }
             }
         }
-        DestroyWindow(subjectSelectionHwnd_);
+        if (subjectSelectionToolbarHwnd_ && IsWindow(subjectSelectionToolbarHwnd_)) {
+            const HWND toolbar = subjectSelectionToolbarHwnd_;
+            subjectSelectionToolbarHwnd_ = nullptr;
+            DestroyWindow(toolbar);
+        }
+        if (subjectSelectionHwnd_ && IsWindow(subjectSelectionHwnd_)) {
+            DestroyWindow(subjectSelectionHwnd_);
+        }
     }
 
     void ShowSubjectSelectionOverlay() {
@@ -6357,6 +6389,25 @@ private:
         SetWindowPos(subjectSelectionHwnd_, HWND_TOPMOST,
             subjectSelectionVirtualLeft_, subjectSelectionVirtualTop_, width, height,
             SWP_SHOWWINDOW);
+        const SubjectSelectionToolbarLayout toolbar = SubjectSelectionToolbar();
+        const int toolbarWidth = toolbar.panel.right - toolbar.panel.left;
+        const int toolbarHeight = toolbar.panel.bottom - toolbar.panel.top;
+        const int toolbarX = subjectSelectionVirtualLeft_ +
+            (std::max)(16, width - toolbarWidth - 24);
+        const int toolbarY = subjectSelectionVirtualTop_ + 20;
+        subjectSelectionToolbarHwnd_ = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            kSubjectSelectionToolbarClass, L"VTSFloat_Meow - 框选控制", WS_POPUP,
+            toolbarX, toolbarY, toolbarWidth, toolbarHeight,
+            subjectSelectionHwnd_, nullptr, instance_, this);
+        if (subjectSelectionToolbarHwnd_) {
+            SetWindowPos(subjectSelectionToolbarHwnd_, HWND_TOPMOST,
+                toolbarX, toolbarY, toolbarWidth, toolbarHeight,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        } else {
+            Log("[hover subject] selection toolbar failed error=" +
+                std::to_string(GetLastError()));
+        }
         SetForegroundWindow(subjectSelectionHwnd_);
         SetFocus(subjectSelectionHwnd_);
     }
@@ -6378,35 +6429,11 @@ private:
         case WM_PAINT:
             overlay->DrawSubjectSelectionOverlay(window);
             return 0;
-        case WM_SETCURSOR: {
-            POINT point{};
-            GetCursorPos(&point);
-            ScreenToClient(window, &point);
-            const auto toolbar = SubjectSelectionToolbar(window);
-            if (PtInRect(&toolbar.undo, point) || PtInRect(&toolbar.redo, point) ||
-                PtInRect(&toolbar.finish, point)) {
-                SetCursor(LoadCursorW(nullptr, IDC_HAND));
-            } else {
-                SetCursor(LoadCursorW(nullptr, IDC_CROSS));
-            }
+        case WM_SETCURSOR:
+            SetCursor(LoadCursorW(nullptr, IDC_CROSS));
             return TRUE;
-        }
         case WM_LBUTTONDOWN: {
             const POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            const auto toolbar = SubjectSelectionToolbar(window);
-            if (PtInRect(&toolbar.undo, point)) {
-                overlay->UndoSubjectSelectionEdit();
-                return 0;
-            }
-            if (PtInRect(&toolbar.redo, point)) {
-                overlay->RedoSubjectSelectionEdit();
-                return 0;
-            }
-            if (PtInRect(&toolbar.finish, point)) {
-                overlay->FinishSubjectSelection(true);
-                return 0;
-            }
-            if (PtInRect(&toolbar.panel, point)) return 0;
             if (overlay->subjectSelectionPolygon_.size() >= 3) {
                 const POINT first = overlay->subjectSelectionPolygon_.front();
                 const int dx = point.x - first.x;
@@ -6426,9 +6453,6 @@ private:
             return 0;
         }
         case WM_LBUTTONDBLCLK: {
-            const POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            const auto toolbar = SubjectSelectionToolbar(window);
-            if (PtInRect(&toolbar.panel, point)) return 0;
             if (overlay->subjectSelectionPolygon_.size() >= 3) {
                 overlay->CompleteCurrentSubjectPolygon();
             }
@@ -6477,6 +6501,12 @@ private:
             return 0;
         case WM_DESTROY:
             if (GetCapture() == window) ReleaseCapture();
+            if (overlay->subjectSelectionToolbarHwnd_ &&
+                IsWindow(overlay->subjectSelectionToolbarHwnd_)) {
+                const HWND toolbar = overlay->subjectSelectionToolbarHwnd_;
+                overlay->subjectSelectionToolbarHwnd_ = nullptr;
+                DestroyWindow(toolbar);
+            }
             overlay->subjectSelectionHwnd_ = nullptr;
             overlay->subjectSelectionPolygons_.clear();
             overlay->subjectSelectionPolygon_.clear();
@@ -6486,6 +6516,82 @@ private:
             overlay->RenderFrame();
             if (overlay->borderPanelHwnd_) {
                 RefreshPersonalPanel(overlay->borderPanelHwnd_);
+            }
+            return 0;
+        default:
+            break;
+        }
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+
+    static LRESULT CALLBACK SubjectSelectionToolbarWindowProc(
+        HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+        auto* overlay = reinterpret_cast<LayeredOverlay*>(
+            GetWindowLongPtrW(window, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            overlay = static_cast<LayeredOverlay*>(create->lpCreateParams);
+            SetWindowLongPtrW(window, GWLP_USERDATA,
+                reinterpret_cast<LONG_PTR>(overlay));
+        }
+        if (!overlay) return DefWindowProcW(window, message, wParam, lParam);
+        switch (message) {
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT:
+            overlay->DrawSubjectSelectionToolbar(window);
+            return 0;
+        case WM_SETCURSOR: {
+            POINT point{};
+            GetCursorPos(&point);
+            ScreenToClient(window, &point);
+            const auto toolbar = SubjectSelectionToolbar();
+            const bool action = PtInRect(&toolbar.undo, point) ||
+                PtInRect(&toolbar.redo, point) || PtInRect(&toolbar.finish, point);
+            SetCursor(LoadCursorW(nullptr, action ? IDC_HAND : IDC_ARROW));
+            return TRUE;
+        }
+        case WM_LBUTTONDOWN: {
+            SetFocus(window);
+            const POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            const auto toolbar = SubjectSelectionToolbar();
+            if (PtInRect(&toolbar.undo, point)) {
+                overlay->UndoSubjectSelectionEdit();
+            } else if (PtInRect(&toolbar.redo, point)) {
+                overlay->RedoSubjectSelectionEdit();
+            } else if (PtInRect(&toolbar.finish, point)) {
+                overlay->FinishSubjectSelection(true);
+            }
+            return 0;
+        }
+        case WM_KEYDOWN:
+            if ((GetKeyState(VK_CONTROL) & 0x8000) != 0 && wParam == 'Z') {
+                if ((GetKeyState(VK_SHIFT) & 0x8000) != 0) {
+                    overlay->RedoSubjectSelectionEdit();
+                } else {
+                    overlay->UndoSubjectSelectionEdit();
+                }
+                return 0;
+            }
+            if ((GetKeyState(VK_CONTROL) & 0x8000) != 0 && wParam == 'Y') {
+                overlay->RedoSubjectSelectionEdit();
+                return 0;
+            }
+            if (wParam == VK_RETURN) {
+                overlay->FinishSubjectSelection(true);
+                return 0;
+            }
+            if (wParam == VK_ESCAPE) {
+                overlay->FinishSubjectSelection(false);
+                return 0;
+            }
+            break;
+        case WM_CLOSE:
+            overlay->FinishSubjectSelection(false);
+            return 0;
+        case WM_DESTROY:
+            if (overlay->subjectSelectionToolbarHwnd_ == window) {
+                overlay->subjectSelectionToolbarHwnd_ = nullptr;
             }
             return 0;
         default:
@@ -11214,6 +11320,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     double subjectHoverTrackingScale_ = 1.0;
     Clock::time_point subjectHoverTrackingLastUpdate_{};
     HWND subjectSelectionHwnd_ = nullptr;
+    HWND subjectSelectionToolbarHwnd_ = nullptr;
     std::vector<std::vector<POINT>> subjectSelectionPolygons_;
     std::vector<POINT> subjectSelectionPolygon_;
     std::vector<SubjectSelectionSnapshot> subjectSelectionUndo_;
