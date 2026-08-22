@@ -5762,32 +5762,6 @@ private:
         RefreshSubjectSelectionUi();
     }
 
-    static void DrawSubjectHistoryGlyph(
-        HDC dc, RECT rect, bool redo, COLORREF color) {
-        HPEN pen = CreatePen(PS_SOLID, 2, color);
-        HGDIOBJ oldPen = SelectObject(dc, pen);
-        HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
-        const int centerY = (rect.top + rect.bottom) / 2;
-        if (redo) {
-            Arc(dc, rect.left + 8, rect.top + 8, rect.right - 7, rect.bottom - 6,
-                rect.left + 9, centerY, rect.right - 7, centerY);
-            MoveToEx(dc, rect.right - 7, centerY, nullptr);
-            LineTo(dc, rect.right - 14, centerY - 7);
-            MoveToEx(dc, rect.right - 7, centerY, nullptr);
-            LineTo(dc, rect.right - 14, centerY + 7);
-        } else {
-            Arc(dc, rect.left + 7, rect.top + 8, rect.right - 8, rect.bottom - 6,
-                rect.right - 9, centerY, rect.left + 7, centerY);
-            MoveToEx(dc, rect.left + 7, centerY, nullptr);
-            LineTo(dc, rect.left + 14, centerY - 7);
-            MoveToEx(dc, rect.left + 7, centerY, nullptr);
-            LineTo(dc, rect.left + 14, centerY + 7);
-        }
-        SelectObject(dc, oldBrush);
-        SelectObject(dc, oldPen);
-        DeleteObject(pen);
-    }
-
     void DrawSubjectSelectionOverlay(HWND window) {
         PAINTSTRUCT paint{};
         HDC dc = BeginPaint(window, &paint);
@@ -5895,12 +5869,14 @@ private:
 
         const bool canUndo = !subjectSelectionUndo_.empty();
         const bool canRedo = !subjectSelectionRedo_.empty();
-        PanelFill(dc, toolbar.undo, RGB(28, 48, 75));
-        PanelFill(dc, toolbar.redo, RGB(28, 48, 75));
-        DrawSubjectHistoryGlyph(dc, toolbar.undo, false,
-            canUndo ? RGB(220, 237, 255) : RGB(83, 105, 129));
-        DrawSubjectHistoryGlyph(dc, toolbar.redo, true,
-            canRedo ? RGB(220, 237, 255) : RGB(83, 105, 129));
+        PanelFill(dc, toolbar.undo, canUndo ? RGB(30, 55, 84) : RGB(22, 38, 58));
+        PanelFill(dc, toolbar.redo, canRedo ? RGB(30, 55, 84) : RGB(22, 38, 58));
+        PanelText(dc, L"↶", toolbar.undo,
+            canUndo ? RGB(230, 241, 255) : RGB(75, 94, 116), 23, false,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        PanelText(dc, L"↷", toolbar.redo,
+            canRedo ? RGB(230, 241, 255) : RGB(75, 94, 116), 23, false,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         PanelText(dc,
             L"当前框选主体数量：" + std::to_wstring(subjectSelectionPolygons_.size()),
             toolbar.count, RGB(210, 226, 245), 14, true,
@@ -8379,11 +8355,12 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     }
 
     void UpdateHoverExpression() {
-        // Personalization owns expression state while it is open: it performs
-        // one explicit preview and restores the saved baseline. Hover commands
-        // are restricted to locked mode so the two flows cannot overwrite the
-        // same expression's restore command.
-        const bool shouldHover = locked_ && !borderDialogOpen_ &&
+        // Hover preview is also available while personalization is open. The
+        // explicit 2.5-second selection preview has priority; once it restores
+        // the saved baseline, the configured region behaves like locked mode.
+        const bool hoverInteractionAvailable = locked_ || borderDialogOpen_;
+        const bool shouldHover = hoverInteractionAvailable &&
+            !expressionPanelPreviewActive_ &&
             hoverExpressionEnabled_ && !hoverExpressionFile_.empty() &&
             hasReceivedModel_ && vtsApi_.IsConnected() && IsCursorOverModel();
         const auto now = Clock::now();
@@ -8471,7 +8448,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         vtsApi_.RequestExpressionState();
 
         if (!expressionPanelStateCaptured_ || expressionPanelPreviewActive_ ||
-            hoverExpressionHovered_ || now < expressionPanelIgnoreUntil_) {
+            (hoverExpressionHovered_ && !hoverExpressionRestored_) ||
+            now < expressionPanelIgnoreUntil_) {
             return;
         }
         const auto expressions = vtsApi_.GetExpressions();
