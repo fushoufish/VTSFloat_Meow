@@ -8745,28 +8745,9 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                     dist[static_cast<size_t>(y + 1) * width + x - 1] + 1);
             }
         }
-        // For negative expand: first dim all model pixels to 40% alpha so
-        // the inner blue band is visible without dimming the highlight itself.
-        if (!outside) {
-            for (int y = 0; y < height; ++y) {
-                for (int x = 0; x < width; ++x) {
-                    if (isBorderRegion(x, y) || DebugOverlayPixel(x, y)) continue;
-                    if (excludeEffectsFromHover_ && subjectHoverRegionConfigured_ &&
-                        !IsLockedSubjectMaskPixel(x, y, width, height)) continue;
-                    auto* p = pixels + (static_cast<size_t>(y) * width + x) * 4;
-                    if (p[3] > 8) {
-                        // Reduce alpha to 40% but keep premultiplied colors proportional
-                        const int newA = static_cast<int>(p[3]) * 40 / 100;
-                        if (p[3] > 0) {
-                            p[0] = static_cast<std::uint8_t>(p[0] * newA / p[3]);
-                            p[1] = static_cast<std::uint8_t>(p[1] * newA / p[3]);
-                            p[2] = static_cast<std::uint8_t>(p[2] * newA / p[3]);
-                            p[3] = static_cast<std::uint8_t>(newA);
-                        }
-                    }
-                }
-            }
-        }
+        // Never dim the whole model to make the inset preview stand out.
+        // Model opacity must always come from the user's normal/hover opacity
+        // settings; this layer only paints the red/blue boundary indicator.
         // Fill pixels where dist <= absR (band from edge outward/inward)
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
