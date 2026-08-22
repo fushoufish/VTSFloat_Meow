@@ -2077,10 +2077,6 @@ public:
                     running = false;
                     break;
                 }
-                if (borderPanelHwnd_ && IsWindow(borderPanelHwnd_) &&
-                    IsDialogMessageW(borderPanelHwnd_, &message)) {
-                    continue;
-                }
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
@@ -4276,6 +4272,7 @@ private:
         double originalHoverExpressionDurationSeconds =
             kDefaultHoverExpressionDurationSeconds;
         bool editingHoverExpressionDuration = false;
+        bool replaceHoverExpressionDurationOnNextInput = false;
         std::wstring hoverExpressionDurationInput;
         std::vector<std::uint32_t> wheelPixels;
         int wheelBitmapWidth = 0;
@@ -4856,7 +4853,7 @@ private:
 
         y += 34;
         if (overlay->hoverExpressionEnabled_) {
-            PanelText(dc, L"移出后恢复延时", RECT{ 20, y, 180, y + 28 },
+            PanelText(dc, L"表情恢复延时", RECT{ 20, y, 180, y + 28 },
                 RGB(166, 198, 232), 13, true);
             RECT durationInput{ 225, y + 2, 340, y + 28 };
             PanelFill(dc, durationInput, state->editingHoverExpressionDuration
@@ -5190,6 +5187,11 @@ private:
         case WM_PAINT:
             DrawPersonalPanel(panel, state);
             return 0;
+        case WM_GETDLGCODE:
+            if (state->editingHoverExpressionDuration) {
+                return DLGC_WANTALLKEYS | DLGC_WANTCHARS;
+            }
+            break;
         case WM_SETCURSOR:
             if (LOWORD(lParam) == HTCLIENT) {
                 POINT point{};
@@ -5210,11 +5212,13 @@ private:
             if (state->editingHoverExpressionDuration) {
                 if (wParam == VK_RETURN) {
                     state->editingHoverExpressionDuration = false;
+                    state->replaceHoverExpressionDurationOnNextInput = false;
                     RefreshPersonalPanel(panel);
                     return 0;
                 }
                 if (wParam == VK_ESCAPE) {
                     state->editingHoverExpressionDuration = false;
+                    state->replaceHoverExpressionDurationOnNextInput = false;
                     state->hoverExpressionDurationInput = FormatNonNegativeDecimal(
                         overlay->hoverExpressionDurationSeconds_);
                     RefreshPersonalPanel(panel);
@@ -5226,7 +5230,10 @@ private:
             if (state->editingHoverExpressionDuration) {
                 const wchar_t character = static_cast<wchar_t>(wParam);
                 if (character == L'\b') {
-                    if (!state->hoverExpressionDurationInput.empty()) {
+                    if (state->replaceHoverExpressionDurationOnNextInput) {
+                        state->hoverExpressionDurationInput.clear();
+                        state->replaceHoverExpressionDurationOnNextInput = false;
+                    } else if (!state->hoverExpressionDurationInput.empty()) {
                         state->hoverExpressionDurationInput.pop_back();
                     }
                     ApplyHoverExpressionDurationInput(panel, state);
@@ -5236,6 +5243,10 @@ private:
                 const bool isFirstDot = character == L'.' &&
                     state->hoverExpressionDurationInput.find(L'.') == std::wstring::npos;
                 if (isDigit || isFirstDot) {
+                    if (state->replaceHoverExpressionDurationOnNextInput) {
+                        state->hoverExpressionDurationInput.clear();
+                        state->replaceHoverExpressionDurationOnNextInput = false;
+                    }
                     state->hoverExpressionDurationInput.push_back(character);
                     ApplyHoverExpressionDurationInput(panel, state);
                 }
@@ -5282,6 +5293,7 @@ private:
             const int hit = PersonalPanelHitTest(overlay, x, y);
             if (hit != 15) {
                 state->editingHoverExpressionDuration = false;
+                state->replaceHoverExpressionDurationOnNextInput = false;
             }
             if (y < 44 && hit == 0) {
                 RECT windowRect{};
@@ -5383,6 +5395,7 @@ private:
             }
             if (hit == 15) {
                 state->editingHoverExpressionDuration = true;
+                state->replaceHoverExpressionDurationOnNextInput = true;
                 state->hoverExpressionDurationInput = FormatNonNegativeDecimal(
                     overlay->hoverExpressionDurationSeconds_);
                 SetForegroundWindow(panel);
