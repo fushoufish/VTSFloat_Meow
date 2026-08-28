@@ -26,6 +26,7 @@
 #include <chrono>
 #include <cmath>
 #include <cctype>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -99,11 +100,11 @@ constexpr int kSubjectMaskCellPx = 4;
 constexpr int kSubjectMaskIniChunkChars = 1800;
 constexpr double kDefaultHoverExpressionDurationSeconds = 1.0;
 constexpr UINT kExpressionSelectionPreviewWaitMs = 2500;
-constexpr UINT kExpressionSelectionPreviewTotalMs =
-    kExpressionSelectionPreviewWaitMs + 300;
 constexpr double kHoverExpressionFadeInSeconds = 0.3;
 constexpr double kHoverExpressionFadeOutSeconds = 1.0;
 constexpr UINT kExpressionStatePollIntervalMs = 600;
+constexpr UINT kHoverExpressionStatePollIntervalMs = 250;
+constexpr UINT kHoverExpressionRetriggerCooldownMs = 2000;
 constexpr int kApiNotificationHeight = 28;
 constexpr int kBgNotificationHeight = 28;
 constexpr int kHoverFadeDurationMs = 350;
@@ -468,7 +469,7 @@ std::optional<VtsFpsConfig> ReadVtsConfiguredFps(int monitorRefreshFps) {
 }
 
 constexpr wchar_t kVtsApiPluginName[] = L"VTSFloat_Meow";
-constexpr wchar_t kVtsApiPluginDeveloper[] = L"Lily";
+constexpr wchar_t kVtsApiPluginDeveloper[] = L"fushoufish";
 constexpr int kVtsApiPort = 8001;
 constexpr int kVtsApiPollIntervalMs = 2000;
 // Keep API recovery responsive after the initial probe. The silent retry path
@@ -879,6 +880,24 @@ public:
         return expressions_;
     }
 
+    std::uint64_t GetExpressionStateRevision() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return expressionStateRevision_;
+    }
+
+    bool GetExpressionStateAfter(
+        std::uint64_t previousRevision,
+        std::vector<ExpressionInfo>& expressions,
+        std::uint64_t& revision) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (expressionStateRevision_ <= previousRevision || expressions_.empty()) {
+            return false;
+        }
+        expressions = expressions_;
+        revision = expressionStateRevision_;
+        return true;
+    }
+
     bool GetExpressionActive(const std::string& file, bool& active) const {
         std::lock_guard<std::mutex> lock(mutex_);
         for (const auto& expression : expressions_) {
@@ -920,6 +939,13 @@ public:
         }
     }
 
+    bool WaitForExpressionCommands(std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(expressionCommandMutex_);
+        return expressionCommandCondition_.wait_for(lock, timeout, [this]() {
+            return expressionCommands_.empty() && expressionCommandsInFlight_ == 0;
+        });
+    }
+
     void ResetCache() {
         Stop();
         cachedToken_.clear();
@@ -935,11 +961,14 @@ public:
             extraStats_ = ExtraStats{};
             expressions_.clear();
             lastExpressionModelId_.clear();
+            expressionStateRevision_ = 0;
         }
         {
             std::lock_guard<std::mutex> lock(expressionCommandMutex_);
             expressionCommands_.clear();
+            expressionCommandsInFlight_ = 0;
         }
+        expressionCommandCondition_.notify_all();
         expressionStateRequested_.store(false, std::memory_order_relaxed);
         initialDiscoveryStarted_.store(false, std::memory_order_relaxed);
         initialDiscoveryDone_.store(false, std::memory_order_relaxed);
@@ -1309,7 +1338,7 @@ private:
         if (cachedToken_.empty()) {
             return RequestNewToken();
         }
-        std::string data = R"("pluginName":"VTSFloat_Meow","pluginDeveloper":"Lily","authenticationToken":")" + cachedToken_ + R"(")";
+        std::string data = R"("pluginName":"VTSFloat_Meow","pluginDeveloper":"fushoufish","authenticationToken":")" + cachedToken_ + R"(")";
         std::string request = BuildJsonRequest("AuthenticationRequest", data);
         if (!SendJson(request)) return false;
         std::string response = ReceiveJson();
@@ -1329,7 +1358,7 @@ private:
         Log("[vts-api] requesting new token");
         authPending_.store(true, std::memory_order_relaxed);
         const std::string iconB64 = LoadIconAsBase64Png(instance_);
-        std::string data = R"("pluginName":"VTSFloat_Meow","pluginDeveloper":"Lily","pluginIcon":")" + iconB64 + R"(")";
+        std::string data = R"("pluginName":"VTSFloat_Meow","pluginDeveloper":"fushoufish","pluginIcon":")" + iconB64 + R"(")";
         std::string request = BuildJsonRequest("AuthenticationTokenRequest", data);
         if (!SendJson(request)) {
             authPending_.store(false, std::memory_order_relaxed);
@@ -1354,7 +1383,7 @@ private:
         SaveToken();
         Log("[vts-api] received new token");
 
-        std::string authData = R"("pluginName":"VTSFloat_Meow","pluginDeveloper":"Lily","authenticationToken":")" + cachedToken_ + R"(")";
+        std::string authData = R"("pluginName":"VTSFloat_Meow","pluginDeveloper":"fushoufish","authenticationToken":")" + cachedToken_ + R"(")";
         std::string authReq = BuildJsonRequest("AuthenticationRequest", authData);
         if (!SendJson(authReq)) {
             authPending_.store(false, std::memory_order_relaxed);
@@ -1526,14 +1555,12 @@ private:
                             if (!duplicate) parsed.push_back(std::move(info));
                         }
                     }
-                    const size_t expressionCount = parsed.size();
                     {
                         std::lock_guard<std::mutex> lock(mutex_);
                         expressions_ = std::move(parsed);
                         lastExpressionModelId_ = ExtractJsonString(response, "modelName");
+                        ++expressionStateRevision_;
                     }
-                    Log("[api] expression_state count=" +
-                        std::to_string(expressionCount));
                 }
             }
         }
@@ -1542,27 +1569,35 @@ private:
         {
             std::lock_guard<std::mutex> lock(expressionCommandMutex_);
             commands.swap(expressionCommands_);
+            expressionCommandsInFlight_ += commands.size();
         }
         for (const auto& command : commands) {
             const std::string data =
                 R"("expressionFile":")" + EscapeJsonString(command.file) +
                 R"(","active":)" + (command.active ? "true" : "false") +
                 R"(,"fadeTime":)" + std::to_string((std::clamp)(command.fadeTime, 0.0, 2.0));
+            bool retry = false;
             if (!SendJson(BuildJsonRequest("ExpressionActivationRequest", data))) {
                 // Preserve a valid hover transition if the socket was busy or
                 // briefly unavailable. The next connection/pump will retry it.
-                SetExpressionActive(command.file, command.active, command.fadeTime);
-                continue;
+                retry = true;
+            } else {
+                const std::string response = ReceiveJson();
+                retry = response.empty();
             }
-            const std::string response = ReceiveJson();
-            if (response.empty()) {
+            if (retry) {
                 SetExpressionActive(command.file, command.active, command.fadeTime);
-                continue;
             }
-            if (ExtractJsonString(response, "messageType") == "APIError") continue;
             // SetExpressionActive updates the cache optimistically when the
             // command is queued. Do not overwrite it here: a newer opposite
             // command may already be waiting while this response arrives.
+            {
+                std::lock_guard<std::mutex> lock(expressionCommandMutex_);
+                if (expressionCommandsInFlight_ > 0) {
+                    --expressionCommandsInFlight_;
+                }
+            }
+            expressionCommandCondition_.notify_all();
         }
     }
 
@@ -1605,8 +1640,11 @@ private:
     ExtraStats extraStats_;
     std::vector<ExpressionInfo> expressions_;
     std::string lastExpressionModelId_;
+    std::uint64_t expressionStateRevision_ = 0;
     std::mutex expressionCommandMutex_;
+    std::condition_variable expressionCommandCondition_;
     std::deque<VtsExpressionCommand> expressionCommands_;
+    size_t expressionCommandsInFlight_ = 0;
     std::atomic<bool> expressionStateRequested_{ false };
 
     HINTERNET hSession_ = nullptr;
@@ -2123,6 +2161,10 @@ public:
     }
 
     ~LayeredOverlay() {
+        // WM_CLOSE normally performs this first. Keep a destructor fallback so
+        // every orderly message-loop exit still restores temporary VTS state
+        // before the API worker is stopped.
+        RestoreExpressionsBeforeShutdown();
         if (borderPanelHwnd_ && IsWindow(borderPanelHwnd_)) {
             DestroyWindow(borderPanelHwnd_);
         }
@@ -2728,8 +2770,26 @@ private:
         LoadSubjectHoverMask();
         hoverExpressionEnabled_ = ReadConfigInt(
             L"expression", L"hover_enabled", 0) != 0;
-        hoverExpressionFile_ = WideToUtf8(ReadConfigString(
-            L"expression", L"hover_file").c_str());
+        hoverExpressionFiles_.clear();
+        const int expressionFileCount = ReadConfigInt(
+            L"expression", L"hover_file_count", -1);
+        if (expressionFileCount >= 0) {
+            for (int i = 0; i < (std::min)(expressionFileCount, 128); ++i) {
+                const std::wstring key = L"hover_file_" + std::to_wstring(i);
+                const std::string file = WideToUtf8(
+                    ReadConfigString(L"expression", key.c_str()).c_str());
+                if (!file.empty() && std::find(
+                        hoverExpressionFiles_.begin(), hoverExpressionFiles_.end(),
+                        file) == hoverExpressionFiles_.end()) {
+                    hoverExpressionFiles_.push_back(file);
+                }
+            }
+        } else {
+            // Migrate the Beta 1.0.3 single-expression setting.
+            const std::string legacyFile = WideToUtf8(ReadConfigString(
+                L"expression", L"hover_file").c_str());
+            if (!legacyFile.empty()) hoverExpressionFiles_.push_back(legacyFile);
+        }
         hoverExpressionDurationSeconds_ = ReadConfigNonNegativeDecimal(
             L"expression", L"hover_duration_seconds",
             kDefaultHoverExpressionDurationSeconds);
@@ -2779,7 +2839,17 @@ private:
         WriteConfigInt(L"opacity", L"subject_hover_region_right", subjectHoverRegionRight_);
         WriteConfigInt(L"opacity", L"subject_hover_region_bottom", subjectHoverRegionBottom_);
         WriteConfigInt(L"expression", L"hover_enabled", hoverExpressionEnabled_ ? 1 : 0);
-        WriteConfigString(L"expression", L"hover_file", Utf8ToWide(hoverExpressionFile_));
+        WriteConfigInt(L"expression", L"hover_file_count",
+            static_cast<int>(hoverExpressionFiles_.size()));
+        for (size_t i = 0; i < hoverExpressionFiles_.size(); ++i) {
+            const std::wstring key = L"hover_file_" + std::to_wstring(i);
+            WriteConfigString(L"expression", key.c_str(),
+                Utf8ToWide(hoverExpressionFiles_[i]));
+        }
+        // Keep the old key readable by earlier builds without making it the
+        // source of truth for this multi-select format.
+        WriteConfigString(L"expression", L"hover_file",
+            hoverExpressionFiles_.empty() ? L"" : Utf8ToWide(hoverExpressionFiles_.front()));
         WriteConfigString(
             L"expression", L"hover_duration_seconds",
             FormatNonNegativeDecimal(hoverExpressionDurationSeconds_));
@@ -2837,7 +2907,7 @@ private:
         subjectHoverTrackingScale_ = 1.0;
         CancelHoverExpression();
         hoverExpressionEnabled_ = false;
-        hoverExpressionFile_.clear();
+        hoverExpressionFiles_.clear();
         hoverExpressionDurationSeconds_ = kDefaultHoverExpressionDurationSeconds;
         aspectLocked_ = true;
         borderMode_ = kBorderModeNormal;
@@ -3772,10 +3842,14 @@ private:
             static_cast<const BYTE*>(data), size);
         if (!stream) { Gdiplus::GdiplusShutdown(token); return; }
 
+        // GDI+ keeps using the source stream for the entire lifetime of an
+        // image created by FromStream. Releasing it here happened to work on
+        // some machines, but could dereference freed memory when the guide
+        // window was closed (0xC0000005). Keep it alive until after Bitmap.
         Gdiplus::Bitmap* bitmap = Gdiplus::Bitmap::FromStream(stream);
-        stream->Release();
         if (!bitmap || bitmap->GetLastStatus() != Gdiplus::Ok) {
             delete bitmap;
+            stream->Release();
             Gdiplus::GdiplusShutdown(token);
             return;
         }
@@ -3810,6 +3884,7 @@ private:
             toolbarHwnd_, nullptr, instance_, nullptr);
         if (!guideHwnd) {
             delete bitmap;
+            stream->Release();
             Gdiplus::GdiplusShutdown(token);
             return;
         }
@@ -3833,7 +3908,9 @@ private:
         ReleaseDC(guideHwnd, dc);
 
         MSG msg{};
-        while (IsWindow(guideHwnd) && GetMessageW(&msg, nullptr, 0, 0)) {
+        BOOL messageResult = TRUE;
+        while (IsWindow(guideHwnd) &&
+               (messageResult = GetMessageW(&msg, nullptr, 0, 0)) > 0) {
             if (msg.hwnd == guideHwnd && msg.message == WM_SYSCOMMAND &&
                 (msg.wParam & 0xFFF0) == SC_CLOSE) {
                 DestroyWindow(guideHwnd);
@@ -3842,9 +3919,12 @@ private:
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        // Preserve an application quit request consumed by this nested loop.
+        if (messageResult == 0) PostQuitMessage(static_cast<int>(msg.wParam));
         if (IsWindow(guideHwnd)) DestroyWindow(guideHwnd);
         UnregisterClassW(L"VTSFloatApiGuide", instance_);
         delete bitmap;
+        stream->Release();
         Gdiplus::GdiplusShutdown(token);
     }
 
@@ -4268,7 +4348,7 @@ private:
         double originalSubjectHoverTrackingReferenceWidth = 0.0;
         double originalSubjectHoverTrackingReferenceHeight = 0.0;
         bool originalHoverExpressionEnabled = false;
-        std::string originalHoverExpressionFile;
+        std::vector<std::string> originalHoverExpressionFiles;
         double originalHoverExpressionDurationSeconds =
             kDefaultHoverExpressionDurationSeconds;
         bool editingHoverExpressionDuration = false;
@@ -4286,6 +4366,19 @@ private:
         bool draggingPanel = false;
         POINT dragStartCursor{};
         POINT dragStartWindow{};
+    };
+
+    struct ExpressionPickerState {
+        LayeredOverlay* overlay = nullptr;
+        HWND ownerPanel = nullptr;
+        std::vector<VtsApiClient::ExpressionInfo> expressions;
+        int scrollOffset = 0;
+        int hoveredRow = -1;
+        bool hoveredFinish = false;
+        bool draggingScrollThumb = false;
+        int scrollDragStartY = 0;
+        int scrollDragStartOffset = 0;
+        bool scheduleRestoreOnClose = true;
     };
 
     static RainbowColor HsvWheelColor(
@@ -4605,7 +4698,50 @@ private:
     }
 
     static int PersonalPanelHeight(const LayeredOverlay* overlay) {
-        return overlay && overlay->borderMode_ == kBorderModeCustom ? 738 : 518;
+        if (!overlay) return 518;
+        const int baseHeight = overlay->borderMode_ == kBorderModeCustom
+            ? 738 : 518;
+        // Enabling hover expressions inserts the duration editor. Reserve a
+        // real row for it instead of pushing the expression selector into the
+        // footer buttons.
+        return baseHeight + (overlay->hoverExpressionEnabled_ ? 38 : 0);
+    }
+
+    static double PersonalPanelScale(const LayeredOverlay* overlay) {
+        HMONITOR monitor = overlay && overlay->hwnd_
+            ? MonitorFromWindow(overlay->hwnd_, MONITOR_DEFAULTTONEAREST)
+            : nullptr;
+        MONITORINFO info{};
+        info.cbSize = sizeof(info);
+        if (!monitor || !GetMonitorInfoW(monitor, &info)) return 1.0;
+        const int width = info.rcWork.right - info.rcWork.left;
+        if (width < 3400) return 1.0;
+        // A fixed, mild enlargement is intentional. Following 150%/200% DPI
+        // here made this already compact custom layout 1.5-1.6x larger and
+        // squeezed labels/values. 1.15x remains readable on 4K without turning
+        // the editor into a large modal sheet.
+        return 1.15;
+    }
+
+    static int PersonalPanelPixelWidth(const LayeredOverlay* overlay) {
+        return static_cast<int>(std::lround(420 * PersonalPanelScale(overlay)));
+    }
+
+    static int PersonalPanelPixelHeight(const LayeredOverlay* overlay) {
+        return static_cast<int>(std::lround(
+            PersonalPanelHeight(overlay) * PersonalPanelScale(overlay)));
+    }
+
+    static POINT PersonalPanelLogicalPoint(
+        HWND panel, const LayeredOverlay* overlay, int x, int y) {
+        RECT client{};
+        GetClientRect(panel, &client);
+        const int width = (std::max)(1L, client.right - client.left);
+        const int height = (std::max)(1L, client.bottom - client.top);
+        return POINT{
+            static_cast<LONG>(std::lround(x * 420.0 / width)),
+            static_cast<LONG>(std::lround(
+                y * 1.0 * PersonalPanelHeight(overlay) / height)) };
     }
 
     static int UiFontSize(HWND window, int baseSize) {
@@ -4623,11 +4759,13 @@ private:
         if (!monitor || !GetMonitorInfoW(monitor, &info)) return baseSize;
         const int width = info.rcWork.right - info.rcWork.left;
         double scale = 1.0;
-        // The overlay uses fixed pixel-sized controls.  Reduce text slightly
-        // on 2K/4K work areas so it does not dominate the compact toolbar and
-        // personalization panel; 1080p keeps the original sizing.
+        // Toolbar controls have deliberately compact, fixed logical widths.
+        // The personalization panel is scaled as a complete surface on 4K;
+        // font-only DPI enlargement here would squeeze toolbar labels without
+        // enlarging their buttons. Keep toolbar text compact on high-resolution
+        // monitors and let the panel/window scaling handle accessibility.
         if (width >= 3400) {
-            scale = 0.80;
+            scale = window ? 0.92 : 1.0;
         } else if (width >= 2200) {
             scale = 0.88;
         }
@@ -4637,11 +4775,14 @@ private:
     static void PanelText(
         HDC dc, const std::wstring& text, RECT rect, COLORREF color,
         int pixelHeight = 15, bool bold = false, UINT flags = DT_LEFT | DT_VCENTER) {
+        // Panel coordinates are logical units and the destination DC performs
+        // the 4K mapping. Do not derive this font from the cursor monitor: that
+        // made labels change size between repaints and forced bitmap scaling.
         HFONT font = CreateFontW(
-            -UiFontSize(nullptr, pixelHeight), 0, 0, 0,
+            -pixelHeight, 0, 0, 0,
             bold ? FW_SEMIBOLD : FW_NORMAL, FALSE, FALSE,
             FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+            CLEARTYPE_NATURAL_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         HGDIOBJ old = SelectObject(dc, font);
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, color);
@@ -4697,12 +4838,20 @@ private:
         LayeredOverlay* overlay = state->overlay;
         PAINTSTRUCT paint{};
         HDC target = BeginPaint(panel, &paint);
-        RECT client{};
-        GetClientRect(panel, &client);
+        RECT actualClient{};
+        GetClientRect(panel, &actualClient);
+        RECT client{ 0, 0, 420, PersonalPanelHeight(overlay) };
         HDC dc = CreateCompatibleDC(target);
         HBITMAP backBuffer = CreateCompatibleBitmap(
-            target, (std::max)(1L, client.right), (std::max)(1L, client.bottom));
+            target,
+            (std::max)(1L, actualClient.right - actualClient.left),
+            (std::max)(1L, actualClient.bottom - actualClient.top));
         HGDIOBJ oldBitmap = SelectObject(dc, backBuffer);
+        SetMapMode(dc, MM_ANISOTROPIC);
+        SetWindowExtEx(dc, client.right, client.bottom, nullptr);
+        SetViewportExtEx(dc,
+            actualClient.right - actualClient.left,
+            actualClient.bottom - actualClient.top, nullptr);
         PanelFill(dc, client, RGB(14, 24, 39));
 
         RECT header{ 0, 0, client.right, 44 };
@@ -4830,13 +4979,13 @@ private:
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
         PanelText(dc, L"启用手动框选范围",
-            RECT{ 48, y, 195, y + 28 }, RGB(220, 232, 248), 12, false,
+            RECT{ 48, y, 195, y + 28 }, RGB(220, 232, 248), 13, false,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         const RECT subjectReselectButton{ 198, y + 1, 402, y + 27 };
         PanelFill(dc, subjectReselectButton, state->activeHit == 17
             ? RGB(48, 122, 193) : RGB(26, 46, 71));
         PanelText(dc, L"手动框选悬停触发范围",
-            subjectReselectButton, RGB(166, 211, 255), 11, true,
+            subjectReselectButton, RGB(166, 211, 255), 13, true,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
         y += 42;
@@ -4885,11 +5034,14 @@ private:
         RECT expressionButton{ 20, y, 405, y + 32 };
         PanelFill(dc, expressionButton, RGB(26, 46, 71));
         std::wstring expressionLabel = L"选择表情";
-        if (!overlay->hoverExpressionFile_.empty()) {
+        if (overlay->hoverExpressionFiles_.size() == 1) {
             expressionLabel = L"表情：" + Utf8ToWide(
-                StripExpressionSuffix(overlay->hoverExpressionFile_));
+                StripExpressionSuffix(overlay->hoverExpressionFiles_.front()));
+        } else if (!overlay->hoverExpressionFiles_.empty()) {
+            expressionLabel = L"已选择 " +
+                std::to_wstring(overlay->hoverExpressionFiles_.size()) + L" 个表情";
         }
-        PanelText(dc, expressionLabel, expressionButton, RGB(240, 246, 255), 12, true,
+        PanelText(dc, expressionLabel, expressionButton, RGB(240, 246, 255), 13, true,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         const int footerY = client.bottom - 48;
@@ -4903,15 +5055,23 @@ private:
             PanelText(dc, footer[i], button, RGB(240, 246, 255), 13, true,
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
-        BitBlt(target, 0, 0, client.right, client.bottom, dc, 0, 0, SRCCOPY);
+        SetMapMode(dc, MM_TEXT);
+        BitBlt(target, 0, 0,
+            actualClient.right - actualClient.left,
+            actualClient.bottom - actualClient.top,
+            dc, 0, 0, SRCCOPY);
         SelectObject(dc, oldBitmap);
         DeleteObject(backBuffer);
         DeleteDC(dc);
         EndPaint(panel, &paint);
     }
 
-    static int PersonalPanelHitTest(const LayeredOverlay* overlay, int x, int y) {
+    static int PersonalPanelHitTest(
+        HWND panel, const LayeredOverlay* overlay, int x, int y) {
         if (!overlay) return 0;
+        const POINT logical = PersonalPanelLogicalPoint(panel, overlay, x, y);
+        x = logical.x;
+        y = logical.y;
         if (x >= 370 && x < 420 && y < 44) return 1; // close
         const int modeLeft = 105;
         const int modeWidth = (420 - modeLeft - 16) / 3;
@@ -4959,6 +5119,7 @@ private:
         HWND panel, BorderDialogState* state, int hit, int x) {
         if (!state || !state->overlay) return;
         LayeredOverlay* overlay = state->overlay;
+        x = PersonalPanelLogicalPoint(panel, overlay, x, 0).x;
         const int left = hit == 4 ? 245 : (hit == 5 ? 110 : 130);
         const int right = hit == 4 ? 405 : (hit == 8 ? 330 : 355);
         const int clampedX = (std::clamp)(x, left, right);
@@ -4998,6 +5159,10 @@ private:
 
     static void UpdatePersonalWheel(HWND panel, BorderDialogState* state, int x, int y) {
         if (!state || !state->overlay) return;
+        const POINT logical = PersonalPanelLogicalPoint(
+            panel, state->overlay, x, y);
+        x = logical.x;
+        y = logical.y;
         const RECT wheel = PersonalWheelRect(state->overlay);
         const double centerX = (wheel.left + wheel.right) / 2.0;
         const double centerY = (wheel.top + wheel.bottom) / 2.0;
@@ -5027,6 +5192,7 @@ private:
     static void ResetPersonalPanel(HWND panel, BorderDialogState* state) {
         if (!state || !state->overlay) return;
         LayeredOverlay* overlay = state->overlay;
+        CloseExpressionPicker(overlay->expressionPickerHwnd_, false);
         overlay->borderMode_ = kBorderModeNormal;
         overlay->customBorderColor_ = kDefaultCustomBorderColor;
         CustomColorHueSaturation(overlay->customBorderColor_, state->colorHue, state->colorSaturation);
@@ -5049,7 +5215,7 @@ private:
         overlay->subjectHoverTrackingScale_ = 1.0;
         overlay->CancelHoverExpression();
         overlay->hoverExpressionEnabled_ = false;
-        overlay->hoverExpressionFile_.clear();
+        overlay->hoverExpressionFiles_.clear();
         overlay->hoverExpressionDurationSeconds_ =
             kDefaultHoverExpressionDurationSeconds;
         state->editingHoverExpressionDuration = false;
@@ -5068,6 +5234,7 @@ private:
     static void RestorePersonalPanel(HWND panel, BorderDialogState* state) {
         if (!state || !state->overlay) return;
         LayeredOverlay* overlay = state->overlay;
+        CloseExpressionPicker(overlay->expressionPickerHwnd_, false);
         overlay->borderMode_ = state->originalMode;
         overlay->customBorderColor_ = state->originalColor;
         overlay->borderThickness_ = state->originalThickness;
@@ -5100,7 +5267,7 @@ private:
             overlay->subjectHoverTrackingReferenceCenterY_;
         overlay->subjectHoverTrackingScale_ = 1.0;
         overlay->hoverExpressionEnabled_ = state->originalHoverExpressionEnabled;
-        overlay->hoverExpressionFile_ = state->originalHoverExpressionFile;
+        overlay->hoverExpressionFiles_ = state->originalHoverExpressionFiles;
         overlay->hoverExpressionDurationSeconds_ =
             state->originalHoverExpressionDurationSeconds;
         overlay->RestorePanelExpressionPreview();
@@ -5114,55 +5281,440 @@ private:
         DestroyWindow(panel);
     }
 
+    static constexpr int kExpressionPickerWidth = 385;
+    static constexpr int kExpressionPickerRowHeight = 30;
+    static constexpr int kExpressionPickerMaxVisibleRows = 8;
+
+    static bool ExpressionSelected(
+        const LayeredOverlay* overlay, const std::string& file) {
+        return overlay && std::find(
+            overlay->hoverExpressionFiles_.begin(),
+            overlay->hoverExpressionFiles_.end(), file) !=
+            overlay->hoverExpressionFiles_.end();
+    }
+
+    static int ExpressionPickerVisibleRows(const ExpressionPickerState* state) {
+        if (!state) return 1;
+        return (std::max)(1, (std::min)(
+            static_cast<int>(state->expressions.size()),
+            kExpressionPickerMaxVisibleRows));
+    }
+
+    static int ExpressionPickerHeight(const ExpressionPickerState* state) {
+        return 10 + ExpressionPickerVisibleRows(state) *
+            kExpressionPickerRowHeight + 44;
+    }
+
+    static int ExpressionPickerMaxScroll(const ExpressionPickerState* state) {
+        if (!state) return 0;
+        return (std::max)(0, static_cast<int>(state->expressions.size()) -
+            ExpressionPickerVisibleRows(state));
+    }
+
+    static RECT ExpressionPickerScrollTrack(const ExpressionPickerState* state) {
+        return RECT{ kExpressionPickerWidth - 13, 7,
+            kExpressionPickerWidth - 5,
+            7 + ExpressionPickerVisibleRows(state) * kExpressionPickerRowHeight - 2 };
+    }
+
+    static RECT ExpressionPickerScrollThumb(const ExpressionPickerState* state) {
+        const RECT track = ExpressionPickerScrollTrack(state);
+        const int trackHeight = track.bottom - track.top;
+        const int total = state ? static_cast<int>(state->expressions.size()) : 0;
+        const int visible = ExpressionPickerVisibleRows(state);
+        if (total <= visible || total <= 0) return RECT{};
+        const int thumbHeight = (std::max)(22, trackHeight * visible / total);
+        const int travel = (std::max)(1, trackHeight - thumbHeight);
+        const int maximum = ExpressionPickerMaxScroll(state);
+        const int top = track.top + (maximum > 0
+            ? state->scrollOffset * travel / maximum : 0);
+        return RECT{ track.left, top, track.right, top + thumbHeight };
+    }
+
+    static void SetExpressionPickerScrollFromThumbY(
+        ExpressionPickerState* state, int logicalY) {
+        if (!state) return;
+        const int maximum = ExpressionPickerMaxScroll(state);
+        if (maximum <= 0) {
+            state->scrollOffset = 0;
+            return;
+        }
+        const RECT track = ExpressionPickerScrollTrack(state);
+        const RECT thumb = ExpressionPickerScrollThumb(state);
+        const int travel = (std::max)(1,
+            static_cast<int>((track.bottom - track.top) -
+                (thumb.bottom - thumb.top)));
+        const int delta = logicalY - state->scrollDragStartY;
+        state->scrollOffset = (std::clamp)(
+            state->scrollDragStartOffset +
+                static_cast<int>(std::lround(delta * maximum * 1.0 / travel)),
+            0, maximum);
+    }
+
+    static POINT ExpressionPickerLogicalPoint(
+        HWND picker, const ExpressionPickerState* state, int x, int y) {
+        RECT client{};
+        GetClientRect(picker, &client);
+        const int width = (std::max)(1L, client.right - client.left);
+        const int height = (std::max)(1L, client.bottom - client.top);
+        return POINT{
+            static_cast<LONG>(std::lround(
+                x * kExpressionPickerWidth * 1.0 / width)),
+            static_cast<LONG>(std::lround(
+                y * ExpressionPickerHeight(state) * 1.0 / height)) };
+    }
+
+    static void DrawExpressionPicker(HWND picker, ExpressionPickerState* state) {
+        PAINTSTRUCT paint{};
+        HDC target = BeginPaint(picker, &paint);
+        RECT actualClient{};
+        GetClientRect(picker, &actualClient);
+        RECT client{ 0, 0, kExpressionPickerWidth,
+            ExpressionPickerHeight(state) };
+        HDC dc = CreateCompatibleDC(target);
+        HBITMAP bitmap = CreateCompatibleBitmap(target,
+            (std::max)(1L, actualClient.right - actualClient.left),
+            (std::max)(1L, actualClient.bottom - actualClient.top));
+        HGDIOBJ oldBitmap = SelectObject(dc, bitmap);
+        SetMapMode(dc, MM_ANISOTROPIC);
+        SetWindowExtEx(dc, client.right, client.bottom, nullptr);
+        SetViewportExtEx(dc,
+            actualClient.right - actualClient.left,
+            actualClient.bottom - actualClient.top, nullptr);
+        PanelFill(dc, client, RGB(14, 24, 39));
+        HBRUSH border = CreateSolidBrush(RGB(48, 122, 193));
+        FrameRect(dc, &client, border);
+        DeleteObject(border);
+
+        const int visibleRows = ExpressionPickerVisibleRows(state);
+        if (state->expressions.empty()) {
+            PanelText(dc, L"暂无可用表情，请确认 VTS API 已连接",
+                RECT{ 12, 10, client.right - 12, 10 + kExpressionPickerRowHeight },
+                RGB(166, 198, 232), 13, false,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        } else {
+            const bool hasScroll = ExpressionPickerMaxScroll(state) > 0;
+            for (int row = 0; row < visibleRows; ++row) {
+                const int index = state->scrollOffset + row;
+                if (index >= static_cast<int>(state->expressions.size())) break;
+                const auto& expression = state->expressions[index];
+                RECT rowRect{ 6, 6 + row * kExpressionPickerRowHeight,
+                    client.right - (hasScroll ? 20 : 6),
+                    6 + (row + 1) * kExpressionPickerRowHeight };
+                if (row == state->hoveredRow) {
+                    PanelFill(dc, rowRect, RGB(25, 55, 86));
+                }
+                RECT check{ 12, rowRect.top + 6, 30, rowRect.top + 24 };
+                const bool selected = ExpressionSelected(state->overlay, expression.file);
+                PanelFill(dc, check, selected ? RGB(55, 139, 221) : RGB(41, 58, 80));
+                if (selected) {
+                    PanelText(dc, L"✓", check, RGB(255, 255, 255), 14, true,
+                        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                }
+                std::wstring label = Utf8ToWide(
+                    expression.name.empty()
+                        ? StripExpressionSuffix(expression.file)
+                        : StripExpressionSuffix(expression.name));
+                if (label.empty()) label = L"未命名表情";
+                PanelText(dc, label,
+                    RECT{ 40, rowRect.top, client.right - 14, rowRect.bottom },
+                    RGB(232, 241, 253), 13, false,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            }
+            if (hasScroll) {
+                const RECT track = ExpressionPickerScrollTrack(state);
+                const RECT thumb = ExpressionPickerScrollThumb(state);
+                PanelFill(dc, track, RGB(27, 43, 64));
+                PanelFill(dc, thumb, state->draggingScrollThumb
+                    ? RGB(91, 170, 240) : RGB(78, 139, 199));
+            }
+        }
+
+        const int footerTop = client.bottom - 38;
+        RECT separator{ 8, footerTop - 5, client.right - 8, footerTop - 4 };
+        PanelFill(dc, separator, RGB(38, 58, 82));
+        RECT finish{ client.right - 126, footerTop, client.right - 8, client.bottom - 7 };
+        PanelFill(dc, finish, state->hoveredFinish
+            ? RGB(45, 112, 180) : RGB(32, 91, 151));
+        PanelText(dc, L"选择完成", finish, RGB(244, 249, 255), 13, true,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        PanelText(dc,
+            L"已选 " + std::to_wstring(state->overlay->hoverExpressionFiles_.size()) + L" 项",
+            RECT{ 12, footerTop, client.right - 140, client.bottom - 7 },
+            RGB(166, 198, 232), 13, false,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+        SetMapMode(dc, MM_TEXT);
+        BitBlt(target, 0, 0,
+            actualClient.right - actualClient.left,
+            actualClient.bottom - actualClient.top,
+            dc, 0, 0, SRCCOPY);
+        SelectObject(dc, oldBitmap);
+        DeleteObject(bitmap);
+        DeleteDC(dc);
+        EndPaint(picker, &paint);
+    }
+
+    static void CloseExpressionPicker(HWND picker, bool scheduleRestore) {
+        if (!picker || !IsWindow(picker)) return;
+        auto* state = reinterpret_cast<ExpressionPickerState*>(
+            GetWindowLongPtrW(picker, GWLP_USERDATA));
+        if (state) state->scheduleRestoreOnClose = scheduleRestore;
+        DestroyWindow(picker);
+    }
+
+    static LRESULT CALLBACK ExpressionPickerProc(
+        HWND picker, UINT message, WPARAM wParam, LPARAM lParam) {
+        auto* state = reinterpret_cast<ExpressionPickerState*>(
+            GetWindowLongPtrW(picker, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            state = reinterpret_cast<ExpressionPickerState*>(create->lpCreateParams);
+            SetWindowLongPtrW(picker, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
+        }
+        if (!state || !state->overlay) {
+            return DefWindowProcW(picker, message, wParam, lParam);
+        }
+        LayeredOverlay* overlay = state->overlay;
+        switch (message) {
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT:
+            DrawExpressionPicker(picker, state);
+            return 0;
+        case WM_MOUSEMOVE: {
+            const POINT logical = ExpressionPickerLogicalPoint(
+                picker, state, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            const int y = logical.y;
+            RECT client{ 0, 0, kExpressionPickerWidth,
+                ExpressionPickerHeight(state) };
+            const int visibleRows = ExpressionPickerVisibleRows(state);
+            if (state->draggingScrollThumb && GetCapture() == picker) {
+                SetExpressionPickerScrollFromThumbY(state, y);
+                state->hoveredRow = -1;
+                state->hoveredFinish = false;
+                InvalidateRect(picker, nullptr, FALSE);
+                return 0;
+            }
+            const RECT track = ExpressionPickerScrollTrack(state);
+            const bool overScroll = ExpressionPickerMaxScroll(state) > 0 &&
+                logical.x >= track.left - 4;
+            const int row = !overScroll && y >= 6 &&
+                y < 6 + visibleRows * kExpressionPickerRowHeight
+                ? (y - 6) / kExpressionPickerRowHeight : -1;
+            const bool finish = y >= client.bottom - 38 &&
+                logical.x >= client.right - 126;
+            if (row != state->hoveredRow || finish != state->hoveredFinish) {
+                state->hoveredRow = row;
+                state->hoveredFinish = finish;
+                InvalidateRect(picker, nullptr, FALSE);
+            }
+            TRACKMOUSEEVENT tracking{};
+            tracking.cbSize = sizeof(tracking);
+            tracking.dwFlags = TME_LEAVE;
+            tracking.hwndTrack = picker;
+            TrackMouseEvent(&tracking);
+            return 0;
+        }
+        case WM_MOUSELEAVE:
+            state->hoveredRow = -1;
+            state->hoveredFinish = false;
+            InvalidateRect(picker, nullptr, FALSE);
+            return 0;
+        case WM_MOUSEWHEEL:
+            if (state->expressions.size() > kExpressionPickerMaxVisibleRows) {
+                const int maximum = static_cast<int>(state->expressions.size()) -
+                    kExpressionPickerMaxVisibleRows;
+                state->scrollOffset = (std::clamp)(state->scrollOffset +
+                    (GET_WHEEL_DELTA_WPARAM(wParam) < 0 ? 1 : -1), 0, maximum);
+                InvalidateRect(picker, nullptr, FALSE);
+            }
+            return 0;
+        case WM_LBUTTONDOWN: {
+            SetFocus(picker);
+            const POINT logical = ExpressionPickerLogicalPoint(
+                picker, state, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            const int x = logical.x;
+            const int y = logical.y;
+            RECT client{ 0, 0, kExpressionPickerWidth,
+                ExpressionPickerHeight(state) };
+            if (y >= client.bottom - 38 && x >= client.right - 126) {
+                CloseExpressionPicker(picker, true);
+                return 0;
+            }
+            if (ExpressionPickerMaxScroll(state) > 0) {
+                const RECT track = ExpressionPickerScrollTrack(state);
+                const RECT thumb = ExpressionPickerScrollThumb(state);
+                if (x >= track.left - 4 && x <= track.right + 4 &&
+                    y >= track.top && y <= track.bottom) {
+                    if (!PtInRect(&thumb, POINT{ x, y })) {
+                        const int thumbHeight = static_cast<int>(
+                            thumb.bottom - thumb.top);
+                        const int travel = (std::max)(1,
+                            static_cast<int>(track.bottom - track.top) - thumbHeight);
+                        const int position = (std::clamp)(
+                            y - static_cast<int>(track.top) - thumbHeight / 2,
+                            0, travel);
+                        state->scrollOffset = static_cast<int>(std::lround(
+                            position * ExpressionPickerMaxScroll(state) * 1.0 /
+                            travel));
+                    }
+                    state->draggingScrollThumb = true;
+                    state->scrollDragStartY = y;
+                    state->scrollDragStartOffset = state->scrollOffset;
+                    SetCapture(picker);
+                    InvalidateRect(picker, nullptr, FALSE);
+                    return 0;
+                }
+            }
+            const int visibleRows = ExpressionPickerVisibleRows(state);
+            if (y >= 6 && y < 6 + visibleRows * kExpressionPickerRowHeight) {
+                const int index = state->scrollOffset +
+                    (y - 6) / kExpressionPickerRowHeight;
+                if (index >= 0 && index < static_cast<int>(state->expressions.size())) {
+                    const std::string& file = state->expressions[index].file;
+                    auto selected = std::find(overlay->hoverExpressionFiles_.begin(),
+                        overlay->hoverExpressionFiles_.end(), file);
+                    if (selected == overlay->hoverExpressionFiles_.end()) {
+                        overlay->hoverExpressionFiles_.push_back(file);
+                    } else {
+                        overlay->hoverExpressionFiles_.erase(selected);
+                    }
+                    overlay->PreviewExpressionsFromPanel();
+                    if (state->ownerPanel && IsWindow(state->ownerPanel)) {
+                        RefreshPersonalPanel(state->ownerPanel);
+                    }
+                    InvalidateRect(picker, nullptr, FALSE);
+                }
+            }
+            return 0;
+        }
+        case WM_LBUTTONUP:
+            if (state->draggingScrollThumb) {
+                state->draggingScrollThumb = false;
+                if (GetCapture() == picker) ReleaseCapture();
+                InvalidateRect(picker, nullptr, FALSE);
+                return 0;
+            }
+            break;
+        case WM_CAPTURECHANGED:
+            state->draggingScrollThumb = false;
+            InvalidateRect(picker, nullptr, FALSE);
+            return 0;
+        case WM_KEYDOWN:
+            if (wParam == VK_RETURN || wParam == VK_ESCAPE) {
+                CloseExpressionPicker(picker, true);
+                return 0;
+            }
+            break;
+        case WM_ACTIVATE:
+            if (LOWORD(wParam) == WA_INACTIVE) {
+                CloseExpressionPicker(picker, true);
+                return 0;
+            }
+            break;
+        case WM_DESTROY:
+            overlay->expressionPickerHwnd_ = nullptr;
+            if (state->scheduleRestoreOnClose && state->ownerPanel &&
+                IsWindow(state->ownerPanel)) {
+                // The 2.5 second preview wait begins only after the multi-select
+                // dropdown is closed. While it is open, every checked expression
+                // remains continuously applied.
+                SetTimer(state->ownerPanel, 94,
+                    kExpressionSelectionPreviewWaitMs, nullptr);
+                overlay->suppressHoverExpressionUntilCursorLeaves_ = true;
+                RefreshPersonalPanel(state->ownerPanel);
+            }
+            return 0;
+        case WM_NCDESTROY:
+            SetWindowLongPtrW(picker, GWLP_USERDATA, 0);
+            delete state;
+            return DefWindowProcW(picker, message, wParam, lParam);
+        default:
+            break;
+        }
+        return DefWindowProcW(picker, message, wParam, lParam);
+    }
+
     static void ShowExpressionMenu(HWND panel, BorderDialogState* state) {
         if (!state || !state->overlay) return;
         LayeredOverlay* overlay = state->overlay;
-        const auto expressions = overlay->vtsApi_.GetExpressions();
-        HMENU menu = CreatePopupMenu();
-        if (!menu) return;
-        constexpr UINT kExpressionBase = 6200;
-        if (expressions.empty()) {
-            AppendMenuW(menu, MF_STRING | MF_GRAYED, kExpressionBase,
-                L"暂无可用表情（请确认 VTS API 已连接）");
-            overlay->vtsApi_.RequestExpressionState();
-        } else {
-            for (size_t i = 0; i < expressions.size(); ++i) {
-                const auto& expression = expressions[i];
-                std::wstring label = Utf8ToWide(
-                    expression.name.empty() ? expression.file : expression.name);
-                if (label.empty()) label = L"未命名表情";
-                if (expression.file == overlay->hoverExpressionFile_) {
-                    label += L"  ✓";
-                }
-                AppendMenuW(menu,
-                    MF_STRING | (expression.file == overlay->hoverExpressionFile_
-                        ? MF_CHECKED : 0),
-                    kExpressionBase + static_cast<UINT>(i), label.c_str());
-            }
-        }
-        RECT button{ 20, 0, 258, 0 };
-        const int base = overlay->borderMode_ == kBorderModeCustom ? 330 : 105;
-        // The expression button follows the checkbox and optional duration
-        // row in the same fixed-spacing layout used by DrawPersonalPanel.
-        button.top = base + (overlay->hoverExpressionEnabled_ ? 327 : 289);
-        button.bottom = button.top + 32;
-        POINT popup{ button.left, button.bottom };
-        ClientToScreen(panel, &popup);
-        const UINT command = overlay->RunModalWhileRendering([&]() {
-            return TrackPopupMenu(menu,
-                TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN,
-                popup.x, popup.y, 0, panel, nullptr);
-        });
-        DestroyMenu(menu);
-        if (command < kExpressionBase ||
-            command >= kExpressionBase + expressions.size()) {
+        if (overlay->expressionPickerHwnd_ &&
+            IsWindow(overlay->expressionPickerHwnd_)) {
+            SetForegroundWindow(overlay->expressionPickerHwnd_);
+            SetFocus(overlay->expressionPickerHwnd_);
             return;
         }
-        overlay->hoverExpressionFile_ = expressions[command - kExpressionBase].file;
-        if (overlay->PreviewExpressionFromPanel()) {
-            SetTimer(panel, 94, kExpressionSelectionPreviewTotalMs, nullptr);
+        KillTimer(panel, 94);
+        overlay->CapturePanelExpressionState();
+        auto* pickerState = new ExpressionPickerState{};
+        pickerState->overlay = overlay;
+        pickerState->ownerPanel = panel;
+        pickerState->expressions = overlay->vtsApi_.GetExpressions();
+        if (pickerState->expressions.empty()) {
+            overlay->vtsApi_.RequestExpressionState();
         }
-        RefreshPersonalPanel(panel);
+
+        static const wchar_t kExpressionPickerClass[] =
+            L"LilyVtsExpressionMultiPicker";
+        static bool registered = false;
+        if (!registered) {
+            WNDCLASSW wc{};
+            wc.lpfnWndProc = &LayeredOverlay::ExpressionPickerProc;
+            wc.hInstance = overlay->instance_;
+            wc.hCursor = LoadCursorW(nullptr, IDC_HAND);
+            wc.hbrBackground = nullptr;
+            wc.lpszClassName = kExpressionPickerClass;
+            registered = RegisterClassW(&wc) != 0 ||
+                GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+        }
+        if (!registered) {
+            delete pickerState;
+            return;
+        }
+
+        const int base = overlay->borderMode_ == kBorderModeCustom ? 330 : 105;
+        const int buttonTop = base +
+            (overlay->hoverExpressionEnabled_ ? 327 : 289);
+        const double panelScale = PersonalPanelScale(overlay);
+        POINT popup{
+            static_cast<LONG>(std::lround(20 * panelScale)),
+            static_cast<LONG>(std::lround((buttonTop + 32) * panelScale)) };
+        ClientToScreen(panel, &popup);
+        const int pickerWidth = static_cast<int>(std::lround(
+            kExpressionPickerWidth * panelScale));
+        const int pickerHeight = static_cast<int>(std::lround(
+            ExpressionPickerHeight(pickerState) * panelScale));
+        MONITORINFO monitor{};
+        monitor.cbSize = sizeof(monitor);
+        if (GetMonitorInfoW(MonitorFromPoint(popup, MONITOR_DEFAULTTONEAREST),
+                &monitor)) {
+            popup.x = static_cast<LONG>((std::clamp)(
+                static_cast<int>(popup.x),
+                static_cast<int>(monitor.rcWork.left),
+                static_cast<int>(monitor.rcWork.right) - pickerWidth));
+            if (popup.y + pickerHeight > monitor.rcWork.bottom) {
+                POINT above{
+                    static_cast<LONG>(std::lround(20 * panelScale)),
+                    static_cast<LONG>(std::lround(buttonTop * panelScale)) };
+                ClientToScreen(panel, &above);
+                popup.y = above.y - pickerHeight;
+            }
+        }
+        overlay->expressionPickerHwnd_ = CreateWindowExW(
+            WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+            kExpressionPickerClass, L"选择表情", WS_POPUP,
+            popup.x, popup.y, pickerWidth, pickerHeight,
+            panel, nullptr, overlay->instance_, pickerState);
+        if (!overlay->expressionPickerHwnd_) {
+            delete pickerState;
+            return;
+        }
+        overlay->PreviewExpressionsFromPanel();
+        ShowWindow(overlay->expressionPickerHwnd_, SW_SHOW);
+        SetForegroundWindow(overlay->expressionPickerHwnd_);
+        SetFocus(overlay->expressionPickerHwnd_);
+        UpdateWindow(overlay->expressionPickerHwnd_);
     }
 
     static void ApplyHoverExpressionDurationInput(
@@ -5201,12 +5753,15 @@ private:
                 POINT point{};
                 GetCursorPos(&point);
                 ScreenToClient(panel, &point);
-                const int hit = PersonalPanelHitTest(overlay, point.x, point.y);
+                const int hit = PersonalPanelHitTest(
+                    panel, overlay, point.x, point.y);
                 if (hit == 15) {
                     SetCursor(LoadCursorW(nullptr, IDC_IBEAM));
                     return TRUE;
                 }
-                if (point.y < 44 && hit == 0) {
+                const POINT logical = PersonalPanelLogicalPoint(
+                    panel, overlay, point.x, point.y);
+                if (logical.y < 44 && hit == 0) {
                     SetCursor(LoadCursorW(nullptr, IDC_SIZEALL));
                     return TRUE;
                 }
@@ -5294,12 +5849,14 @@ private:
         case WM_LBUTTONDOWN: {
             const int x = GET_X_LPARAM(lParam);
             const int y = GET_Y_LPARAM(lParam);
-            const int hit = PersonalPanelHitTest(overlay, x, y);
+            const int hit = PersonalPanelHitTest(panel, overlay, x, y);
+            const POINT logical = PersonalPanelLogicalPoint(
+                panel, overlay, x, y);
             if (hit != 15) {
                 state->editingHoverExpressionDuration = false;
                 state->replaceHoverExpressionDurationOnNextInput = false;
             }
-            if (y < 44 && hit == 0) {
+            if (logical.y < 44 && hit == 0) {
                 RECT windowRect{};
                 GetWindowRect(panel, &windowRect);
                 POINT cursor{};
@@ -5394,7 +5951,9 @@ private:
                 }
                 ++overlay->requested_;
                 overlay->RenderFrame();
-                RefreshPersonalPanel(panel);
+                // The duration editor is a real row, so grow/shrink the panel
+                // immediately when the hover-expression option changes.
+                overlay->PositionBorderPanel();
                 return 0;
             }
             if (hit == 15) {
@@ -5422,6 +5981,7 @@ private:
             if (hit == 22) {
                 overlay->EndHoverOpacityPreview();
                 KillTimer(panel, 94);
+                CloseExpressionPicker(overlay->expressionPickerHwnd_, false);
                 overlay->EndPanelExpressionSession();
                 overlay->SaveUiSettings();
                 Log("[toolbar] border_settings_saved mode=" + std::to_string(overlay->borderMode_) +
@@ -5453,7 +6013,7 @@ private:
             {
                 const POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
                 const int hoverHit = PersonalPanelHitTest(
-                    overlay, point.x, point.y);
+                    panel, overlay, point.x, point.y);
                 const bool showSubjectPreview =
                     state->activeHit == 0 && overlay->subjectHoverRegionConfigured_ &&
                     (hoverHit == 16 || hoverHit == 17);
@@ -5533,6 +6093,7 @@ private:
             // in-app panel commits and closes without reopening a modal dialog.
             if (LOWORD(wParam) == IDOK) {
                 overlay->EndHoverOpacityPreview();
+                CloseExpressionPicker(overlay->expressionPickerHwnd_, false);
                 overlay->SaveUiSettings();
                 Log("[toolbar] border_settings_saved mode=" + std::to_string(overlay->borderMode_) +
                     " thickness=" + std::to_string(overlay->borderThickness_));
@@ -5544,6 +6105,7 @@ private:
             RestorePersonalPanel(panel, state);
             return 0;
         case WM_DESTROY:
+            CloseExpressionPicker(overlay->expressionPickerHwnd_, false);
             KillTimer(panel, 1);
             KillTimer(panel, 91);
             KillTimer(panel, 92);
@@ -5605,7 +6167,7 @@ private:
         state->originalSubjectHoverTrackingReferenceHeight =
             subjectHoverTrackingReferenceHeight_;
         state->originalHoverExpressionEnabled = hoverExpressionEnabled_;
-        state->originalHoverExpressionFile = hoverExpressionFile_;
+        state->originalHoverExpressionFiles = hoverExpressionFiles_;
         state->originalHoverExpressionDurationSeconds = hoverExpressionDurationSeconds_;
         state->hoverExpressionDurationInput = FormatNonNegativeDecimal(
             hoverExpressionDurationSeconds_);
@@ -5635,14 +6197,16 @@ private:
             // must be allowed to activate while the user edits a value.
             WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
             kPersonalPanelClass, L"个性化", WS_POPUP,
-            0, 0, 420, PersonalPanelHeight(this), toolbarHwnd_, nullptr, instance_, state);
+            0, 0, PersonalPanelPixelWidth(this), PersonalPanelPixelHeight(this),
+            toolbarHwnd_, nullptr, instance_, state);
         if (!borderPanelHwnd_) {
             Log("[toolbar] border_panel_failed error=" + std::to_string(GetLastError()));
             borderDialogOpen_ = false;
             delete state;
             return;
         }
-        SetWindowPos(borderPanelHwnd_, HWND_TOPMOST, 0, 0, 420, PersonalPanelHeight(this),
+        SetWindowPos(borderPanelHwnd_, HWND_TOPMOST, 0, 0,
+            PersonalPanelPixelWidth(this), PersonalPanelPixelHeight(this),
             SWP_NOACTIVATE | SWP_SHOWWINDOW);
         PositionBorderPanel();
         ShowWindow(borderPanelHwnd_, SW_SHOWNOACTIVATE);
@@ -5735,12 +6299,34 @@ private:
 
     void DrawSubjectSelectionOverlay(HWND window) {
         PAINTSTRUCT paint{};
-        HDC dc = BeginPaint(window, &paint);
+        HDC target = BeginPaint(window, &paint);
+        const int dirtyWidth = paint.rcPaint.right - paint.rcPaint.left;
+        const int dirtyHeight = paint.rcPaint.bottom - paint.rcPaint.top;
+        if (dirtyWidth <= 0 || dirtyHeight <= 0) {
+            EndPaint(window, &paint);
+            return;
+        }
+        // WM_MOUSEMOVE used to repaint the shade and the lasso directly onto
+        // the full-screen layered window. The user could therefore see the
+        // background erase before the new edge was drawn. Compose the dirty
+        // area off-screen and publish it with one BitBlt instead.
+        HDC dc = CreateCompatibleDC(target);
+        HBITMAP backBuffer = CreateCompatibleBitmap(target, dirtyWidth, dirtyHeight);
+        if (!dc || !backBuffer) {
+            if (backBuffer) DeleteObject(backBuffer);
+            if (dc) DeleteDC(dc);
+            EndPaint(window, &paint);
+            return;
+        }
+        HGDIOBJ oldBitmap = SelectObject(dc, backBuffer);
+        RECT dirtyBuffer{ 0, 0, dirtyWidth, dirtyHeight };
+        HBRUSH shade = CreateSolidBrush(RGB(8, 14, 24));
+        FillRect(dc, &dirtyBuffer, shade);
+        DeleteObject(shade);
+        const int savedDc = SaveDC(dc);
+        SetViewportOrgEx(dc, -paint.rcPaint.left, -paint.rcPaint.top, nullptr);
         RECT client{};
         GetClientRect(window, &client);
-        HBRUSH shade = CreateSolidBrush(RGB(8, 14, 24));
-        FillRect(dc, &client, shade);
-        DeleteObject(shade);
 
         HFONT titleFont = CreateFontW(-UiFontSize(window, 22), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE,
             FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
@@ -5821,7 +6407,25 @@ private:
             DeleteObject(outline);
         }
 
+        RestoreDC(dc, savedDc);
+        BitBlt(target, paint.rcPaint.left, paint.rcPaint.top,
+            dirtyWidth, dirtyHeight, dc, 0, 0, SRCCOPY);
+        SelectObject(dc, oldBitmap);
+        DeleteObject(backBuffer);
+        DeleteDC(dc);
         EndPaint(window, &paint);
+    }
+
+    static void InvalidateSubjectSelectionSegment(
+        HWND window, const POINT& from, const POINT& to) {
+        RECT dirty{
+            (std::min)(from.x, to.x),
+            (std::min)(from.y, to.y),
+            (std::max)(from.x, to.x) + 1,
+            (std::max)(from.y, to.y) + 1 };
+        // Includes the 3 px lasso stroke and the 11 px start anchor.
+        InflateRect(&dirty, 14, 14);
+        InvalidateRect(window, &dirty, FALSE);
     }
 
     void DrawSubjectSelectionToolbar(HWND window) {
@@ -6405,12 +7009,22 @@ private:
             }
             return 0;
         }
-        case WM_MOUSEMOVE:
-            overlay->subjectSelectionCursor_ = POINT{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        case WM_MOUSEMOVE: {
+            const POINT nextCursor{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             if (!overlay->subjectSelectionPolygon_.empty()) {
-                InvalidateRect(window, nullptr, FALSE);
+                const POINT previousCursor = overlay->subjectSelectionCursor_;
+                const POINT last = overlay->subjectSelectionPolygon_.back();
+                InvalidateSubjectSelectionSegment(window, last, previousCursor);
+                InvalidateSubjectSelectionSegment(window, last, nextCursor);
+                if (overlay->subjectSelectionPolygon_.size() >= 3) {
+                    const POINT first = overlay->subjectSelectionPolygon_.front();
+                    InvalidateSubjectSelectionSegment(window, first, previousCursor);
+                    InvalidateSubjectSelectionSegment(window, first, nextCursor);
+                }
             }
+            overlay->subjectSelectionCursor_ = nextCursor;
             return 0;
+        }
         case WM_LBUTTONUP:
             // A lasso point is committed on button-down; button-up only stops
             // capture so the cursor can continue previewing the next edge.
@@ -6549,14 +7163,19 @@ private:
 
     void PositionBorderPanel() {
         if (!borderPanelHwnd_ || !IsWindow(borderPanelHwnd_) || !hwnd_) return;
+        const int panelW = PersonalPanelPixelWidth(this);
+        const int panelH = PersonalPanelPixelHeight(this);
         // Once the user drags the personalization panel during this session,
-        // keep its explicit position. Reopening the panel resets this flag and
-        // places it beside the model again.
-        if (personalPanelManuallyPositioned_) return;
+        // keep its explicit position, but still apply layout-driven size
+        // changes (for example the expression-duration row).
+        if (personalPanelManuallyPositioned_) {
+            SetWindowPos(borderPanelHwnd_, HWND_TOPMOST, 0, 0, panelW, panelH,
+                SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            RefreshPersonalPanel(borderPanelHwnd_);
+            return;
+        }
         RECT model{};
         GetWindowRect(hwnd_, &model);
-        const int panelW = 420;
-        const int panelH = PersonalPanelHeight(this);
         MONITORINFO mi{};
         mi.cbSize = sizeof(mi);
         GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
@@ -8298,15 +8917,76 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         return true;
     }
 
+    void RestoreExpressionsBeforeShutdown() {
+        if (expressionShutdownPrepared_) return;
+        expressionShutdownPrepared_ = true;
+
+        // Stop every UI/render path from starting another preview while the
+        // main thread waits for the API worker to acknowledge the restore.
+        suppressHoverExpressionUntilCursorLeaves_ = true;
+
+        std::vector<VtsExpressionState> restoreStates;
+        const char* restoreSource = nullptr;
+        if (expressionPanelPreviewActive_ && expressionPanelStateCaptured_ &&
+            !expressionPanelInitialStates_.empty()) {
+            // The picker can temporarily change the complete expression set,
+            // therefore its pre-preview snapshot is authoritative.
+            restoreStates = expressionPanelInitialStates_;
+            restoreSource = "panel_preview";
+        } else if (hoverExpressionHovered_ && !hoverExpressionRestored_ &&
+                   !hoverExpressionOriginalStates_.empty()) {
+            restoreStates = hoverExpressionOriginalStates_;
+            restoreSource = "model_hover";
+        }
+
+        expressionPanelPreviewActive_ = false;
+        hoverExpressionRestored_ = true;
+        hoverExpressionHovered_ = false;
+        hoverExpressionLeaving_ = false;
+        hoverExpressionRestoreAt_ = Clock::time_point{};
+
+        if (restoreStates.empty()) return;
+
+        // A model may expose dozens of expressions. Send only entries changed
+        // by this program so exit is quick while the complete user baseline is
+        // still preserved.
+        const auto current = vtsApi_.GetExpressions();
+        size_t queued = 0;
+        for (const auto& state : restoreStates) {
+            const auto existing = std::find_if(
+                current.begin(), current.end(),
+                [&state](const VtsApiClient::ExpressionInfo& expression) {
+                    return expression.file == state.file;
+                });
+            if (existing != current.end() && existing->active == state.active) {
+                continue;
+            }
+            // Shutdown restoration is immediate; waiting for a visual fade
+            // would keep the process alive without improving state safety.
+            vtsApi_.SetExpressionActive(state.file, state.active, 0.0);
+            ++queued;
+        }
+        if (queued == 0) return;
+
+        const bool delivered = vtsApi_.WaitForExpressionCommands(
+            std::chrono::milliseconds(4000));
+        Log(std::string("[expression] shutdown restore source=") +
+            (restoreSource ? restoreSource : "unknown") +
+            " commands=" + std::to_string(queued) +
+            " delivered=" + (delivered ? "1" : "0"));
+    }
+
     void RestoreHoverExpression() {
         if (!hoverExpressionHovered_ || hoverExpressionRestored_ ||
-            hoverExpressionFile_.empty()) {
+            hoverExpressionOriginalStates_.empty()) {
             return;
         }
-        vtsApi_.SetExpressionActive(
-            hoverExpressionFile_, hoverExpressionOriginalActive_,
-            kHoverExpressionFadeOutSeconds);
+        for (const auto& state : hoverExpressionOriginalStates_) {
+            vtsApi_.SetExpressionActive(
+                state.file, state.active, kHoverExpressionFadeOutSeconds);
+        }
         hoverExpressionRestored_ = true;
+        hoverExpressionReentryRefreshPending_ = false;
         if (borderDialogOpen_) {
             // Ignore the API cache while our restore command is in flight;
             // otherwise the low-frequency baseline scan could mistake the
@@ -8321,9 +9001,156 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         RestoreHoverExpression();
         hoverExpressionHovered_ = false;
         hoverExpressionRestored_ = false;
-        hoverExpressionOriginalActive_ = false;
+        hoverExpressionOriginalStates_.clear();
+        hoverExpressionBaselineStates_.clear();
+        hoverExpressionExpectedStates_.clear();
+        hoverExpressionCapturePending_ = false;
+        hoverExpressionStatePollPending_ = false;
+        hoverExpressionReentryRefreshPending_ = false;
+        hoverExpressionCaptureRevision_ = 0;
+        hoverExpressionStatePollRevision_ = 0;
+        hoverExpressionNextStatePollAt_ = Clock::time_point{};
         hoverExpressionLeaving_ = false;
         hoverExpressionRestoreAt_ = Clock::time_point{};
+    }
+
+    bool IsConfiguredHoverExpression(const std::string& file) const {
+        return std::find(
+            hoverExpressionFiles_.begin(), hoverExpressionFiles_.end(), file) !=
+            hoverExpressionFiles_.end();
+    }
+
+    static VtsExpressionState* FindExpressionState(
+        std::vector<VtsExpressionState>& states, const std::string& file) {
+        const auto found = std::find_if(
+            states.begin(), states.end(), [&file](const VtsExpressionState& state) {
+                return state.file == file;
+            });
+        return found == states.end() ? nullptr : &*found;
+    }
+
+    static const VtsExpressionState* FindExpressionState(
+        const std::vector<VtsExpressionState>& states, const std::string& file) {
+        const auto found = std::find_if(
+            states.begin(), states.end(), [&file](const VtsExpressionState& state) {
+                return state.file == file;
+            });
+        return found == states.end() ? nullptr : &*found;
+    }
+
+    // Merge a fresh API snapshot into the restore baseline while a hover
+    // expression is active.  The state produced by our own activation is
+    // represented by hoverExpressionExpectedStates_; matching values are not
+    // mistaken for user edits.  Any other change is treated as a new VTS
+    // state (state N) and becomes the next restore baseline (state 2).
+    void MergeHoverExpressionState(
+        const std::vector<VtsApiClient::ExpressionInfo>& expressions) {
+        if (hoverExpressionBaselineStates_.empty() ||
+            hoverExpressionExpectedStates_.empty() || expressions.empty()) {
+            return;
+        }
+
+        const std::vector<VtsExpressionState> actual =
+            MakeExpressionStateSnapshot(expressions);
+        if (actual.empty()) return;
+
+        std::vector<VtsExpressionState> nextBaseline = actual;
+        bool userStateChanged = false;
+        for (auto& state : nextBaseline) {
+            const VtsExpressionState* expected = FindExpressionState(
+                hoverExpressionExpectedStates_, state.file);
+            const VtsExpressionState* previousBaseline = FindExpressionState(
+                hoverExpressionBaselineStates_, state.file);
+            if (!expected || !previousBaseline) {
+                userStateChanged = true;
+                continue;
+            }
+
+            if (state.active != expected->active) {
+                // The current state differs from the state produced by this
+                // program, so preserve the user's new value for restoration.
+                userStateChanged = true;
+            } else if (IsConfiguredHoverExpression(state.file)) {
+                // A selected expression still matches our temporary hover
+                // activation. Keep its real pre-hover value instead of
+                // recording our own "active=true" as the user's new setup.
+                state.active = previousBaseline->active;
+            }
+        }
+        if (actual.size() != hoverExpressionExpectedStates_.size()) {
+            userStateChanged = true;
+        }
+
+        hoverExpressionBaselineStates_ = std::move(nextBaseline);
+        hoverExpressionExpectedStates_ = actual;
+
+        // Only the configured hover expressions are restored on mouse leave;
+        // update those restore values from the newest user baseline without
+        // changing the configured selection itself.
+        for (auto& original : hoverExpressionOriginalStates_) {
+            if (const VtsExpressionState* latest = FindExpressionState(
+                    hoverExpressionBaselineStates_, original.file)) {
+                original.active = latest->active;
+            }
+        }
+
+        if (borderDialogOpen_) {
+            // State N becomes state 2 for later picker previews/cancel. This
+            // update does not touch hoverExpressionFiles_.
+            expressionPanelInitialStates_ = hoverExpressionBaselineStates_;
+            expressionPanelStateCaptured_ = !expressionPanelInitialStates_.empty();
+        }
+        if (userStateChanged) {
+            Log("[expression] user state changed during hover; restore baseline updated");
+        }
+    }
+
+    void UpdateHoverExpressionStateTracking(const Clock::time_point now) {
+        if (!hoverExpressionHovered_ || hoverExpressionRestored_ ||
+            !vtsApi_.IsConnected()) {
+            return;
+        }
+
+        if (hoverExpressionStatePollPending_) {
+            std::vector<VtsApiClient::ExpressionInfo> expressions;
+            std::uint64_t revision = 0;
+            if (vtsApi_.GetExpressionStateAfter(
+                    hoverExpressionStatePollRevision_, expressions, revision)) {
+                hoverExpressionStatePollPending_ = false;
+                hoverExpressionStatePollRevision_ = revision;
+                MergeHoverExpressionState(expressions);
+                hoverExpressionNextStatePollAt_ = now +
+                    std::chrono::milliseconds(kHoverExpressionStatePollIntervalMs);
+            }
+        }
+
+        // A real leave -> enter edge after the two-second cooldown requests a
+        // response newer than the edge itself. If an older periodic request is
+        // still in flight, consume it first and then issue this one; otherwise
+        // the pre-entry response could be mistaken for the requested refresh.
+        if (hoverExpressionReentryRefreshPending_ &&
+            !hoverExpressionStatePollPending_ &&
+            vtsApi_.WaitForExpressionCommands(std::chrono::milliseconds(0))) {
+            hoverExpressionStatePollRevision_ =
+                vtsApi_.GetExpressionStateRevision();
+            hoverExpressionStatePollPending_ = true;
+            hoverExpressionReentryRefreshPending_ = false;
+            hoverExpressionNextStatePollAt_ = now +
+                std::chrono::milliseconds(kHoverExpressionStatePollIntervalMs);
+            vtsApi_.RequestExpressionState();
+            return;
+        }
+
+        if (!hoverExpressionStatePollPending_ &&
+            now >= hoverExpressionNextStatePollAt_ &&
+            vtsApi_.WaitForExpressionCommands(std::chrono::milliseconds(0))) {
+            hoverExpressionStatePollRevision_ =
+                vtsApi_.GetExpressionStateRevision();
+            hoverExpressionStatePollPending_ = true;
+            hoverExpressionNextStatePollAt_ = now +
+                std::chrono::milliseconds(kHoverExpressionStatePollIntervalMs);
+            vtsApi_.RequestExpressionState();
+        }
     }
 
     void UpdateHoverExpression() {
@@ -8331,52 +9158,140 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         // explicit 2.5-second selection preview has priority; once it restores
         // the saved baseline, the configured region behaves like locked mode.
         const bool hoverInteractionAvailable = locked_ || borderDialogOpen_;
+        const bool cursorOverModel = IsCursorOverModel();
+        const bool cursorEnteredModel =
+            cursorOverModel && !hoverExpressionCursorWasOverModel_;
+        hoverExpressionCursorWasOverModel_ = cursorOverModel;
+        if (suppressHoverExpressionUntilCursorLeaves_ && !cursorOverModel) {
+            suppressHoverExpressionUntilCursorLeaves_ = false;
+        }
         const bool shouldHover = hoverInteractionAvailable &&
             !expressionPanelPreviewActive_ &&
-            hoverExpressionEnabled_ && !hoverExpressionFile_.empty() &&
-            hasReceivedModel_ && vtsApi_.IsConnected() && IsCursorOverModel();
+            !suppressHoverExpressionUntilCursorLeaves_ &&
+            hoverExpressionEnabled_ && !hoverExpressionFiles_.empty() &&
+            hasReceivedModel_ && vtsApi_.IsConnected() && cursorOverModel;
         const auto now = Clock::now();
+
+        if (!shouldHover && hoverExpressionCapturePending_) {
+            // The pointer left before the fresh pre-play snapshot arrived.
+            // Discard the pending entry; no expression has been activated.
+            hoverExpressionCapturePending_ = false;
+            hoverExpressionCaptureRevision_ = 0;
+        }
+
         if (shouldHover && (!hoverExpressionHovered_ || hoverExpressionRestored_)) {
-            bool originalActive = false;
-            bool originalStateKnown = false;
-            if (borderDialogOpen_) {
-                if (!CapturePanelExpressionState()) {
+            if (now < hoverExpressionNextTriggerAt_) {
+                // A completed hover session cannot be restarted repeatedly.
+                // Latch suppression until the pointer leaves, so merely
+                // waiting over the model for the 2-second CD to expire does
+                // not trigger a request without a real new entry.
+                suppressHoverExpressionUntilCursorLeaves_ = true;
+                hoverExpressionCapturePending_ = false;
+                hoverExpressionCaptureRevision_ = 0;
+                return;
+            }
+            // Every hover session starts from a new ExpressionStateResponse.
+            // Never play from the API cache: requesting/capturing state 1 has
+            // strict priority over sending ExpressionActivationRequest.
+            if (!hoverExpressionCapturePending_) {
+                if (!vtsApi_.WaitForExpressionCommands(
+                        std::chrono::milliseconds(0))) {
                     return;
                 }
-                const auto saved = std::find_if(
-                    expressionPanelInitialStates_.begin(),
-                    expressionPanelInitialStates_.end(),
-                    [this](const VtsExpressionState& state) {
-                        return state.file == hoverExpressionFile_;
-                    });
-                if (saved != expressionPanelInitialStates_.end()) {
-                    originalActive = saved->active;
-                    originalStateKnown = true;
-                }
-            } else {
-                originalStateKnown = vtsApi_.GetExpressionActive(
-                    hoverExpressionFile_, originalActive);
-            }
-            if (!originalStateKnown) {
-                // The API worker refreshes the expression list asynchronously.
-                // Do not activate until the pre-hover state is known, otherwise
-                // leaving the model could accidentally disable a user expression.
+                hoverExpressionCaptureRevision_ =
+                    vtsApi_.GetExpressionStateRevision();
+                hoverExpressionCapturePending_ = true;
+                hoverExpressionNextStatePollAt_ = now +
+                    std::chrono::milliseconds(kHoverExpressionStatePollIntervalMs);
                 vtsApi_.RequestExpressionState();
                 return;
             }
-            hoverExpressionOriginalActive_ = originalActive;
+
+            std::vector<VtsApiClient::ExpressionInfo> freshExpressions;
+            std::uint64_t freshRevision = 0;
+            if (!vtsApi_.GetExpressionStateAfter(
+                    hoverExpressionCaptureRevision_, freshExpressions,
+                    freshRevision)) {
+                if (now >= hoverExpressionNextStatePollAt_) {
+                    hoverExpressionNextStatePollAt_ = now +
+                        std::chrono::milliseconds(
+                            kHoverExpressionStatePollIntervalMs);
+                    vtsApi_.RequestExpressionState();
+                }
+                return;
+            }
+
+            const std::vector<VtsExpressionState> freshState =
+                MakeExpressionStateSnapshot(freshExpressions);
+            if (freshState.empty()) {
+                hoverExpressionCaptureRevision_ = freshRevision;
+                vtsApi_.RequestExpressionState();
+                return;
+            }
+
+            std::vector<VtsExpressionState> originalStates;
+            originalStates.reserve(hoverExpressionFiles_.size());
+            bool allStatesKnown = true;
+            for (const std::string& file : hoverExpressionFiles_) {
+                const VtsExpressionState* state = FindExpressionState(
+                    freshState, file);
+                if (!state) {
+                    allStatesKnown = false;
+                    break;
+                }
+                originalStates.push_back(*state);
+            }
+            if (!allStatesKnown) {
+                hoverExpressionCaptureRevision_ = freshRevision;
+                vtsApi_.RequestExpressionState();
+                return;
+            }
+
+            if (borderDialogOpen_) {
+                // The fresh pre-play snapshot also closes the race where the
+                // user changes VTS immediately before moving over the model.
+                expressionPanelInitialStates_ = freshState;
+                expressionPanelStateCaptured_ = true;
+            }
+            hoverExpressionOriginalStates_ = std::move(originalStates);
+            hoverExpressionBaselineStates_ = freshState;
+            hoverExpressionExpectedStates_ = freshState;
+            for (const std::string& file : hoverExpressionFiles_) {
+                if (VtsExpressionState* expected = FindExpressionState(
+                        hoverExpressionExpectedStates_, file)) {
+                    expected->active = true;
+                }
+            }
             hoverExpressionHovered_ = true;
             hoverExpressionRestored_ = false;
             hoverExpressionLeaving_ = false;
             hoverExpressionRestoreAt_ = Clock::time_point{};
-            vtsApi_.SetExpressionActive(
-                hoverExpressionFile_, true, kHoverExpressionFadeInSeconds);
+            hoverExpressionCapturePending_ = false;
+            hoverExpressionCaptureRevision_ = 0;
+            hoverExpressionStatePollPending_ = false;
+            hoverExpressionStatePollRevision_ = freshRevision;
+            hoverExpressionNextStatePollAt_ = now +
+                std::chrono::milliseconds(kHoverExpressionStatePollIntervalMs);
+            hoverExpressionNextTriggerAt_ = now +
+                std::chrono::milliseconds(kHoverExpressionRetriggerCooldownMs);
+            for (const std::string& file : hoverExpressionFiles_) {
+                vtsApi_.SetExpressionActive(
+                    file, true, kHoverExpressionFadeInSeconds);
+            }
         } else if (shouldHover && hoverExpressionHovered_) {
             // Re-entering before the leave delay expires cancels the pending
             // restore, so the expression remains active without a new toggle.
             hoverExpressionLeaving_ = false;
             hoverExpressionRestoreAt_ = Clock::time_point{};
+            if (cursorEnteredModel && now >= hoverExpressionNextTriggerAt_) {
+                hoverExpressionNextTriggerAt_ = now +
+                    std::chrono::milliseconds(
+                        kHoverExpressionRetriggerCooldownMs);
+                hoverExpressionReentryRefreshPending_ = true;
+            }
+            UpdateHoverExpressionStateTracking(now);
         } else if (!shouldHover && hoverExpressionHovered_) {
+            UpdateHoverExpressionStateTracking(now);
             if (!hoverExpressionLeaving_) {
                 // The configured delay starts only after the pointer leaves
                 // the model hit region. It does not shorten the expression's
@@ -8388,6 +9303,14 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                             hoverExpressionDurationSeconds_));
             } else if (!hoverExpressionRestored_ &&
                        now >= hoverExpressionRestoreAt_) {
+                // If a 250 ms state refresh is already in flight, consume it
+                // before restoring. This closes the boundary race where the
+                // user changes an expression just as the leave delay expires.
+                // Do not wait forever if the API connection itself is gone.
+                if (vtsApi_.IsConnected() &&
+                    hoverExpressionStatePollPending_) {
+                    return;
+                }
                 // Restore the exact state captured on entry with the smooth
                 // one-second fade-out. Keep the session latched until re-entry
                 // so a delayed API response cannot trigger a second toggle.
@@ -8454,10 +9377,9 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         expressionPanelInitialStates_ = current;
     }
 
-    // The personalization panel must never leave an expression "worn" after
-    // a preview. VTS permits several expressions to be active at once, so a
-    // one-file bool is insufficient: snapshot the full state that existed
-    // when the panel opened, preview one expression, then restore every file.
+    // The personalization panel must never leave expressions "worn" after a
+    // preview. Snapshot the complete state that existed when the panel opened,
+    // preview any checked set, then restore every file as one transaction.
     void BeginPanelExpressionSession() {
         RestorePanelExpressionPreview();
         expressionPanelInitialStates_.clear();
@@ -8512,44 +9434,40 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         expressionPanelIgnoreUntil_ = Clock::time_point{};
     }
 
-    bool PreviewExpressionFromPanel() {
-        if (hoverExpressionFile_.empty() || !vtsApi_.IsConnected()) {
+    bool PreviewExpressionsFromPanel() {
+        if (!vtsApi_.IsConnected()) {
             vtsApi_.RequestExpressionState();
             return false;
-        }
-        if (expressionPanelPreviewActive_) {
-            RestorePanelExpressionPreview();
         }
         if (!CapturePanelExpressionState()) {
             return false;
         }
-        const auto selected = std::find_if(
-            expressionPanelInitialStates_.begin(), expressionPanelInitialStates_.end(),
-            [this](const VtsExpressionState& state) {
-                return state.file == hoverExpressionFile_;
-            });
-        if (selected == expressionPanelInitialStates_.end()) {
-            // VTS changed model or expression list while the panel was open.
-            // Refresh first instead of guessing which state should be restored.
-            expressionPanelStateCaptured_ = false;
-            expressionPanelInitialStates_.clear();
-            vtsApi_.RequestExpressionState();
-            return false;
+        for (const std::string& file : hoverExpressionFiles_) {
+            const auto selected = std::find_if(
+                expressionPanelInitialStates_.begin(),
+                expressionPanelInitialStates_.end(),
+                [&file](const VtsExpressionState& state) {
+                    return state.file == file;
+                });
+            if (selected == expressionPanelInitialStates_.end()) {
+                // VTS changed model or expression list while the panel was
+                // open. Refresh first instead of losing the restore baseline.
+                expressionPanelStateCaptured_ = false;
+                expressionPanelInitialStates_.clear();
+                vtsApi_.RequestExpressionState();
+                return false;
+            }
         }
 
-        // An already active expression is already present in the saved
-        // configuration, so selecting it does not need a temporary preview.
-        if (selected->active) {
-            return false;
-        }
-
-        // Isolate the selected expression for the preview. The latest user
-        // baseline (state 1 or state 2) is preserved above and restored as a
-        // group afterwards.
+        // Keep the full checked set continuously active while the dropdown is
+        // open. Unchecked expressions are temporarily disabled, and the exact
+        // pre-picker configuration is restored after the close countdown.
         expressionPanelPreviewActive_ = true;
         for (const auto& state : expressionPanelInitialStates_) {
             vtsApi_.SetExpressionActive(
-                state.file, state.file == hoverExpressionFile_,
+                state.file, std::find(
+                    hoverExpressionFiles_.begin(), hoverExpressionFiles_.end(),
+                    state.file) != hoverExpressionFiles_.end(),
                 kHoverExpressionFadeInSeconds);
         }
         return true;
@@ -11134,6 +12052,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             return 0;
         case WM_CLOSE:
             SaveWindowPlacement();
+            RestoreExpressionsBeforeShutdown();
             DestroyWindow(hwnd_);
             return 0;
         case WM_DESTROY:
@@ -11280,21 +12199,34 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     int subjectSelectionVirtualLeft_ = 0;
     int subjectSelectionVirtualTop_ = 0;
     bool hoverExpressionEnabled_ = false;
-    std::string hoverExpressionFile_;
+    std::vector<std::string> hoverExpressionFiles_;
     double hoverExpressionDurationSeconds_ =
         kDefaultHoverExpressionDurationSeconds;
     bool hoverExpressionHovered_ = false;
     bool hoverExpressionLeaving_ = false;
     bool hoverExpressionRestored_ = false;
-    bool hoverExpressionOriginalActive_ = false;
+    std::vector<VtsExpressionState> hoverExpressionOriginalStates_;
+    std::vector<VtsExpressionState> hoverExpressionBaselineStates_;
+    std::vector<VtsExpressionState> hoverExpressionExpectedStates_;
+    bool hoverExpressionCapturePending_ = false;
+    bool hoverExpressionStatePollPending_ = false;
+    bool hoverExpressionReentryRefreshPending_ = false;
+    std::uint64_t hoverExpressionCaptureRevision_ = 0;
+    std::uint64_t hoverExpressionStatePollRevision_ = 0;
+    Clock::time_point hoverExpressionNextStatePollAt_{};
+    Clock::time_point hoverExpressionNextTriggerAt_{};
+    bool hoverExpressionCursorWasOverModel_ = false;
+    bool suppressHoverExpressionUntilCursorLeaves_ = false;
     Clock::time_point hoverExpressionRestoreAt_{};
     bool expressionPanelPreviewActive_ = false;
     bool expressionPanelStateCaptured_ = false;
     std::vector<VtsExpressionState> expressionPanelInitialStates_;
+    bool expressionShutdownPrepared_ = false;
     Clock::time_point expressionPanelNextPollAt_{};
     Clock::time_point expressionPanelIgnoreUntil_{};
     bool borderDialogOpen_ = false;
     HWND borderPanelHwnd_ = nullptr;
+    HWND expressionPickerHwnd_ = nullptr;
     bool personalPanelManuallyPositioned_ = false;
     bool showHoverExpandPreview_ = false;
     bool hoverExpandEditing_ = false;
