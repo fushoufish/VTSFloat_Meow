@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://fushoufish.github.io/VTSFloat_Meow/sitemap.xml

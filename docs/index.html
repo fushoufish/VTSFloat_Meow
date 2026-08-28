@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VTSFloat_Meow - VTube Studio 透明模型桌面悬浮工具</title>
+  <meta name="description" content="VTSFloat_Meow 是面向 Windows 10/11 的 VTube Studio 透明模型悬浮工具。通过 Spout2 和 D3D11 将 Live2D 模型置顶显示在桌面、游戏或其他应用上方，支持鼠标穿透、悬停透明化、表情触发、多显示器与 GPU 选择。">
+  <meta name="keywords" content="VTSFloat_Meow,VTube Studio,VTube Studio overlay,Live2D,桌面宠物,桌面悬浮,透明模型,Spout2,VTuber,Win32,D3D11">
+  <meta name="author" content="fushoufish">
+  <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">
+  <meta name="theme-color" content="#0d0d10">
+  <link rel="canonical" href="https://fushoufish.github.io/VTSFloat_Meow/">
+  <link rel="icon" type="image/png" href="assets/VTSFloat_Meow_small.png">
+  <link rel="apple-touch-icon" href="assets/VTSFloat_Meow_small.png">
+
+  <meta property="og:locale" content="zh_CN">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="VTSFloat_Meow">
+  <meta property="og:title" content="VTSFloat_Meow - VTube Studio 透明模型桌面悬浮工具">
+  <meta property="og:description" content="无需 OBS 或 Bandicam，将 VTube Studio 透明模型直接悬浮到桌面、游戏或其他应用上方。">
+  <meta property="og:url" content="https://fushoufish.github.io/VTSFloat_Meow/">
+  <meta property="og:image" content="https://fushoufish.github.io/VTSFloat_Meow/assets/VTSFloat_Meow.png">
+  <meta property="og:image:secure_url" content="https://fushoufish.github.io/VTSFloat_Meow/assets/VTSFloat_Meow.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="963">
+  <meta property="og:image:height" content="963">
+  <meta property="og:image:alt" content="VTSFloat_Meow 项目角色与软件图标">
+
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="VTSFloat_Meow - VTube Studio 透明模型桌面悬浮工具">
+  <meta name="twitter:description" content="通过 Spout2 与 D3D11，将 VTube Studio 透明模型直接显示在桌面和游戏上方。">
+  <meta name="twitter:image" content="https://fushoufish.github.io/VTSFloat_Meow/assets/VTSFloat_Meow.png">
+  <meta name="twitter:image:alt" content="VTSFloat_Meow 项目角色与软件图标">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": "https://fushoufish.github.io/VTSFloat_Meow/#website",
+        "url": "https://fushoufish.github.io/VTSFloat_Meow/",
+        "name": "VTSFloat_Meow",
+        "description": "VTube Studio 透明模型桌面悬浮工具",
+        "inLanguage": "zh-CN"
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://fushoufish.github.io/VTSFloat_Meow/#software",
+        "name": "VTSFloat_Meow",
+        "alternateName": "VTube Studio Desktop Overlay",
+        "url": "https://fushoufish.github.io/VTSFloat_Meow/",
+        "sameAs": "https://github.com/fushoufish/VTSFloat_Meow",
+        "image": "https://fushoufish.github.io/VTSFloat_Meow/assets/VTSFloat_Meow.png",
+        "description": "通过 Spout2 与 Direct3D 11 将 VTube Studio 透明 Live2D 模型悬浮显示在 Windows 桌面、游戏或其他应用上方。",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "Windows 10, Windows 11",
+        "softwareVersion": "1.1",
+        "downloadUrl": "https://github.com/fushoufish/VTSFloat_Meow/releases/latest",
+        "isAccessibleForFree": true,
+        "featureList": [
+          "VTube Studio 透明模型置顶显示",
+          "鼠标穿透与悬停透明化",
+          "悬停触发 VTube Studio 表情",
+          "多显示器与多 GPU 支持",
+          "自定义边框与性能调试"
+        ],
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "CNY"
+        }
+      }
+    ]
+  }
+  </script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="site-shell">
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="VTSFloat_Meow 首页"><img class="brand-image" src="assets/VTSFloat_Meow_small.png" alt=""><span>VTSFloat_Meow</span></a>
+      <div class="topbar-actions"><span class="version-pill">v1.1</span><a class="top-link" href="https://github.com/fushoufish/VTSFloat_Meow" target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a><label class="language-label" for="language-select">语言</label><select id="language-select" aria-label="选择语言"><option value="zh">中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ru">Русский</option></select><button class="menu-toggle" type="button" aria-expanded="false" aria-controls="sidebar">菜单</button></div>
+    </header>
+
+    <aside class="sidebar" id="sidebar">
+      <nav class="side-nav" aria-label="文档导航">
+        <a class="nav-link active" href="#overview">Overview</a>
+        <a class="nav-link" href="#usage">如何使用</a>
+        <a class="nav-link nav-sub-link" href="#enable-spout2"><span>1</span>启用 Spout2</a>
+        <a class="nav-link nav-sub-link" href="#enable-vts-api"><span>2</span>启用 VTube Studio API</a>
+        <a class="nav-link nav-sub-link" href="#custom-features"><span>3</span>自定义功能展示</a>
+        <a class="nav-link" href="#gpu">为什么推荐核显</a>
+        <a class="nav-link" href="#how-it-works">工作原理</a>
+        <a class="nav-link" href="#details">性能与构建</a>
+        <a class="nav-link" href="#requirements">使用前提与发布状态</a>
+      </nav>
+      <div class="sidebar-footer"><a href="https://github.com/fushoufish/VTSFloat_Meow/issues" target="_blank" rel="noreferrer">Report an issue <span aria-hidden="true">↗</span></a></div>
+    </aside>
+
+    <main class="main-content" id="top">
+      <div class="breadcrumbs"><span>VTSFloat_Meow</span><span>/</span><span>Documentation</span></div>
+
+      <section class="hero section-anchor" id="overview">
+        <div class="hero-layout">
+          <div class="hero-copy-block">
+            <img class="hero-logo-over-title" src="assets/VTSFloat_Meow.png" alt="VTSFloat_Meow 角色插画">
+            <div class="hero-rotator" aria-live="polite"><span class="hero-rotator-text">跃入你的每一寸桌面日常</span></div>
+            <p class="hero-copy"><span class="text-highlight">VTSFloat_Meow</span> 将 VTube Studio 的透明模型悬浮到桌面、游戏或其他应用上方无需依赖其他推流工具进行映射</p>
+            <div class="hero-actions"><a class="button button-primary" href="https://github.com/fushoufish/VTSFloat_Meow/releases/latest" target="_blank" rel="noreferrer">下载 Windows 版 <span aria-hidden="true">↓</span></a><a class="button button-ghost" href="https://github.com/fushoufish/VTSFloat_Meow" target="_blank" rel="noreferrer"><img class="github-icon" src="https://github.githubassets.com/favicons/favicon.svg" alt="">前往 GitHub <span aria-hidden="true">↗</span></a></div>
+            <div class="hero-meta"><span><i></i> Windows 10 / 11</span><span>·</span><span>Native C++17</span><span>·</span><span>Open Source</span></div>
+          </div>
+        </div>
+        <div class="media-placeholder hero-media" data-asset="hero-demo.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>Hero demo placeholder</strong><span>待上传：hero-demo.gif</span></div></div>
+      </section>
+
+      <section class="section-anchor usage-section" id="usage">
+        <div class="section-heading"><div><span class="section-kicker">01 · HOW TO USE</span><h2>如何使用？</h2></div><p class="section-note">按照下面的步骤完成启动 设置和自定义</p></div>
+
+        <div class="usage-group">
+          <div class="usage-group-heading"><span class="usage-index">1、</span><div><h3>快捷开始</h3><p>脚本会主动从注册表寻找 Steam 中的 VTube Studio 路径或者由你手动选择路径</p></div></div>
+          <div class="media-placeholder usage-media" data-asset="quick-start.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：quick-start.gif</span></div></div>
+        </div>
+
+        <div class="usage-group">
+          <div class="usage-group-heading"><span class="usage-index">2、</span><div><h3>设置 VTS</h3><p>完成下面 3 项设置后即可开始接收透明模型</p></div></div>
+          <div class="usage-substeps">
+            <article class="usage-substep section-anchor" id="enable-spout2"><div class="usage-substep-copy"><span class="usage-subindex">1.</span><div><h3>启用 Spout2</h3><p>用于将 VTube Studio 的视频流推送至脚本</p></div></div><div class="media-placeholder usage-media" data-asset="enable-spout2.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：enable-spout2.gif</span></div></div></article>
+            <article class="usage-substep section-anchor" id="enable-vts-api"><div class="usage-substep-copy"><span class="usage-subindex">2.</span><div><h3>启用 VTube Studio API</h3><p>用于脚本获取实时渲染帧数 实现悬停更改模型表情等功能 如默认端口非 8001 请在脚本提示中手动点击“扫描端口”按钮</p></div></div><div class="media-placeholder usage-media" data-asset="enable-api.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：enable-api.gif</span></div></div></article>
+            <article class="usage-substep"><div class="usage-substep-copy"><span class="usage-subindex">3.</span><div><h3>设置透明推流</h3><p>用于将获取到的视频流透明化 输出到脚本当中</p></div></div><div class="media-placeholder usage-media" data-asset="transparent-stream.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：transparent-stream.gif</span></div></div></article>
+          </div>
+        </div>
+
+        <div class="usage-group section-anchor" id="custom-features">
+          <div class="usage-group-heading"><span class="usage-index">3、</span><div><h3>自定义功能展示</h3><p>根据你的使用习惯调整模型的显示与互动方式</p></div></div>
+          <div class="usage-custom-grid">
+            <article class="usage-substep"><div class="usage-substep-copy"><span class="usage-subindex">1.</span><div><h3>自由拖拽 调整边框</h3></div></div><div class="media-placeholder usage-media" data-asset="drag-border.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：drag-border.gif</span></div></div></article>
+            <article class="usage-substep"><div class="usage-substep-copy"><span class="usage-subindex">2.</span><div><h3>鼠标悬停透明化模型</h3><p>你可以自由调整模型触发悬停透明化的程度</p></div></div><div class="media-placeholder usage-media" data-asset="hover-opacity.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：hover-opacity.gif</span></div></div></article>
+            <article class="usage-substep"><div class="usage-substep-copy"><span class="usage-subindex">3.</span><div><h3>悬停透明化边界扩展</h3><p>你可以自由调整模型触发悬停透明化的距离</p></div></div><div class="media-placeholder usage-media" data-asset="hover-range.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：hover-range.gif</span></div></div></article>
+            <article class="usage-substep"><div class="usage-substep-copy"><span class="usage-subindex">4.</span><div><h3>悬停模型时播放表情</h3><p>你可以自己选择或多选需要悬停时播放的表情与调整时长</p></div></div><div class="media-placeholder usage-media" data-asset="hover-expression.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：hover-expression.gif</span></div></div></article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section-anchor readme-section" id="gpu">
+        <div class="section-heading"><div><span class="section-kicker">02 · GPU</span><h2>为什么推荐核显或节能 GPU</h2></div><p>把模型链路与游戏渲染分开 减少 GPU 争用</p></div>
+        <div class="readme-copy gpu-explanation"><p><strong>当独显（高性能显卡）运行在极限负载的程序或游戏中时 VTSFloat_Meow 输出的透明模型可能出现异常卡顿</strong> 极限负载状态会最大占用独显的渲染队列 显存带宽和调度时间 导致模型渲染 共享纹理接收以及 Windows 透明窗口合成都可能得不到及时执行 从而出现掉帧 延迟甚至短暂卡死</p><div class="readme-highlight"><h3>为什么录屏或其他软件仍可以在极限负载场景正常运行？</h3><p>录屏主要在 GPU 内部完成 而 VTSFloat_Meow 还依赖 Windows 桌面透明窗口合成</p><p>VTSFloat_Meow 的 Spout2 接收和模型缩放已经通过 D3D11 在 GPU 内完成 但最后仍需由 Windows 桌面合成器显示透明窗口 独显满载时桌面合成得不到足够调度 因此比主要在 GPU 内部工作的录屏软件更容易卡顿</p><p>纯 GPU 的 DirectComposition 同样依赖桌面合成 甚至可能出现 Present 长时间阻塞 除非注入游戏内部绘制 但会带来反作弊和兼容风险</p></div><div class="readme-highlight"><h3>我使用过程中 VTSFloat_Meow 非常卡 / 我只有一个 GPU 显卡怎么办？</h3><p>请调整高负载程序或游戏的性能开销 特别针对显卡高负载的设置请降低其配置进行运行 特别留意类似“帧率上限”相关的设置 这将极大占用显卡的性能开销 可以将其调整至 60 帧或者其他更低的帧数进行尝试</p></div><p>因此 GPU 处理加 Windows 透明窗口上屏 是目前更稳定的非注入方案之一</p></div>
+        <div class="callout callout-pink"><span class="callout-mark">!</span><p>如果游戏出现卡顿可以先降低画质和帧率上限 或把 VTube Studio Spout2 与 VTSFloat_Meow 切换到核显或节能 GPU</p></div>
+      </section>
+
+      <section class="section-anchor readme-section" id="how-it-works">
+        <div class="section-heading"><div><span class="section-kicker">03 · PIPELINE</span><h2>工作原理</h2></div><p>画面在 GPU 之间传递 最后交给 Windows 桌面合成器</p></div>
+        <div class="pipeline-card"><div class="pipeline-node"><span class="node-no">01</span><strong>VTube Studio</strong><small>渲染 Live2D 模型</small></div><span class="pipeline-arrow">→</span><div class="pipeline-node"><span class="node-no">02</span><strong>Spout2</strong><small>共享 GPU 纹理</small></div><span class="pipeline-arrow">→</span><div class="pipeline-node"><span class="node-no">03</span><strong>Direct3D 11</strong><small>接收与 GPU 缩放</small></div><span class="pipeline-arrow">→</span><div class="pipeline-node"><span class="node-no">04</span><strong>BGRA + Alpha</strong><small>透明图像缓冲</small></div><span class="pipeline-arrow">→</span><div class="pipeline-node"><span class="node-no">05</span><strong>Windows 桌面</strong><small>显示在游戏或应用上方</small></div></div>
+        <div class="flow-list"><div><span>①</span><p>检查纹理尺寸格式和宽高比</p></div><div><span>②</span><p>根据模式进行 GPU 缩放与滤波</p></div><div><span>③</span><p>叠加边框透明度和调试信息</p></div><div><span>④</span><p>通过 UpdateLayeredWindow 提交透明 Win32 分层窗口</p></div></div>
+        <div class="callout"><span class="callout-mark">i</span><p>程序不注入任何游戏或应用 不读取游戏画面 也不参与游戏渲染管线</p></div>
+      </section>
+
+      <section class="section-anchor readme-section" id="details">
+        <div class="section-heading"><div><span class="section-kicker">04 · DETAILS</span><h2>性能与构建</h2></div><p>README 中的性能建议 技术栈和构建信息</p></div>
+        <div class="detail-grid"><article class="info-card"><span class="card-index">01</span><h3>分辨率匹配</h3><p>建议 VTube Studio 画布分辨率与覆盖层窗口分辨率尽量接近 分辨率越大接收缩放显存读写和合成成本越高</p></article><article class="info-card"><span class="card-index">02</span><h3>帧率设置</h3><p>优先选择跟随 VTS 配置 或使用不高于 VTS 实际输出的固定帧率 覆盖层设置更高不会产生更多模型帧</p></article><article class="info-card"><span class="card-index">03</span><h3>INI 缓存</h3><p>窗口位置大小比例锁定帧率 GPU 选择和 API 端口会保存到本机</p><code>%LOCALAPPDATA%\vts_overlay_layered.ini</code></article></div>
+        <div class="tech-table"><div><span>语言</span><strong>C++17</strong><small>主程序和渲染循环</small></div><div><span>窗口</span><strong>Win32 分层窗口</strong><small>显示透明像素 置顶 鼠标穿透</small></div><div><span>图形</span><strong>Direct3D 11 / DXGI</strong><small>GPU 设备 显卡和显示器</small></div><div><span>构建</span><strong>CMake + MSVC</strong><small>native/build_native.ps1</small></div></div>
+        <div class="build-block"><h3>构建</h3><p>安装 Visual Studio 2022 C++ 工具链后在项目根目录执行</p><pre><code>.\native\build_native.ps1 -Configuration Release</code></pre><p>输出为根目录的 <code>VTSFloat_Meow.exe</code> Spout2 接收端已编译进程序</p><h3>目录说明</h3><pre><code>VTSFloat_Meow.exe           可直接运行的程序&#10;native/                     C++ 源码和构建脚本&#10;native/third_party/Spout2   内置 Spout2 源码&#10;start_overlay.cmd           启动程序&#10;stop_overlay.cmd            关闭程序&#10;md/                         补充说明</code></pre></div>
+      </section>
+
+      <section class="section-anchor readme-section" id="requirements">
+        <div class="section-heading"><div><span class="section-kicker">05 · RELEASE</span><h2>使用前提与发布状态</h2></div><p>当前版本 v1.1 正式版</p></div>
+        <div class="requirements-grid"><article class="info-card"><h3>使用前提</h3><ul><li>Windows 10 / 11</li><li>支持 Direct3D 11 的硬件 GPU</li><li>已安装并运行 VTube Studio</li><li>已开启 Spout2 透明推流</li><li>发送端名称为 VTubeStudioSpout</li><li>表情悬停功能需要 Plugins API 授权</li></ul></article><article class="info-card release-card"><h3>版本与状态</h3><p>v1.1 已进入正式发布阶段</p><p>源码和构建脚本可以前往 GitHub 查看</p><a class="button button-ghost" href="https://github.com/fushoufish/VTSFloat_Meow" target="_blank" rel="noreferrer">前往 GitHub <span aria-hidden="true">↗</span></a></article></div>
+      </section>
+
+      <footer class="footer"><div><img class="brand-image" src="assets/VTSFloat_Meow_small.png" alt=""><span>VTSFloat_Meow</span></div><span>Made for quiet desktop moments.</span><a href="https://github.com/fushoufish/VTSFloat_Meow" target="_blank" rel="noreferrer">GitHub ↗</a></footer>
+    </main>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>
