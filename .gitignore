@@ -6,6 +6,7 @@ runtime_logs/
 native/build/
 native/bin/
 native/third_party/Spout2/.git/
+VTSFloat_Meow_LanguagePreview.exe
 
 # Temporary/compiler artifacts
 *.obj

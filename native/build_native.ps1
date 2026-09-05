@@ -7,6 +7,9 @@ $ErrorActionPreference = "Stop"
 $NativeDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $VsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 
+& (Join-Path $NativeDir "check_localization.ps1")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 if (-not (Test-Path -LiteralPath $VsWhere)) {
     throw "Visual Studio Build Tools not found."
 }
@@ -42,4 +45,11 @@ if (Test-Path -LiteralPath $CacheFile) {
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & $CMake --build $BuildDir --config $Configuration --parallel
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+$LayoutAudit = Join-Path $BuildDir "$Configuration\vts_localization_audit.exe"
+if (-not (Test-Path -LiteralPath $LayoutAudit)) {
+    throw "Localization layout audit executable was not built."
+}
+& $LayoutAudit
 exit $LASTEXITCODE

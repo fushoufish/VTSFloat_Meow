@@ -33,11 +33,22 @@ add_executable(vts_spout_test_sender
 
 add_executable(vts_overlay_layered WIN32
     overlay_layered.cpp
+    localization.cpp
     overlay_resources.rc
     ${SPOUT_DX11_SOURCES}
 )
 
-foreach(target vts_overlay_dx11 vts_spout_bridge vts_spout_test_sender vts_overlay_layered)
+add_executable(vts_localization_audit
+    localization_layout_audit.cpp
+    localization.cpp
+)
+
+option(VTSFLOAT_LANGUAGE_PREVIEW "Build the isolated multilingual preview" ON)
+if(VTSFLOAT_LANGUAGE_PREVIEW)
+    target_compile_definitions(vts_overlay_layered PRIVATE VTSFLOAT_LANGUAGE_PREVIEW=1)
+endif()
+
+foreach(target vts_overlay_dx11 vts_spout_bridge vts_spout_test_sender vts_overlay_layered vts_localization_audit)
     target_compile_features(${target} PRIVATE cxx_std_17)
     target_compile_definitions(${target} PRIVATE
         UNICODE
@@ -55,6 +66,7 @@ if(MSVC)
     target_compile_options(vts_spout_bridge PRIVATE /W3 /EHsc /utf-8)
     target_compile_options(vts_spout_test_sender PRIVATE /W3 /EHsc /utf-8)
     target_compile_options(vts_overlay_layered PRIVATE /W3 /EHsc /utf-8)
+    target_compile_options(vts_localization_audit PRIVATE /W3 /EHsc /utf-8)
 endif()
 
 set(SPOUT_DX11_LIBRARIES
@@ -86,6 +98,7 @@ target_link_libraries(vts_overlay_dx11 PRIVATE ${SPOUT_DX11_LIBRARIES})
 target_link_libraries(vts_spout_bridge PRIVATE ${SPOUT_DX11_LIBRARIES})
 target_link_libraries(vts_spout_test_sender PRIVATE ${SPOUT_DX11_LIBRARIES})
 target_link_libraries(vts_overlay_layered PRIVATE ${SPOUT_DX11_LIBRARIES} avrt winmm pdh winhttp gdiplus shlwapi iphlpapi dwmapi uxtheme)
+target_link_libraries(vts_localization_audit PRIVATE user32 gdi32)
 
 set_target_properties(vts_overlay_dx11 PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/bin"
@@ -111,8 +124,14 @@ set_target_properties(vts_spout_test_sender PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_CURRENT_SOURCE_DIR}/bin"
 )
 
+if(VTSFLOAT_LANGUAGE_PREVIEW)
+    set(VTSFLOAT_LAYERED_OUTPUT_NAME "VTSFloat_Meow_LanguagePreview")
+else()
+    set(VTSFLOAT_LAYERED_OUTPUT_NAME "VTSFloat_Meow")
+endif()
+
 set_target_properties(vts_overlay_layered PROPERTIES
-    OUTPUT_NAME "VTSFloat_Meow"
+    OUTPUT_NAME "${VTSFLOAT_LAYERED_OUTPUT_NAME}"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
     RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_CURRENT_SOURCE_DIR}/.."
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}/.."
