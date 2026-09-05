@@ -102,6 +102,10 @@ Spout2 接收端已经集成到程序中，用户不需要单独安装或启动 
 
 其中包括窗口位置、尺寸、比例、帧率、GPU、边框、悬停范围、表情和快捷键。可通过“调试 → 清除缓存并重置脚本”恢复默认状态。
 
+多语言版本会同时生成 `VTSFloat_Meow.custom-language.ini`。该模板以英文为对照，保留左侧
+`T_` 键并修改等号右侧文字即可制作新的语言；缺失或留空的内容自动使用英文。可在
+“Language → Edit custom language file…”中打开，保存后重新选择 `Custom (INI)` 即可载入。
+
 ## 7. 使用前提
 
 - Windows 10/11 与支持 Direct3D 11 的硬件 GPU。
@@ -123,6 +127,7 @@ Spout2 接收端已经集成到程序中，用户不需要单独安装或启动 
 
 ```text
 VTSFloat_Meow.exe           可直接运行的程序
+VTSFloat_Meow.custom-language.ini  自定义语言模板（多语言版本）
 native/                     C++ 源码、CMake 配置和构建脚本
 native/third_party/Spout2   内置 Spout2 源码
 md/                         实现原理与性能演进文档

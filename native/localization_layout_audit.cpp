@@ -2,7 +2,10 @@
 
 #include <windows.h>
 
+#include <cwchar>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 
 using vtsfloat::i18n::Tr;
@@ -109,6 +112,41 @@ int wmain() {
                            << L"px available=" << contract.availableWidth << L"px\n";
             }
         }
+    }
+
+    // Exercise the external INI path separately. Its generated baseline must
+    // match the built-in English reference language.
+    vtsfloat::i18n::SetLanguage(UiLanguage::Custom);
+    const std::wstring customPath = vtsfloat::i18n::CustomLanguageFilePath();
+    if (customPath.empty() ||
+        std::wcscmp(Tr(L"图形设置"), L"Graphics") != 0) {
+        ++failures;
+        std::wcerr << L"[custom-language] English baseline/template failed\n";
+    } else {
+        const auto replaceGraphicsValue = [&customPath](const std::string& replacement) {
+            std::ifstream input(customPath, std::ios::binary);
+            std::string bytes(
+                (std::istreambuf_iterator<char>(input)),
+                std::istreambuf_iterator<char>());
+            constexpr char key[] = "T_7F135691321F4B56=";
+            const size_t valueStart = bytes.find(key);
+            if (valueStart == std::string::npos) return false;
+            const size_t begin = valueStart + sizeof(key) - 1;
+            size_t end = bytes.find_first_of("\r\n", begin);
+            if (end == std::string::npos) end = bytes.size();
+            bytes.replace(begin, end - begin, replacement);
+            std::ofstream output(customPath, std::ios::binary | std::ios::trunc);
+            output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            return output.good();
+        };
+        if (!replaceGraphicsValue("Audit custom text") ||
+            !vtsfloat::i18n::ReloadCustomLanguage() ||
+            std::wcscmp(Tr(L"图形设置"), L"Audit custom text") != 0) {
+            ++failures;
+            std::wcerr << L"[custom-language] edited value was not reloaded\n";
+        }
+        replaceGraphicsValue("Graphics");
+        vtsfloat::i18n::ReloadCustomLanguage();
     }
     DeleteDC(dc);
     if (failures == 0) {

@@ -250,10 +250,18 @@ expression、VtsApi 等节。写入采用 Win32 INI 接口，设置在拖动、�
 输出 `VTSFloat_Meow_LanguagePreview.exe`，使用独立的窗口类、单实例互斥量和
 `%LOCALAPPDATA%\vts_overlay_language_preview.ini`，因此可以与正式版并存，也不会覆盖正式版设置。
 
-界面语言保存为 `[ui] language`，支持 `zh-CN`、`en`、`ja`、`ko`、`ru`。没有保存值时根据
-Windows 用户区域自动选择；用户可从工具栏固定显示的 `Language` 菜单即时切换。翻译缺失时
-回退到简体中文，不能返回空字符串。字体按书写系统选择：中文使用 Microsoft YaHei UI，日文
-使用 Yu Gothic UI，韩文使用 Malgun Gothic，英文和俄文使用 Segoe UI。
+界面语言保存为 `[ui] language`，内置支持 `zh-CN`、`en`、`ja`、`ko`、`ru`，并支持值为
+`custom` 的外部语言。没有保存值时根据 Windows 用户区域自动选择；用户可从工具栏固定显示的
+`Language` 菜单即时切换。内置翻译缺失时回退到简体中文，不能返回空字符串。字体按书写系统
+选择：中文使用 Microsoft YaHei UI，日文使用 Yu Gothic UI，韩文使用 Malgun Gothic，英文和
+俄文使用 Segoe UI。
+
+程序首次运行会在可执行文件旁生成 UTF-8 BOM 编码的
+`VTSFloat_Meow.custom-language.ini`；只读目录则回退到 `%LOCALAPPDATA%`。模板以英文为对照和
+缺省值，`[language]` 可修改菜单名称与字体，`[translations]` 中只允许修改等号右侧译文，左侧
+`T_` 稳定键不能改名。`\\n`、`\\s`、`\\\\` 分别表示换行、首尾空格和反斜杠。缺失或空白译文
+自动回退英文；新版新增文字只向旧模板追加英文项，不覆盖用户已经完成的翻译。语言菜单中的
+“编辑自定义语言配置…”用于打开文件，重新选择自定义语言后会从磁盘热重载。
 
 `native/check_localization.ps1` 会在每次原生构建前扫描全部运行时界面源码，阻止缺少翻译条目、
 重复翻译键和未包装的中文界面文字进入构建。`native/localization_layout_audit.cpp` 则以实际 GDI

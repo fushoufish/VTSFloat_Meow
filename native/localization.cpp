@@ -2,8 +2,17 @@
 
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <cwchar>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <mutex>
+#include <sstream>
+#include <string>
 #include <string_view>
+#include <unordered_map>
+#include <vector>
 
 #include <windows.h>
 
@@ -200,9 +209,249 @@ constexpr Translation kTranslations[] = {
     {L"请输入 1–240 FPS：", L"Enter 1–240 FPS:", L"1～240 FPS を入力：", L"1~240 FPS 입력:", L"Введите 1–240 FPS:"},
     {L"输入内容会在这里直接显示，确定后才会应用。", L"Applied after you select OK.", L"「OK」を選択すると適用されます。", L"확인을 선택하면 적용됩니다.", L"Применяется после нажатия «ОК»."},
     {L"确定", L"OK", L"OK", L"확인", L"ОК"},
+    {L"编辑自定义语言配置…", L"Edit custom language file…", L"カスタム言語ファイルを編集…", L"사용자 언어 파일 편집…", L"Изменить файл своего языка…"},
+    {L"无法打开自定义语言配置文件：\n", L"Could not open the custom language file:\n", L"カスタム言語ファイルを開けませんでした：\n", L"사용자 언어 파일을 열 수 없습니다:\n", L"Не удалось открыть файл своего языка:\n"},
+    {L"自定义语言", L"Custom language", L"カスタム言語", L"사용자 언어", L"Свой язык"},
 };
 
 std::atomic<UiLanguage> gLanguage{UiLanguage::SimplifiedChinese};
+std::mutex gCustomLanguageMutex;
+std::array<std::wstring, ARRAYSIZE(kTranslations)> gCustomTranslations;
+std::wstring gCustomLanguageName = L"Custom (INI)";
+std::wstring gCustomFontFace = L"Segoe UI";
+std::filesystem::path gCustomLanguagePath;
+
+std::wstring TranslationKey(const wchar_t* source) {
+    // Stable FNV-1a key based on the internal source identity. English stays
+    // the editable reference value, while repeated English labels can still
+    // be translated differently and later wording changes do not rename keys.
+    std::uint64_t hash = 14695981039346656037ull;
+    for (const wchar_t* cursor = source; cursor && *cursor; ++cursor) {
+        const std::uint16_t codeUnit = static_cast<std::uint16_t>(*cursor);
+        hash ^= static_cast<std::uint8_t>(codeUnit & 0xffu);
+        hash *= 1099511628211ull;
+        hash ^= static_cast<std::uint8_t>((codeUnit >> 8u) & 0xffu);
+        hash *= 1099511628211ull;
+    }
+    wchar_t key[20]{};
+    swprintf_s(key, L"T_%016llX", static_cast<unsigned long long>(hash));
+    return key;
+}
+
+std::wstring EscapeIniValue(const wchar_t* value) {
+    const std::wstring text = value ? value : L"";
+    size_t firstNonSpace = 0;
+    while (firstNonSpace < text.size() && text[firstNonSpace] == L' ') {
+        ++firstNonSpace;
+    }
+    size_t lastNonSpace = text.size();
+    while (lastNonSpace > firstNonSpace && text[lastNonSpace - 1] == L' ') {
+        --lastNonSpace;
+    }
+    std::wstring escaped;
+    escaped.reserve(text.size() + 16);
+    for (size_t index = 0; index < text.size(); ++index) {
+        const wchar_t character = text[index];
+        if (character == L'\\') escaped += L"\\\\";
+        else if (character == L'\n') escaped += L"\\n";
+        else if (character == L'\r') escaped += L"\\r";
+        else if (character == L'\t') escaped += L"\\t";
+        else if (character == L' ' &&
+                 (index < firstNonSpace || index >= lastNonSpace)) {
+            escaped += L"\\s";
+        } else escaped.push_back(character);
+    }
+    return escaped;
+}
+
+std::wstring UnescapeIniValue(const std::wstring& value) {
+    std::wstring result;
+    result.reserve(value.size());
+    for (size_t index = 0; index < value.size(); ++index) {
+        if (value[index] != L'\\' || index + 1 >= value.size()) {
+            result.push_back(value[index]);
+            continue;
+        }
+        const wchar_t escaped = value[++index];
+        if (escaped == L'n') result.push_back(L'\n');
+        else if (escaped == L'r') result.push_back(L'\r');
+        else if (escaped == L't') result.push_back(L'\t');
+        else if (escaped == L's') result.push_back(L' ');
+        else result.push_back(escaped);
+    }
+    return result;
+}
+
+std::filesystem::path ExecutableDirectory() {
+    std::array<wchar_t, 32768> path{};
+    const DWORD length = GetModuleFileNameW(
+        nullptr, path.data(), static_cast<DWORD>(path.size()));
+    if (length == 0 || length >= path.size()) {
+        return std::filesystem::current_path();
+    }
+    return std::filesystem::path(std::wstring(path.data(), length)).parent_path();
+}
+
+std::string WideToUtf8(std::wstring_view value) {
+    if (value.empty()) return {};
+    const int bytes = WideCharToMultiByte(
+        CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+        nullptr, 0, nullptr, nullptr);
+    if (bytes <= 0) return {};
+    std::string result(static_cast<size_t>(bytes), '\0');
+    WideCharToMultiByte(
+        CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+        result.data(), bytes, nullptr, nullptr);
+    return result;
+}
+
+std::wstring Utf8ToWide(std::string_view value) {
+    if (value.empty()) return {};
+    const int characters = MultiByteToWideChar(
+        CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+        static_cast<int>(value.size()), nullptr, 0);
+    if (characters <= 0) return {};
+    std::wstring result(static_cast<size_t>(characters), L'\0');
+    MultiByteToWideChar(
+        CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+        static_cast<int>(value.size()), result.data(), characters);
+    return result;
+}
+
+bool WriteCustomLanguageTemplate(const std::filesystem::path& path) {
+    std::wstring content =
+        L"; VTSFloat_Meow custom language template\r\n"
+        L"; English is the reference language and the default fallback.\r\n"
+        L"; Keep every T_ key unchanged and edit only the text after '='.\r\n"
+        L"; Use \\n for a line break, \\s for an edge space, and \\\\ for a backslash.\r\n"
+        L"; Re-select Custom (INI) in the Language menu to reload this file.\r\n"
+        L"\r\n[language]\r\n"
+        L"name=Custom (INI)\r\n"
+        L"font=Segoe UI\r\n"
+        L"base=en\r\n"
+        L"\r\n[translations]\r\n";
+    for (const auto& entry : kTranslations) {
+        content += TranslationKey(entry.zh);
+        content += L"=";
+        content += EscapeIniValue(entry.en);
+        content += L"\r\n";
+    }
+
+    const HANDLE file = CreateFileW(
+        path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW,
+        FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return GetLastError() == ERROR_FILE_EXISTS;
+    }
+    constexpr std::uint8_t bom[] = { 0xef, 0xbb, 0xbf };
+    DWORD written = 0;
+    bool ok = WriteFile(file, &bom, sizeof(bom), &written, nullptr) &&
+        written == sizeof(bom);
+    const std::string utf8 = WideToUtf8(content);
+    if (ok && !utf8.empty()) {
+        const DWORD bytes = static_cast<DWORD>(utf8.size());
+        ok = WriteFile(file, utf8.data(), bytes, &written, nullptr) &&
+            written == bytes;
+    }
+    CloseHandle(file);
+    if (!ok) {
+        std::error_code error;
+        std::filesystem::remove(path, error);
+    }
+    return ok;
+}
+
+bool ReadCustomLanguageIni(
+    const std::filesystem::path& path,
+    std::unordered_map<std::wstring, std::wstring>& language,
+    std::unordered_map<std::wstring, std::wstring>& translations) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return false;
+    std::string bytes(
+        (std::istreambuf_iterator<char>(input)),
+        std::istreambuf_iterator<char>());
+    if (bytes.size() >= 3 &&
+        static_cast<std::uint8_t>(bytes[0]) == 0xef &&
+        static_cast<std::uint8_t>(bytes[1]) == 0xbb &&
+        static_cast<std::uint8_t>(bytes[2]) == 0xbf) {
+        bytes.erase(0, 3);
+    }
+
+    std::istringstream lines(bytes);
+    std::string line;
+    std::string section;
+    while (std::getline(lines, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const size_t first = line.find_first_not_of(" \t");
+        if (first == std::string::npos || line[first] == ';' || line[first] == '#') {
+            continue;
+        }
+        if (line[first] == '[') {
+            const size_t close = line.find(']', first + 1);
+            if (close != std::string::npos) {
+                section = line.substr(first + 1, close - first - 1);
+            }
+            continue;
+        }
+        const size_t separator = line.find('=', first);
+        if (separator == std::string::npos) continue;
+        size_t keyEnd = separator;
+        while (keyEnd > first &&
+               (line[keyEnd - 1] == ' ' || line[keyEnd - 1] == '\t')) {
+            --keyEnd;
+        }
+        const std::wstring key = Utf8ToWide(
+            std::string_view(line).substr(first, keyEnd - first));
+        const std::wstring value = Utf8ToWide(
+            std::string_view(line).substr(separator + 1));
+        if (key.empty()) continue;
+        if (section == "language") language[key] = value;
+        else if (section == "translations") translations[key] = value;
+    }
+    return true;
+}
+
+void AppendMissingCustomTranslations(
+    const std::filesystem::path& path,
+    const std::vector<size_t>& missing) {
+    if (missing.empty()) return;
+    std::wstring content = L"\r\n[translations]\r\n";
+    for (const size_t index : missing) {
+        content += TranslationKey(kTranslations[index].zh);
+        content += L"=";
+        content += EscapeIniValue(kTranslations[index].en);
+        content += L"\r\n";
+    }
+    std::ofstream output(path, std::ios::binary | std::ios::app);
+    const std::string utf8 = WideToUtf8(content);
+    output.write(utf8.data(), static_cast<std::streamsize>(utf8.size()));
+}
+
+std::filesystem::path ResolveCustomLanguagePath() {
+    if (!gCustomLanguagePath.empty()) return gCustomLanguagePath;
+    const std::filesystem::path portable =
+        ExecutableDirectory() / L"VTSFloat_Meow.custom-language.ini";
+    std::error_code error;
+    if (std::filesystem::exists(portable, error) ||
+        WriteCustomLanguageTemplate(portable)) {
+        gCustomLanguagePath = portable;
+        return gCustomLanguagePath;
+    }
+
+    std::array<wchar_t, 32768> localAppData{};
+    const DWORD length = GetEnvironmentVariableW(
+        L"LOCALAPPDATA", localAppData.data(),
+        static_cast<DWORD>(localAppData.size()));
+    const std::filesystem::path fallback = length > 0 && length < localAppData.size()
+        ? std::filesystem::path(std::wstring(localAppData.data(), length)) /
+            L"VTSFloat_Meow.custom-language.ini"
+        : portable;
+    if (std::filesystem::exists(fallback, error) ||
+        WriteCustomLanguageTemplate(fallback)) {
+        gCustomLanguagePath = fallback;
+    }
+    return gCustomLanguagePath;
+}
 
 }  // namespace
 
@@ -224,6 +473,7 @@ UiLanguage LanguageFromCode(const std::wstring& code, UiLanguage fallback) {
     if (code == L"ja") return UiLanguage::Japanese;
     if (code == L"ko") return UiLanguage::Korean;
     if (code == L"ru") return UiLanguage::Russian;
+    if (code == L"custom") return UiLanguage::Custom;
     return fallback;
 }
 
@@ -234,6 +484,7 @@ const wchar_t* LanguageCode(UiLanguage language) {
     case UiLanguage::Japanese: return L"ja";
     case UiLanguage::Korean: return L"ko";
     case UiLanguage::Russian: return L"ru";
+    case UiLanguage::Custom: return L"custom";
     }
     return L"en";
 }
@@ -245,11 +496,18 @@ const wchar_t* LanguageDisplayName(UiLanguage language) {
     case UiLanguage::Japanese: return L"日本語";
     case UiLanguage::Korean: return L"한국어";
     case UiLanguage::Russian: return L"Русский";
+    case UiLanguage::Custom: {
+        std::lock_guard<std::mutex> lock(gCustomLanguageMutex);
+        return gCustomLanguageName.c_str();
+    }
     }
     return L"English";
 }
 
 void SetLanguage(UiLanguage language) {
+    if (language == UiLanguage::Custom) {
+        ReloadCustomLanguage();
+    }
     gLanguage.store(language, std::memory_order_relaxed);
 }
 
@@ -257,17 +515,71 @@ UiLanguage GetLanguage() {
     return gLanguage.load(std::memory_order_relaxed);
 }
 
+bool ReloadCustomLanguage() {
+    std::lock_guard<std::mutex> lock(gCustomLanguageMutex);
+    for (size_t index = 0; index < ARRAYSIZE(kTranslations); ++index) {
+        gCustomTranslations[index] = kTranslations[index].en;
+    }
+    gCustomLanguageName = L"Custom (INI)";
+    gCustomFontFace = L"Segoe UI";
+    const std::filesystem::path path = ResolveCustomLanguagePath();
+    if (path.empty()) return false;
+
+    std::unordered_map<std::wstring, std::wstring> language;
+    std::unordered_map<std::wstring, std::wstring> translations;
+    if (!ReadCustomLanguageIni(path, language, translations)) return false;
+    const auto name = language.find(L"name");
+    if (name != language.end() && !name->second.empty()) {
+        gCustomLanguageName = UnescapeIniValue(name->second);
+    }
+    const auto font = language.find(L"font");
+    if (font != language.end() && !font->second.empty()) {
+        gCustomFontFace = UnescapeIniValue(font->second);
+    }
+
+    std::vector<size_t> missing;
+    for (size_t index = 0; index < ARRAYSIZE(kTranslations); ++index) {
+        const std::wstring key = TranslationKey(kTranslations[index].zh);
+        const auto custom = translations.find(key);
+        if (custom == translations.end()) {
+            missing.push_back(index);
+        } else if (!custom->second.empty()) {
+            gCustomTranslations[index] = UnescapeIniValue(custom->second);
+        }
+        if (gCustomTranslations[index].empty()) {
+            gCustomTranslations[index] = kTranslations[index].en;
+        }
+    }
+    // Preserve user edits while extending an older template with strings
+    // introduced by a newer build.
+    AppendMissingCustomTranslations(path, missing);
+    return true;
+}
+
+std::wstring CustomLanguageFilePath() {
+    std::lock_guard<std::mutex> lock(gCustomLanguageMutex);
+    return ResolveCustomLanguagePath().wstring();
+}
+
 const wchar_t* Tr(const wchar_t* simplifiedChinese) {
-    if (!simplifiedChinese || !*simplifiedChinese || GetLanguage() == UiLanguage::SimplifiedChinese) {
+    const UiLanguage language = GetLanguage();
+    if (!simplifiedChinese || !*simplifiedChinese ||
+        language == UiLanguage::SimplifiedChinese) {
         return simplifiedChinese;
     }
-    for (const auto& entry : kTranslations) {
+    for (size_t index = 0; index < ARRAYSIZE(kTranslations); ++index) {
+        const auto& entry = kTranslations[index];
         if (std::wcscmp(entry.zh, simplifiedChinese) != 0) continue;
-        switch (GetLanguage()) {
+        switch (language) {
         case UiLanguage::English: return entry.en;
         case UiLanguage::Japanese: return entry.ja;
         case UiLanguage::Korean: return entry.ko;
         case UiLanguage::Russian: return entry.ru;
+        case UiLanguage::Custom: {
+            std::lock_guard<std::mutex> lock(gCustomLanguageMutex);
+            return gCustomTranslations[index].empty()
+                ? entry.en : gCustomTranslations[index].c_str();
+        }
         default: return entry.zh;
         }
     }
@@ -279,6 +591,10 @@ const wchar_t* UiFontFace() {
     case UiLanguage::Japanese: return L"Yu Gothic UI";
     case UiLanguage::Korean: return L"Malgun Gothic";
     case UiLanguage::SimplifiedChinese: return L"Microsoft YaHei UI";
+    case UiLanguage::Custom: {
+        std::lock_guard<std::mutex> lock(gCustomLanguageMutex);
+        return gCustomFontFace.c_str();
+    }
     case UiLanguage::English:
     case UiLanguage::Russian:
     default:

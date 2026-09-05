@@ -2126,6 +2126,10 @@ public:
             16, 16, LR_DEFAULTCOLOR));
         RegisterWindowClass();
         LoadUiSettings();
+        // Keep a complete editable English-reference template beside the
+        // portable executable even when the user currently uses a built-in
+        // language. Read-only locations fall back to LocalAppData.
+        vtsfloat::i18n::CustomLanguageFilePath();
         cpuModel_ = ReadCpuModelName();
         CreateOverlayWindow();
         UpdateMonitorRefreshRate(true);
@@ -3690,12 +3694,14 @@ private:
         if (!menu) return;
 
         constexpr UINT kLanguageCommandBase = 3450;
+        constexpr UINT kEditCustomLanguageCommand = 3460;
         constexpr UiLanguage languages[] = {
             UiLanguage::SimplifiedChinese,
             UiLanguage::English,
             UiLanguage::Japanese,
             UiLanguage::Korean,
             UiLanguage::Russian,
+            UiLanguage::Custom,
         };
         const UiLanguage current = vtsfloat::i18n::GetLanguage();
         for (size_t i = 0; i < ARRAYSIZE(languages); ++i) {
@@ -3705,6 +3711,10 @@ private:
                 kLanguageCommandBase + static_cast<UINT>(i),
                 vtsfloat::i18n::LanguageDisplayName(languages[i]));
         }
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(
+            menu, MF_STRING, kEditCustomLanguageCommand,
+            Tr(L"编辑自定义语言配置…"));
 
         const RECT languageRect = ToolbarButtonRect(ToolbarButton::Language);
         POINT popup{ languageRect.left, languageRect.bottom };
@@ -3716,6 +3726,23 @@ private:
                 popup.x, popup.y, 0, toolbarHwnd_, nullptr);
         });
         DestroyMenu(menu);
+        if (command == kEditCustomLanguageCommand) {
+            const std::wstring path =
+                vtsfloat::i18n::CustomLanguageFilePath();
+            const auto result = path.empty()
+                ? static_cast<INT_PTR>(SE_ERR_FNF)
+                : reinterpret_cast<INT_PTR>(ShellExecuteW(
+                    toolbarHwnd_, L"open", path.c_str(), nullptr, nullptr,
+                    SW_SHOWNORMAL));
+            if (path.empty() || result <= 32) {
+                const std::wstring message =
+                    std::wstring(Tr(L"无法打开自定义语言配置文件：\n")) + path;
+                MessageBoxW(
+                    toolbarHwnd_, message.c_str(), Tr(L"自定义语言"),
+                    MB_OK | MB_ICONERROR);
+            }
+            return;
+        }
         if (command < kLanguageCommandBase ||
             command >= kLanguageCommandBase + ARRAYSIZE(languages)) {
             return;
