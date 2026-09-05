@@ -139,13 +139,13 @@ int wmain() {
             output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
             return output.good();
         };
-        if (!replaceGraphicsValue("Audit custom text") ||
+        if (!replaceGraphicsValue("Audit custom text #Graphics") ||
             !vtsfloat::i18n::ReloadCustomLanguage() ||
             std::wcscmp(Tr(L"图形设置"), L"Audit custom text") != 0) {
             ++failures;
-            std::wcerr << L"[custom-language] edited value was not reloaded\n";
+            std::wcerr << L"[custom-language] edited value or inline note parsing failed\n";
         }
-        replaceGraphicsValue("Graphics");
+        replaceGraphicsValue("Graphics #Graphics");
         vtsfloat::i18n::ReloadCustomLanguage();
     }
     DeleteDC(dc);

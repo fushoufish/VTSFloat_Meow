@@ -322,7 +322,9 @@ bool WriteCustomLanguageTemplate(const std::filesystem::path& path) {
     std::wstring content =
         L"; VTSFloat_Meow custom language template\r\n"
         L"; English is the reference language and the default fallback.\r\n"
-        L"; Keep every T_ key unchanged and edit only the text after '='.\r\n"
+        L"; Keep every T_ key unchanged and edit the text between '=' and ' #'.\r\n"
+        L"; Text after ' #' is an English note and is not displayed.\r\n"
+        L"; Write \\# if the translated text itself needs a literal # after a space.\r\n"
         L"; Use \\n for a line break, \\s for an edge space, and \\\\ for a backslash.\r\n"
         L"; Re-select Custom (INI) in the Language menu to reload this file.\r\n"
         L"\r\n[language]\r\n"
@@ -333,6 +335,8 @@ bool WriteCustomLanguageTemplate(const std::filesystem::path& path) {
     for (const auto& entry : kTranslations) {
         content += TranslationKey(entry.zh);
         content += L"=";
+        content += EscapeIniValue(entry.en);
+        content += L" #";
         content += EscapeIniValue(entry.en);
         content += L"\r\n";
     }
@@ -402,8 +406,18 @@ bool ReadCustomLanguageIni(
         }
         const std::wstring key = Utf8ToWide(
             std::string_view(line).substr(first, keyEnd - first));
-        const std::wstring value = Utf8ToWide(
-            std::string_view(line).substr(separator + 1));
+        std::string_view rawValue(line);
+        rawValue.remove_prefix(separator + 1);
+        // A space followed by # starts the optional English reference note.
+        // Requiring the space keeps ordinary hashtags valid; " \\#" can be
+        // used when the translated text itself needs that exact sequence.
+        if (section == "translations") {
+            const size_t comment = rawValue.find(" #");
+            if (comment != std::string_view::npos) {
+                rawValue = rawValue.substr(0, comment);
+            }
+        }
+        const std::wstring value = Utf8ToWide(rawValue);
         if (key.empty()) continue;
         if (section == "language") language[key] = value;
         else if (section == "translations") translations[key] = value;
@@ -419,6 +433,8 @@ void AppendMissingCustomTranslations(
     for (const size_t index : missing) {
         content += TranslationKey(kTranslations[index].zh);
         content += L"=";
+        content += EscapeIniValue(kTranslations[index].en);
+        content += L" #";
         content += EscapeIniValue(kTranslations[index].en);
         content += L"\r\n";
     }
