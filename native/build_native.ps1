@@ -41,7 +41,9 @@ if (Test-Path -LiteralPath $CacheFile) {
     }
 }
 
-& $CMake -S $NativeDir -B $BuildDir -G "Visual Studio 17 2022" -A x64
+& $CMake -S $NativeDir -B $BuildDir -G "Visual Studio 17 2022" -A x64 `
+    -DVTSFLOAT_LANGUAGE_PREVIEW=OFF `
+    "-DVTSFLOAT_OUTPUT_DIRECTORY=$(Split-Path -Parent $NativeDir)"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & $CMake --build $BuildDir --config $Configuration --parallel

@@ -111,7 +111,7 @@
             <div class="hero-meta"><span><i></i> Windows 10 / 11</span><span>·</span><span>Native C++17</span><span>·</span><span>Open Source</span></div>
           </div>
         </div>
-        <div class="media-placeholder hero-media" data-asset="hero-demo.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>Hero demo placeholder</strong><span>待上传：hero-demo.gif</span></div></div>
+        <figure class="capture-media usage-media hero-media"><a class="" href="assets/desktop-model.jpg" target="_blank" rel="noopener"><img src="assets/desktop-model.jpg" alt="VTSFloat_Meow 将透明模型显示在实际 Windows 桌面上的截图" width="759" height="432" loading="lazy"></a><figcaption>真实桌面截图 · VTube Studio 在后台输出透明模型</figcaption></figure>
       </section>
 
       <section class="section-anchor usage-section" id="usage">
@@ -119,28 +119,46 @@
 
         <div class="usage-group">
           <div class="usage-group-heading"><span class="usage-index">1、</span><div><h3>快捷开始</h3><p>脚本会主动从注册表寻找 Steam 中的 VTube Studio 路径或者由你手动选择路径</p></div></div>
-          <div class="media-placeholder usage-media" data-asset="quick-start.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：quick-start.gif</span></div></div>
+          <figure class="capture-media usage-media "><a class="" href="assets/desktop-controls.jpg" target="_blank" rel="noopener"><img src="assets/desktop-controls.jpg" alt="程序启动后的实际控制条，包含图形设置、窗口模式、锁定与个性化" width="759" height="34" loading="lazy"></a><a class="" href="assets/desktop-controls-2.jpg" target="_blank" rel="noopener"><img src="assets/desktop-controls-2.jpg" alt="启动并连接 VTS 后的透明模型窗口" width="759" height="432" loading="lazy"></a><figcaption>连接成功后的实际窗口与控制条。首次启动时，程序会查找 VTube Studio 安装路径；未找到时可手动选择。</figcaption></figure>
         </div>
 
         <div class="usage-group">
           <div class="usage-group-heading"><span class="usage-index">2、</span><div><h3>设置 VTS</h3><p>完成下面 3 项设置后即可开始接收透明模型</p></div></div>
           <div class="usage-substeps">
-            <article class="usage-substep section-anchor" id="enable-spout2"><div class="usage-substep-copy"><span class="usage-subindex">1.</span><div><h3>启用 Spout2</h3><p>用于将 VTube Studio 的视频流推送至脚本</p></div></div><div class="media-placeholder usage-media" data-asset="enable-spout2.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：enable-spout2.gif</span></div></div></article>
-            <article class="usage-substep section-anchor" id="enable-vts-api"><div class="usage-substep-copy"><span class="usage-subindex">2.</span><div><h3>启用 VTube Studio API</h3><p>用于脚本获取实时渲染帧数 实现悬停更改模型表情等功能 如默认端口非 8001 请在脚本提示中手动点击“扫描端口”按钮</p></div></div><div class="media-placeholder usage-media" data-asset="enable-api.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：enable-api.gif</span></div></div></article>
-            <article class="usage-substep"><div class="usage-substep-copy"><span class="usage-subindex">3.</span><div><h3>设置透明推流</h3><p>用于将获取到的视频流透明化 输出到脚本当中</p></div></div><div class="media-placeholder usage-media" data-asset="transparent-stream.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：transparent-stream.gif</span></div></div></article>
+            <article class="usage-substep section-anchor" id="enable-spout2"><div class="usage-substep-copy"><span class="usage-subindex">1.</span><div><h3>启用 Spout2</h3><p>用于将 VTube Studio 的视频流推送至脚本</p></div></div><figure class="capture-media usage-media"><a href="assets/enable-spout2.jpg" target="_blank" rel="noopener"><img src="assets/enable-spout2.jpg" alt="VTube Studio 视频设置中的 Spout2 配置，激活 Spout2 开关已开启" width="1109" height="640" loading="lazy"></a><figcaption>视频设置 → Spout2 配置 → 激活 Spout2</figcaption></figure></article>
+            <article class="usage-substep section-anchor" id="enable-vts-api"><div class="usage-substep-copy"><span class="usage-subindex">2.</span><div><h3>启用 VTube Studio API</h3><p>用于脚本获取实时渲染帧数 实现悬停更改模型表情等功能 如默认端口非 8001 请在脚本提示中手动点击“扫描端口”按钮</p></div></div><figure class="capture-media usage-media"><a href="assets/enable-api.jpg" target="_blank" rel="noopener"><img src="assets/enable-api.jpg" alt="VTube Studio Plugins API 已开启，端口为 8001，状态为 API 已就绪" width="1109" height="640" loading="lazy"></a><div class="capture-caption">一般设置 → Plugins → 开启 API，默认端口 8001</div><a href="assets/api-authorization.jpg" target="_blank" rel="noopener"><img src="assets/api-authorization.jpg" alt="VTube Studio 请求授权 VTSFloat_Meow 插件访问 API 的实际确认弹窗" width="1109" height="640" loading="lazy"></a><figcaption>首次连接时，确认插件名称为 VTSFloat_Meow 后点击「允许」。截图中的悬浮模型来自正在运行的工具。</figcaption></figure></article>
+            <article class="usage-substep"><div class="usage-substep-copy"><span class="usage-subindex">3.</span><div><h3>设置透明推流</h3><p>用于将获取到的视频流透明化 输出到脚本当中</p></div></div><figure class="capture-media usage-media"><a href="assets/background-selection.jpg" target="_blank" rel="noopener"><img src="assets/background-selection.jpg" alt="VTube Studio 的背景选择列表，包含 ColorPicker 背景" width="1440" height="912" loading="lazy"></a><div class="capture-caption">在背景选择中选择 ColorPicker。</div><a href="assets/transparent-stream.jpg" target="_blank" rel="noopener"><img src="assets/transparent-stream.jpg" alt="ColorPicker 颜色面板下方的透明推流开关已开启" width="605" height="373" loading="lazy"></a><figcaption>开启颜色面板下方的「透明推流」。VTS 窗口仍可显示粉色背景，输出给悬浮工具的画面保留透明通道。</figcaption></figure></article>
           </div>
         </div>
 
         <div class="usage-group section-anchor" id="custom-features">
           <div class="usage-group-heading"><span class="usage-index">3、</span><div><h3>自定义功能展示</h3><p>根据你的使用习惯调整模型的显示与互动方式</p></div></div>
           <div class="usage-custom-grid">
-            <article class="usage-substep"><div class="usage-substep-copy"><span class="usage-subindex">1.</span><div><h3>自由拖拽 调整边框</h3></div></div><div class="media-placeholder usage-media" data-asset="drag-border.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：drag-border.gif</span></div></div></article>
-            <article class="usage-substep"><div class="usage-substep-copy"><span class="usage-subindex">2.</span><div><h3>鼠标悬停透明化模型</h3><p>你可以自由调整模型触发悬停透明化的程度</p></div></div><div class="media-placeholder usage-media" data-asset="hover-opacity.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：hover-opacity.gif</span></div></div></article>
-            <article class="usage-substep"><div class="usage-substep-copy"><span class="usage-subindex">3.</span><div><h3>悬停透明化边界扩展</h3><p>你可以自由调整模型触发悬停透明化的距离</p></div></div><div class="media-placeholder usage-media" data-asset="hover-range.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：hover-range.gif</span></div></div></article>
-            <article class="usage-substep"><div class="usage-substep-copy"><span class="usage-subindex">4.</span><div><h3>悬停模型时播放表情</h3><p>你可以自己选择或多选需要悬停时播放的表情与调整时长</p></div></div><div class="media-placeholder usage-media" data-asset="hover-expression.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：hover-expression.gif</span></div></div></article>
+            <article class="usage-substep">
+              <div class="usage-substep-copy"><span class="usage-subindex">1.</span><div><h3>自定义调整边框颜色粗细</h3><p>可自由设置模型窗口的边框颜色和边框粗细。</p></div></div>
+              <figure class="capture-media usage-media"><a href="assets/personalization.gif" target="_blank" rel="noopener"><img src="assets/personalization.gif" alt="自定义调整边框颜色和粗细的操作演示" loading="lazy" decoding="async"></a><figcaption>个性化设置 1：边框颜色与粗细。</figcaption></figure>
+            </article>
+            <article class="usage-substep">
+              <div class="usage-substep-copy"><span class="usage-subindex">2.</span><div><h3>自定义调整模型不透明度与界面缩放</h3><p>可调整模型平时显示的不透明度，并选择适合当前显示器的界面缩放比例。</p></div></div>
+              <figure class="capture-media usage-media"><a href="assets/personalization-2.gif" target="_blank" rel="noopener"><img src="assets/personalization-2.gif" alt="自定义调整模型不透明度和界面缩放的操作演示" loading="lazy" decoding="async"></a><figcaption>个性化设置 2：模型不透明度与界面缩放。</figcaption></figure>
+            </article>
+            <article class="usage-substep">
+              <div class="usage-substep-copy"><span class="usage-subindex">3.</span><div><h3>自定义调整鼠标经过时的模型不透明度与范围扩展</h3><p>可设置鼠标经过模型时的透明程度，并调整自动触发区域向外扩展的距离。</p></div></div>
+              <figure class="capture-media usage-media"><a href="assets/personalization-3.gif" target="_blank" rel="noopener"><img src="assets/personalization-3.gif" alt="调整鼠标经过时的模型不透明度和范围扩展的操作演示" loading="lazy" decoding="async"></a><figcaption>个性化设置 3：悬停不透明度与范围扩展。</figcaption></figure>
+            </article>
+            <article class="usage-substep">
+              <div class="usage-substep-copy"><span class="usage-subindex">4.</span><div><h3>支持框选多个模型触发范围</h3><p>可在模型窗口内框选并保存多个独立的鼠标触发区域。</p></div></div>
+              <figure class="capture-media usage-media"><a href="assets/personalization-4.gif" target="_blank" rel="noopener"><img src="assets/personalization-4.gif" alt="框选多个模型触发范围的操作演示" loading="lazy" decoding="async"></a><figcaption>个性化设置 4：多个模型触发范围。</figcaption></figure>
+            </article>
+            <article class="usage-substep">
+              <div class="usage-substep-copy"><span class="usage-subindex">5.</span><div><h3>支持设置多个鼠标离开时播放模型表情与播放时长</h3><p>可选择多个鼠标离开触发范围后播放的模型表情，并设置对应的播放时长。</p></div></div>
+              <figure class="capture-media usage-media"><a href="assets/personalization-5.gif" target="_blank" rel="noopener"><img src="assets/personalization-5.gif" alt="设置多个鼠标离开时播放的模型表情与播放时长的操作演示" loading="lazy" decoding="async"></a><figcaption>个性化设置 5：离开时播放的模型表情与时长。</figcaption></figure>
+            </article>
           </div>
         </div>
       </section>
+
+      <div class="callout"><span class="callout-mark">i</span><p>工具栏可切换「悬浮窗口 / 桌面模式」。桌面模式取消置顶；在图形设置中可开启「其他程序全屏时暂停输出」，仅针对模型所在显示器的前台全屏程序，退出全屏后自动恢复。</p></div><figure class="capture-media usage-media "><a class="capture-small" href="assets/desktop-graphics.jpg" target="_blank" rel="noopener"><img src="assets/desktop-graphics.jpg" alt="图形设置菜单中的桌面模式全屏暂停选项已勾选" width="274" height="98" loading="lazy"></a><figcaption>桌面模式的全屏暂停选项（实机截图）。</figcaption></figure>
 
       <section class="section-anchor readme-section" id="gpu">
         <div class="section-heading"><div><span class="section-kicker">02 · GPU</span><h2>为什么推荐核显或节能 GPU</h2></div><p>把模型链路与游戏渲染分开 减少 GPU 争用</p></div>
@@ -150,9 +168,35 @@
 
       <section class="section-anchor readme-section" id="how-it-works">
         <div class="section-heading"><div><span class="section-kicker">03 · PIPELINE</span><h2>工作原理</h2></div><p>画面在 GPU 之间传递 最后交给 Windows 桌面合成器</p></div>
-        <div class="pipeline-card"><div class="pipeline-node"><span class="node-no">01</span><strong>VTube Studio</strong><small>渲染 Live2D 模型</small></div><span class="pipeline-arrow">→</span><div class="pipeline-node"><span class="node-no">02</span><strong>Spout2</strong><small>共享 GPU 纹理</small></div><span class="pipeline-arrow">→</span><div class="pipeline-node"><span class="node-no">03</span><strong>Direct3D 11</strong><small>接收与 GPU 缩放</small></div><span class="pipeline-arrow">→</span><div class="pipeline-node"><span class="node-no">04</span><strong>BGRA + Alpha</strong><small>透明图像缓冲</small></div><span class="pipeline-arrow">→</span><div class="pipeline-node"><span class="node-no">05</span><strong>Windows 桌面</strong><small>显示在游戏或应用上方</small></div></div>
-        <div class="flow-list"><div><span>①</span><p>检查纹理尺寸格式和宽高比</p></div><div><span>②</span><p>根据模式进行 GPU 缩放与滤波</p></div><div><span>③</span><p>叠加边框透明度和调试信息</p></div><div><span>④</span><p>通过 UpdateLayeredWindow 提交透明 Win32 分层窗口</p></div></div>
-        <div class="callout"><span class="callout-mark">i</span><p>程序不注入任何游戏或应用 不读取游戏画面 也不参与游戏渲染管线</p></div>
+        <div class="pipeline-system-map">
+          <div class="pipeline-card">
+            <span class="pipeline-zone pipeline-zone-vts" aria-hidden="true"></span>
+            <span class="pipeline-zone pipeline-zone-shared" aria-hidden="true"></span>
+            <span class="pipeline-zone pipeline-zone-meow" aria-hidden="true"></span>
+            <div class="pipeline-node pipeline-step-01"><span class="node-no">01</span><strong>VTube Studio</strong><small>渲染 Live2D 模型</small></div>
+            <span class="pipeline-arrow pipeline-arrow-01">→</span>
+            <div class="pipeline-node pipeline-step-02"><span class="node-no">02</span><strong>Spout2</strong><small>共享 GPU 纹理</small></div>
+            <span class="pipeline-arrow pipeline-arrow-02">→</span>
+            <div class="pipeline-node pipeline-step-03"><span class="node-no">03</span><strong>Direct3D 11</strong><small>接收与 GPU 缩放</small></div>
+            <span class="pipeline-arrow pipeline-arrow-03">→</span>
+            <div class="pipeline-node pipeline-step-04"><span class="node-no">04</span><strong>BGRA + Alpha</strong><small>透明图像缓冲</small></div>
+            <span class="pipeline-arrow pipeline-arrow-04">→</span>
+            <div class="pipeline-node pipeline-step-05"><span class="node-no">05</span><strong>Windows 桌面</strong><small>显示在游戏或应用上方</small></div>
+          </div>
+          <div class="pipeline-ownership" aria-label="流程工作区域">
+            <div class="pipeline-owner pipeline-owner-vts"><span><strong>VTube Studio</strong> 工作部分</span></div>
+            <div class="pipeline-owner pipeline-owner-meow"><span><strong>VTSFloat_Meow</strong> 工作部分</span></div>
+          </div>
+        </div>
+        <div class="callout privacy-callout">
+          <span class="callout-mark">i</span>
+          <div class="callout-copy">
+            <p>本程序不会注入任何游戏或应用，也不会读取游戏画面或参与游戏渲染。</p>
+            <p>本程序可完全离线运行，不会主动访问互联网；VTube Studio API 功能仅通过 localhost 与本机 VTube Studio 通信。</p>
+            <p>本程序不会访问 VTube Studio 使用的摄像头或其他连接设备。</p>
+            <p>接收到的模型画面仅在本机 GPU 与 Windows 桌面合成链路中处理，不会上传或录制保存。</p>
+          </div>
+        </div>
       </section>
 
       <section class="section-anchor readme-section" id="details">

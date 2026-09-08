@@ -22,7 +22,8 @@ struct Contract {
 
 constexpr Contract kContracts[] = {
     {L"图形设置", 88, 15},
-    {L"主屏居中", 74, 15},
+    {L"悬浮窗口", 100, 15},
+    {L"桌面模式", 100, 15},
     {L"切换屏幕", 74, 15},
     {L"比例 锁定", 76, 15},
     {L"比例 自由", 76, 15},
@@ -44,6 +45,7 @@ constexpr Contract kContracts[] = {
     {L"亮度", 79, 13},
     {L"边框粗细", 99, 13},
     {L"模型不透明度", 119, 13},
+    {L"界面缩放", 99, 13},
     {L"鼠标经过模型时将模型透明化", 345, 13},
     {L"悬停不透明度", 119, 13},
     {L"悬停扩展", 99, 13},
@@ -78,6 +80,7 @@ constexpr Contract kContracts[] = {
 int wmain() {
     constexpr UiLanguage languages[] = {
         UiLanguage::SimplifiedChinese,
+        UiLanguage::TraditionalChinese,
         UiLanguage::English,
         UiLanguage::Japanese,
         UiLanguage::Korean,
@@ -86,6 +89,32 @@ int wmain() {
     HDC dc = CreateCompatibleDC(nullptr);
     if (!dc) return 2;
     int failures = 0;
+    const auto expectLanguage = [&failures](
+        const wchar_t* label, UiLanguage actual, UiLanguage expected) {
+        if (actual == expected) return;
+        ++failures;
+        std::wcerr << L"[language-detection] " << label << L" failed\n";
+    };
+    expectLanguage(
+        L"zh-TW", LanguageFromLocaleName(L"zh-TW", UiLanguage::English),
+        UiLanguage::TraditionalChinese);
+    expectLanguage(
+        L"zh-Hant-HK", LanguageFromLocaleName(L"zh-Hant-HK", UiLanguage::English),
+        UiLanguage::TraditionalChinese);
+    expectLanguage(
+        L"zh-CN", LanguageFromLocaleName(L"zh-CN", UiLanguage::English),
+        UiLanguage::SimplifiedChinese);
+    expectLanguage(
+        L"saved zh-TW", LanguageFromCode(L"zh-TW", UiLanguage::English),
+        UiLanguage::TraditionalChinese);
+    vtsfloat::i18n::SetLanguage(UiLanguage::TraditionalChinese);
+    if (std::wcscmp(Tr(L"图形设置"), L"圖形設定") != 0 ||
+        std::wcscmp(
+            Tr(L"桌面模式：其他程序全屏时暂停输出"),
+            L"桌面模式：其他程式全螢幕時暫停輸出") != 0) {
+        ++failures;
+        std::wcerr << L"[traditional-chinese] conversion or terminology failed\n";
+    }
     for (UiLanguage language : languages) {
         vtsfloat::i18n::SetLanguage(language);
         for (size_t contractIndex = 0; contractIndex < ARRAYSIZE(kContracts); ++contractIndex) {

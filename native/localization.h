@@ -6,6 +6,7 @@ namespace vtsfloat::i18n {
 
 enum class UiLanguage {
     SimplifiedChinese,
+    TraditionalChinese,
     English,
     Japanese,
     Korean,
@@ -14,6 +15,8 @@ enum class UiLanguage {
 };
 
 UiLanguage DetectSystemLanguage();
+UiLanguage LanguageFromLocaleName(
+    const std::wstring& localeName, UiLanguage fallback);
 UiLanguage LanguageFromCode(const std::wstring& code, UiLanguage fallback);
 const wchar_t* LanguageCode(UiLanguage language);
 const wchar_t* LanguageDisplayName(UiLanguage language);

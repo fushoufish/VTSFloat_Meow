@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <windows.h>
@@ -33,7 +34,9 @@ struct Translation {
 constexpr Translation kTranslations[] = {
     {L"：", L": ", L"：", L": ", L": "},
     {L"图形设置", L"Graphics", L"グラフィック", L"그래픽", L"Графика"},
-    {L"主屏居中", L"Center", L"中央", L"가운데", L"Центр"},
+    {L"悬浮窗口", L"Floating", L"フロート", L"플로팅", L"Поверх"},
+    {L"桌面模式", L"Desktop", L"デスクトップ", L"데스크톱", L"На столе"},
+    {L"桌面模式：其他程序全屏时暂停输出", L"Desktop mode: pause output while another app is fullscreen", L"デスクトップ：他のアプリが全画面の間は出力を一時停止", L"데스크톱 모드: 다른 앱이 전체 화면이면 출력 일시 정지", L"Режим рабочего стола: приостанавливать вывод, когда другое приложение на весь экран"},
     {L"切换屏幕", L"Next", L"画面切替", L"화면 전환", L"Экран"},
     {L"锁定/解锁 ", L"Lock/unlock ", L"ロック切替 ", L"잠금 전환 ", L"Блокировка "},
     {L"请按组合键（Esc取消）", L"Press shortcut (Esc to cancel)", L"ショートカットを入力（Escで取消）", L"단축키 입력(Esc: 취소)", L"Нажмите сочетание (Esc — отмена)"},
@@ -76,6 +79,7 @@ constexpr Translation kTranslations[] = {
     {L"亮度", L"Brightness", L"明るさ", L"밝기", L"Яркость"},
     {L"边框粗细", L"Border width", L"枠線の太さ", L"테두리 두께", L"Толщина"},
     {L"模型不透明度", L"Model opacity", L"モデルの不透明度", L"모델 불투명도", L"Непрозрачность"},
+    {L"界面缩放", L"UI scale", L"UIスケール", L"UI 크기", L"Масштаб UI"},
     {L"鼠标经过模型时将模型透明化", L"Fade the model when the pointer is over it", L"ポインターがモデル上にある間、モデルを透過", L"포인터가 모델 위에 있을 때 모델 투명화", L"Делать модель прозрачнее при наведении"},
     {L"悬停不透明度", L"Hover opacity", L"ホバー時の不透明度", L"호버 불투명도", L"При наведении"},
     {L"悬停扩展", L"Hover range", L"ホバー範囲", L"호버 범위", L"Зона"},
@@ -215,11 +219,64 @@ constexpr Translation kTranslations[] = {
 };
 
 std::atomic<UiLanguage> gLanguage{UiLanguage::SimplifiedChinese};
+std::once_flag gTraditionalTranslationsOnce;
+std::array<std::wstring, ARRAYSIZE(kTranslations)> gTraditionalTranslations;
 std::mutex gCustomLanguageMutex;
 std::array<std::wstring, ARRAYSIZE(kTranslations)> gCustomTranslations;
 std::wstring gCustomLanguageName = L"Custom (INI)";
 std::wstring gCustomFontFace = L"Segoe UI";
 std::filesystem::path gCustomLanguagePath;
+
+void ReplaceAll(
+    std::wstring& text, std::wstring_view from, std::wstring_view to) {
+    if (from.empty()) return;
+    size_t position = 0;
+    while ((position = text.find(from, position)) != std::wstring::npos) {
+        text.replace(position, from.size(), to);
+        position += to.size();
+    }
+}
+
+std::wstring ToTraditionalChinese(const wchar_t* simplified) {
+    if (!simplified || !*simplified) return simplified ? simplified : L"";
+    const int required = LCMapStringEx(
+        L"zh-Hant", LCMAP_TRADITIONAL_CHINESE, simplified, -1,
+        nullptr, 0, nullptr, nullptr, 0);
+    if (required <= 1) return simplified;
+    std::wstring result(static_cast<size_t>(required), L'\0');
+    if (!LCMapStringEx(
+            L"zh-Hant", LCMAP_TRADITIONAL_CHINESE, simplified, -1,
+            result.data(), required, nullptr, nullptr, 0)) {
+        return simplified;
+    }
+    result.resize(static_cast<size_t>(required - 1));
+
+    // Windows performs the character conversion. These replacements adapt
+    // common UI terms to wording familiar to Traditional Chinese users.
+    constexpr std::pair<std::wstring_view, std::wstring_view> terminology[] = {
+        {std::wstring_view(L"文件夾"), std::wstring_view(L"資料夾")},
+        {std::wstring_view(L"文件"), std::wstring_view(L"檔案")},
+        {std::wstring_view(L"設置"), std::wstring_view(L"設定")},
+        {std::wstring_view(L"默認"), std::wstring_view(L"預設")},
+        {std::wstring_view(L"程序"), std::wstring_view(L"程式")},
+        {std::wstring_view(L"鼠標"), std::wstring_view(L"滑鼠")},
+        {std::wstring_view(L"全屏"), std::wstring_view(L"全螢幕")},
+        {std::wstring_view(L"屏幕"), std::wstring_view(L"螢幕")},
+        {std::wstring_view(L"信息"), std::wstring_view(L"資訊")},
+        {std::wstring_view(L"緩存"), std::wstring_view(L"快取")},
+        {std::wstring_view(L"視頻"), std::wstring_view(L"影片")},
+        {std::wstring_view(L"界面"), std::wstring_view(L"介面")},
+    };
+    for (const auto& [from, to] : terminology) ReplaceAll(result, from, to);
+    return result;
+}
+
+void InitializeTraditionalTranslations() {
+    for (size_t index = 0; index < ARRAYSIZE(kTranslations); ++index) {
+        gTraditionalTranslations[index] =
+            ToTraditionalChinese(kTranslations[index].zh);
+    }
+}
 
 std::wstring TranslationKey(const wchar_t* source) {
     // Stable FNV-1a key based on the internal source identity. English stays
@@ -471,20 +528,51 @@ std::filesystem::path ResolveCustomLanguagePath() {
 
 }  // namespace
 
+UiLanguage LanguageFromLocaleName(
+    const std::wstring& localeName, UiLanguage fallback) {
+    if (localeName.empty()) return fallback;
+    if (_wcsnicmp(localeName.c_str(), L"zh-Hant", 7) == 0 ||
+        _wcsnicmp(localeName.c_str(), L"zh-TW", 5) == 0 ||
+        _wcsnicmp(localeName.c_str(), L"zh-HK", 5) == 0 ||
+        _wcsnicmp(localeName.c_str(), L"zh-MO", 5) == 0) {
+        return UiLanguage::TraditionalChinese;
+    }
+    if (_wcsnicmp(localeName.c_str(), L"zh", 2) == 0) {
+        return UiLanguage::SimplifiedChinese;
+    }
+    if (_wcsnicmp(localeName.c_str(), L"ja", 2) == 0) return UiLanguage::Japanese;
+    if (_wcsnicmp(localeName.c_str(), L"ko", 2) == 0) return UiLanguage::Korean;
+    if (_wcsnicmp(localeName.c_str(), L"ru", 2) == 0) return UiLanguage::Russian;
+    if (_wcsnicmp(localeName.c_str(), L"en", 2) == 0) return UiLanguage::English;
+    return fallback;
+}
+
 UiLanguage DetectSystemLanguage() {
     wchar_t locale[LOCALE_NAME_MAX_LENGTH]{};
-    if (!GetUserDefaultLocaleName(locale, ARRAYSIZE(locale))) {
-        return UiLanguage::English;
+    const LANGID uiLanguage = GetUserDefaultUILanguage();
+    if (uiLanguage != 0 && LCIDToLocaleName(
+            MAKELCID(uiLanguage, SORT_DEFAULT), locale,
+            ARRAYSIZE(locale), 0) > 0) {
+        return LanguageFromLocaleName(locale, UiLanguage::English);
     }
-    if (_wcsnicmp(locale, L"zh", 2) == 0) return UiLanguage::SimplifiedChinese;
-    if (_wcsnicmp(locale, L"ja", 2) == 0) return UiLanguage::Japanese;
-    if (_wcsnicmp(locale, L"ko", 2) == 0) return UiLanguage::Korean;
-    if (_wcsnicmp(locale, L"ru", 2) == 0) return UiLanguage::Russian;
+    if (GetUserDefaultLocaleName(locale, ARRAYSIZE(locale))) {
+        return LanguageFromLocaleName(locale, UiLanguage::English);
+    }
     return UiLanguage::English;
 }
 
 UiLanguage LanguageFromCode(const std::wstring& code, UiLanguage fallback) {
-    if (code == L"zh-CN") return UiLanguage::SimplifiedChinese;
+    if (_wcsicmp(code.c_str(), L"zh-TW") == 0 ||
+        _wcsicmp(code.c_str(), L"zh-Hant") == 0 ||
+        _wcsicmp(code.c_str(), L"zh-HK") == 0 ||
+        _wcsicmp(code.c_str(), L"zh-MO") == 0) {
+        return UiLanguage::TraditionalChinese;
+    }
+    if (_wcsicmp(code.c_str(), L"zh-CN") == 0 ||
+        _wcsicmp(code.c_str(), L"zh-SG") == 0 ||
+        _wcsicmp(code.c_str(), L"zh") == 0) {
+        return UiLanguage::SimplifiedChinese;
+    }
     if (code == L"en") return UiLanguage::English;
     if (code == L"ja") return UiLanguage::Japanese;
     if (code == L"ko") return UiLanguage::Korean;
@@ -496,6 +584,7 @@ UiLanguage LanguageFromCode(const std::wstring& code, UiLanguage fallback) {
 const wchar_t* LanguageCode(UiLanguage language) {
     switch (language) {
     case UiLanguage::SimplifiedChinese: return L"zh-CN";
+    case UiLanguage::TraditionalChinese: return L"zh-TW";
     case UiLanguage::English: return L"en";
     case UiLanguage::Japanese: return L"ja";
     case UiLanguage::Korean: return L"ko";
@@ -508,6 +597,7 @@ const wchar_t* LanguageCode(UiLanguage language) {
 const wchar_t* LanguageDisplayName(UiLanguage language) {
     switch (language) {
     case UiLanguage::SimplifiedChinese: return L"简体中文";
+    case UiLanguage::TraditionalChinese: return L"繁體中文";
     case UiLanguage::English: return L"English";
     case UiLanguage::Japanese: return L"日本語";
     case UiLanguage::Korean: return L"한국어";
@@ -587,6 +677,10 @@ const wchar_t* Tr(const wchar_t* simplifiedChinese) {
         const auto& entry = kTranslations[index];
         if (std::wcscmp(entry.zh, simplifiedChinese) != 0) continue;
         switch (language) {
+        case UiLanguage::TraditionalChinese:
+            std::call_once(
+                gTraditionalTranslationsOnce, InitializeTraditionalTranslations);
+            return gTraditionalTranslations[index].c_str();
         case UiLanguage::English: return entry.en;
         case UiLanguage::Japanese: return entry.ja;
         case UiLanguage::Korean: return entry.ko;
@@ -607,6 +701,7 @@ const wchar_t* UiFontFace() {
     case UiLanguage::Japanese: return L"Yu Gothic UI";
     case UiLanguage::Korean: return L"Malgun Gothic";
     case UiLanguage::SimplifiedChinese: return L"Microsoft YaHei UI";
+    case UiLanguage::TraditionalChinese: return L"Microsoft JhengHei UI";
     case UiLanguage::Custom: {
         std::lock_guard<std::mutex> lock(gCustomLanguageMutex);
         return gCustomFontFace.c_str();

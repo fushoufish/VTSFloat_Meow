@@ -27,3 +27,6 @@ steam_appid.txt
 
 # Private local project history
 private_project.md
+
+# Isolated desktop-mode validation binaries
+output/desktop-mode/

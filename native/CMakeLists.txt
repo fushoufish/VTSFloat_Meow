@@ -43,7 +43,7 @@ add_executable(vts_localization_audit
     localization.cpp
 )
 
-option(VTSFLOAT_LANGUAGE_PREVIEW "Build the isolated multilingual preview" ON)
+option(VTSFLOAT_LANGUAGE_PREVIEW "Build the isolated multilingual preview" OFF)
 if(VTSFLOAT_LANGUAGE_PREVIEW)
     target_compile_definitions(vts_overlay_layered PRIVATE VTSFLOAT_LANGUAGE_PREVIEW=1)
 endif()
@@ -130,11 +130,20 @@ else()
     set(VTSFLOAT_LAYERED_OUTPUT_NAME "VTSFloat_Meow")
 endif()
 
+set(VTSFLOAT_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.." CACHE PATH "Directory for the application executable")
+
 set_target_properties(vts_overlay_layered PROPERTIES
     OUTPUT_NAME "${VTSFLOAT_LAYERED_OUTPUT_NAME}"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
-    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_CURRENT_SOURCE_DIR}/.."
-    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}/.."
-    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_CURRENT_SOURCE_DIR}/.."
-    RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    RUNTIME_OUTPUT_DIRECTORY "${VTSFLOAT_OUTPUT_DIRECTORY}"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${VTSFLOAT_OUTPUT_DIRECTORY}"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${VTSFLOAT_OUTPUT_DIRECTORY}"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${VTSFLOAT_OUTPUT_DIRECTORY}"
+    RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${VTSFLOAT_OUTPUT_DIRECTORY}"
 )
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(vts_desktop_mode_tests desktop_mode_tests.cpp)
+    target_compile_features(vts_desktop_mode_tests PRIVATE cxx_std_17)
+    add_test(NAME desktop_mode_bounds COMMAND vts_desktop_mode_tests)
+endif()
