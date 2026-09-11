@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <cwchar>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -48,10 +49,13 @@ constexpr Contract kContracts[] = {
     {L"界面缩放", 99, 13},
     {L"鼠标经过模型时将模型透明化", 345, 13},
     {L"悬停不透明度", 119, 13},
+    {L"透明度恢复延时", 154, 13},
+    {L"默认 0 秒", 105, 10},
     {L"悬停扩展", 99, 13},
     {L"启用手动框选范围", 141, 13},
     {L"鼠标移入时触发表情，移出后立即恢复", 330, 13},
     {L"表情恢复延时", 124, 13},
+    {L"ENTER 确认", 100, 10},
     {L"选择表情", 373, 13},
     {L"暂无可用表情，请确认 VTS API 已连接", 424, 13},
     // Manual-region floating toolbar.
@@ -62,6 +66,11 @@ constexpr Contract kContracts[] = {
     {L"等待 VTube Studio 启动中", 580, 22},
     {L"从 Steam 启动 VTube Studio", 273, 16},
     {L"从外部启动 VTS", 273, 16},
+    {L"你刚刚拒绝了VTSFloat_Meow", 340, 15},
+    {L"[重新发起授权]", 220, 15},
+    {L"你可以访问该教程页面：", 580, 14},
+    {L"GitHub-VTSFloat_Meow_DOCS", 580, 14},
+    {L" 页面查看更多", 580, 14},
     // Toolbar notifications and in-model warning cards.
     // These result cells are measured at runtime and expanded to their text.
     {L"扫描中", 180, 15, L"..."},
@@ -143,8 +152,16 @@ int wmain() {
         }
     }
 
-    // Exercise the external INI path separately. Its generated baseline must
-    // match the built-in English reference language.
+    // Exercise the external INI path separately. Keep the audit isolated from
+    // the user's real LOCALAPPDATA language file.
+    const std::filesystem::path customAuditPath =
+        std::filesystem::temp_directory_path() /
+        (L"VTSFloat_Meow.custom-language.audit-" +
+         std::to_wstring(GetCurrentProcessId()) + L".ini");
+    std::error_code customAuditError;
+    std::filesystem::remove(customAuditPath, customAuditError);
+    SetEnvironmentVariableW(
+        L"VTSFLOAT_CUSTOM_LANGUAGE_PATH", customAuditPath.c_str());
     vtsfloat::i18n::SetLanguage(UiLanguage::Custom);
     const std::wstring customPath = vtsfloat::i18n::CustomLanguageFilePath();
     if (customPath.empty() ||
@@ -177,6 +194,9 @@ int wmain() {
         replaceGraphicsValue("Graphics #Graphics");
         vtsfloat::i18n::ReloadCustomLanguage();
     }
+    SetEnvironmentVariableW(L"VTSFLOAT_CUSTOM_LANGUAGE_PATH", nullptr);
+    customAuditError.clear();
+    std::filesystem::remove(customAuditPath, customAuditError);
     DeleteDC(dc);
     if (failures == 0) {
         std::wcout << L"Localization fixed-width audit passed.\n";

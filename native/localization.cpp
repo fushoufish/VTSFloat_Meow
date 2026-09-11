@@ -82,12 +82,15 @@ constexpr Translation kTranslations[] = {
     {L"界面缩放", L"UI scale", L"UIスケール", L"UI 크기", L"Масштаб UI"},
     {L"鼠标经过模型时将模型透明化", L"Fade the model when the pointer is over it", L"ポインターがモデル上にある間、モデルを透過", L"포인터가 모델 위에 있을 때 모델 투명화", L"Делать модель прозрачнее при наведении"},
     {L"悬停不透明度", L"Hover opacity", L"ホバー時の不透明度", L"호버 불투명도", L"При наведении"},
+    {L"透明度恢复延时", L"Opacity restore delay", L"不透明度の復元待ち時間", L"불투명도 복원 지연", L"Задержка возврата"},
+    {L"默认 0 秒", L"Default: 0 sec", L"既定：0秒", L"기본값: 0초", L"По умолч.: 0 с"},
     {L"悬停扩展", L"Hover range", L"ホバー範囲", L"호버 범위", L"Зона"},
     {L"启用手动框选范围", L"Manual regions", L"手動選択範囲を使用", L"수동 영역 사용", L"Ручные области"},
     {L"手动框选悬停触发范围", L"Select hover trigger regions", L"ホバー判定範囲を選択", L"가리키기 감지 영역 선택", L"Выбрать области"},
     {L"鼠标移入时触发表情，移出后立即恢复", L"Trigger expressions on hover", L"ホバーで表情を再生し、離れた後に復元", L"호버 시 표정 재생", L"Эмоции при наведении"},
     {L"表情恢复延时", L"Restore delay", L"復元まで", L"복원 지연", L"Задержка"},
     {L"秒", L"sec", L"秒", L"초", L"с"},
+    {L"ENTER 确认", L"ENTER to confirm", L"ENTER で確定", L"ENTER로 확인", L"ENTER: ОК"},
     {L"选择表情", L"Select expressions", L"表情を選択", L"표정 선택", L"Выбрать эмоции"},
     {L"表情：", L"Expressions: ", L"表情：", L"표정: ", L"Эмоции: "},
     {L"已选择 ", L"Selected ", L"選択済み：", L"선택됨: ", L"Выбрано: "},
@@ -121,6 +124,9 @@ constexpr Translation kTranslations[] = {
     {L"等待 VTube Studio 启动中", L"Waiting for VTube Studio to start", L"VTube Studio の起動を待っています", L"VTube Studio 시작 대기 중", L"Ожидание запуска VTube Studio"},
     {L"如已启动，请在 设置 - 相机 中打开“激活 Spout2”开关，\r\n", L"If it is running, open Settings > Camera and enable “Activate Spout2”,\r\n", L"起動済みの場合は、設定 > カメラで「Spout2を有効化」をオンにし、\r\n", L"실행 중이면 설정 > 카메라에서 ‘Spout2 활성화’를 켜고,\r\n", L"Если программа запущена, откройте Настройки > Камера и включите «Активировать Spout2»,\r\n"},
     {L"将背景调整成“ColorPicker”，然后启动透明推流。", L"set the background to “ColorPicker”, then start transparent streaming.", L"背景を「ColorPicker」にして透明配信を開始してください。", L"배경을 ‘ColorPicker’로 설정한 다음 투명 스트리밍을 시작하세요.", L"выберите фон «ColorPicker» и запустите прозрачную трансляцию."},
+    {L"你可以访问该教程页面：", L"Visit the tutorial: ", L"チュートリアルはこちら：", L"튜토리얼 보기: ", L"Руководство: "},
+    {L"GitHub-VTSFloat_Meow_DOCS", L"GitHub-VTSFloat_Meow_DOCS", L"GitHub-VTSFloat_Meow_DOCS", L"GitHub-VTSFloat_Meow_DOCS", L"GitHub-VTSFloat_Meow_DOCS"},
+    {L" 页面查看更多", L" for more information.", L" で詳しく確認できます。", L"에서 자세히 확인하세요.", L" — подробнее."},
     {L"所选位置未找到 VTube Studio，请重新选择路径。", L"VTube Studio was not found at the selected location. Choose another path.", L"選択した場所に VTube Studio が見つかりません。別の場所を選択してください。", L"선택한 위치에서 VTube Studio를 찾을 수 없습니다. 다른 경로를 선택하세요.", L"VTube Studio не найден в выбранном месте. Выберите другой путь."},
     {L"尚未找到 VTube Studio 安装目录，请先安装或启动一次 VTube Studio。", L"The VTube Studio installation was not found. Install or launch it once first.", L"VTube Studio のインストール先が見つかりません。先にインストールするか、一度起動してください。", L"VTube Studio 설치 경로를 찾을 수 없습니다. 먼저 설치하거나 한 번 실행하세요.", L"Папка VTube Studio не найдена. Сначала установите или один раз запустите программу."},
     {L"VTS 安装路径：", L"VTS installation: ", L"VTS インストール先：", L"VTS 설치 경로: ", L"Папка VTS: "},
@@ -128,6 +134,8 @@ constexpr Translation kTranslations[] = {
     {L"添加启动路径", L"Add launch path", L"起動パスを追加", L"실행 경로 추가", L"Добавить путь запуска"},
     {L"添加成功！", L"Connected successfully!", L"接続しました！", L"연결되었습니다!", L"Подключено!"},
     {L"等待 VTube Studio 授权插件连接中，请打开 VTS 插件进行授权", L"Waiting for VTube Studio authorization. Allow the plugin in VTS", L"VTube Studio の承認待ちです。VTS でプラグインを許可してください", L"VTube Studio 승인 대기 중입니다. VTS에서 플러그인을 허용하세요", L"Ожидание разрешения VTube Studio. Разрешите плагин в VTS"},
+    {L"你刚刚拒绝了VTSFloat_Meow", L"You just denied VTSFloat_Meow access", L"VTSFloat_Meow のアクセスを拒否しました", L"VTSFloat_Meow 접근을 거부했습니다", L"Вы отклонили доступ для VTSFloat_Meow"},
+    {L"[重新发起授权]", L"[Request access again]", L"[承認を再リクエスト]", L"[승인 다시 요청]", L"[Запросить доступ снова]"},
     {L"VTS API 连接已断开", L"VTS API disconnected", L"VTS API が切断されました", L"VTS API 연결 끊김", L"VTS API отключён"},
     {L"VTS API 尚未授权", L"VTS API not authorized", L"VTS API が未承認です", L"VTS API 승인 필요", L"VTS API не разрешён"},
     {L"扫描中", L"Scanning", L"スキャン中", L"검색 중", L"Сканирование"},
@@ -216,6 +224,48 @@ constexpr Translation kTranslations[] = {
     {L"编辑自定义语言配置…", L"Edit custom language file…", L"カスタム言語ファイルを編集…", L"사용자 언어 파일 편집…", L"Изменить файл своего языка…"},
     {L"无法打开自定义语言配置文件：\n", L"Could not open the custom language file:\n", L"カスタム言語ファイルを開けませんでした：\n", L"사용자 언어 파일을 열 수 없습니다:\n", L"Не удалось открыть файл своего языка:\n"},
     {L"自定义语言", L"Custom language", L"カスタム言語", L"사용자 언어", L"Свой язык"},
+    {L"采集", L"Capture", L"収集中", L"수집", L"Сбор"},
+    {L"等待 VTS 分辨率", L"Waiting for VTS resolution", L"VTS 解像度を待機中", L"VTS 해상도 대기 중", L"Ожидание разрешения VTS"},
+    {L"预热中", L"Warming up", L"ウォームアップ中", L"준비 중", L"Прогрев"},
+    {L"采集组", L"Capture group", L"収集グループ", L"수집 그룹", L"Группа сбора"},
+    {L"请在 VTube Studio 中手动设置输出分辨率：", L"Manually set the VTube Studio output resolution:", L"VTube Studio の出力解像度を手動で設定してください：", L"VTube Studio 출력 해상도를 직접 설정하세요:", L"Вручную задайте разрешение вывода VTube Studio:"},
+    {L"程序缩放分辨率将自动设置为：", L"The app render resolution will be set automatically to:", L"アプリの描画解像度は自動的に次へ設定されます：", L"앱 렌더링 해상도는 자동으로 다음 값으로 설정됩니다:", L"Разрешение рендеринга программы будет автоматически задано:"},
+    {L"取消将结束采集并保留已经写入的原始数据。", L"Cancel ends capture and keeps the raw data already written.", L"キャンセルすると収集を終了し、書き込み済みの生データを保持します。", L"취소하면 수집을 종료하고 이미 기록한 원시 데이터를 보존합니다.", L"Отмена завершит сбор и сохранит уже записанные исходные данные."},
+    {L"分辨率性能采集", L"Resolution performance capture", L"解像度パフォーマンス収集", L"해상도 성능 수집", L"Сбор данных производительности разрешений"},
+    {L"采集已完成。", L"Capture completed.", L"収集が完了しました。", L"수집이 완료되었습니다.", L"Сбор завершён."},
+    {L"采集已停止，已保留现有数据。", L"Capture stopped. Existing data was kept.", L"収集を停止しました。既存データは保持されています。", L"수집을 중지했습니다. 기존 데이터는 보존되었습니다.", L"Сбор остановлен. Имеющиеся данные сохранены."},
+    {L"采集数据已保存到：", L"Capture data was saved to:", L"収集データの保存先：", L"수집 데이터 저장 위치:", L"Данные сбора сохранены в:"},
+    {L"尚未接收到 VTube Studio 的 Spout2 画面。", L"No VTube Studio Spout2 frame has been received yet.", L"VTube Studio の Spout2 映像をまだ受信していません。", L"아직 VTube Studio Spout2 화면을 수신하지 못했습니다.", L"Кадр Spout2 от VTube Studio ещё не получен."},
+    {L"请先连接 VTS API，以采集 VTS 实时帧数。", L"Connect the VTS API first to collect live VTS FPS.", L"VTS の実測 FPS を収集するには、先に VTS API へ接続してください。", L"VTS 실시간 FPS를 수집하려면 먼저 VTS API를 연결하세요.", L"Сначала подключите VTS API, чтобы собирать текущий FPS VTS."},
+    {L"无法创建采集文件。", L"Could not create capture files.", L"収集ファイルを作成できませんでした。", L"수집 파일을 만들 수 없습니다.", L"Не удалось создать файлы сбора."},
+    {L"停止并保存当前采集", L"Stop and save capture", L"収集を停止して保存", L"수집 중지 및 저장", L"Остановить и сохранить сбор"},
+    {L"分辨率基准采集", L"Resolution benchmark", L"解像度ベンチマーク", L"해상도 벤치마크", L"Тест разрешений"},
+    {L"你确定要进行该功能的使用吗？", L"Are you sure you want to use this feature?", L"この機能を使用しますか？", L"이 기능을 사용하시겠습니까?", L"Вы уверены, что хотите использовать эту функцию?"},
+    {L"该功能设计在多组分辨率测试时获取性能数据，一般你是用不到该功能的！\n\n是否继续？", L"This feature collects performance data across multiple resolution combinations. Most users do not need it.\n\nContinue?", L"この機能は、複数の解像度の組み合わせでパフォーマンスデータを収集するためのものです。通常は使用する必要はありません。\n\n続行しますか？", L"이 기능은 여러 해상도 조합의 성능 데이터를 수집하기 위한 기능입니다. 일반적인 사용에는 필요하지 않습니다.\n\n계속하시겠습니까?", L"Эта функция собирает данные производительности для нескольких сочетаний разрешений. Большинству пользователей она не требуется.\n\nПродолжить?"},
+    {L"继续", L"Continue", L"続行", L"계속", L"Продолжить"},
+    {L"组", L"groups", L"グループ", L"그룹", L"групп"},
+    {L"条", L"samples", L"件", L"개", L"замеров"},
+    {L"设置完成后点击“确定”。程序检测到分辨率匹配后会先预热，再开始采集。", L"After setting it, select OK. Once both resolutions match, the app warms up and starts capture.", L"設定後に「OK」を選択してください。解像度の一致を検出すると、ウォームアップ後に収集を開始します。", L"설정 후 확인을 선택하세요. 해상도가 일치하면 준비 후 수집을 시작합니다.", L"После настройки нажмите «ОК». Когда разрешения совпадут, программа выполнит прогрев и начнёт сбор."},
+    {L"打开采集目录", L"Open capture folder", L"収集フォルダーを開く", L"수집 폴더 열기", L"Открыть папку сбора"},
+    {L"开始分辨率基准采集", L"Start resolution benchmark", L"解像度ベンチマークを開始", L"해상도 벤치마크 시작", L"Начать тест разрешений"},
+    {L"将测试 7×7 共 49 组分辨率组合，每组采集 24 条数据。", L"Tests all 49 combinations in a 7×7 resolution matrix and collects 24 samples per group.", L"7×7 の全49解像度組み合わせをテストし、各グループで24件を収集します。", L"7×7 해상도 조합 49개를 모두 테스트하고 그룹마다 샘플 24개를 수집합니다.", L"Будут проверены все 49 сочетаний разрешений 7×7, по 24 замера на группу."},
+    {L"每张 GPU 预计用时约", L"Estimated time per GPU:", L"GPU 1基あたりの予定時間：", L"GPU당 예상 시간:", L"Примерное время на один GPU:"},
+    {L"分钟", L"minutes", L"分", L"분", L"мин"},
+    {L"分钟。", L"minutes.", L"分。", L"분입니다.", L"мин."},
+    {L"测试分辨率：", L"Test resolutions:", L"テスト解像度：", L"테스트 해상도:", L"Тестируемые разрешения:"},
+    {L"640×480、960×540、1280×720、1600×900、1920×1080、2560×1440、3840×2160", L"640×480, 960×540, 1280×720, 1600×900, 1920×1080, 2560×1440, 3840×2160", L"640×480、960×540、1280×720、1600×900、1920×1080、2560×1440、3840×2160", L"640×480, 960×540, 1280×720, 1600×900, 1920×1080, 2560×1440, 3840×2160", L"640×480, 960×540, 1280×720, 1600×900, 1920×1080, 2560×1440, 3840×2160"},
+    {L"采集期间请勿运行游戏、渲染或其他高负载任务，否则结果会失真。", L"Do not run games, rendering, or other heavy workloads during capture because they will distort the results.", L"収集中はゲーム、レンダリング、その他の高負荷処理を実行しないでください。結果が不正確になります。", L"수집 중에는 게임, 렌더링 또는 기타 고부하 작업을 실행하지 마세요. 결과가 왜곡될 수 있습니다.", L"Во время сбора не запускайте игры, рендеринг и другие тяжёлые задачи: они исказят результат."},
+    {L"请保持 VTube Studio、Spout2 与插件 API 正常运行。", L"Keep VTube Studio, Spout2, and the plugin API running.", L"VTube Studio、Spout2、プラグイン API を実行したままにしてください。", L"VTube Studio, Spout2 및 플러그인 API를 계속 실행해 주세요.", L"Не закрывайте VTube Studio, Spout2 и API плагинов."},
+    {L"程序会自动调整分辨率，完成或停止后恢复窗口。", L"The app adjusts resolutions automatically and restores the windows after completion or cancellation.", L"解像度は自動調整され、完了または停止後にウィンドウが復元されます。", L"프로그램이 해상도를 자동 조정하고 완료 또는 중지 후 창을 복원합니다.", L"Программа автоматически меняет разрешения и восстанавливает окна после завершения или остановки."},
+    {L"测试当前 GPU", L"Test current GPU", L"現在の GPU をテスト", L"현재 GPU 테스트", L"Тестировать текущий GPU"},
+    {L"测试全部 GPU", L"Test all GPUs", L"すべての GPU をテスト", L"모든 GPU 테스트", L"Тестировать все GPU"},
+    {L"预计约", L"about", L"約", L"약", L"около"},
+    {L"无法自动切换到下一张 GPU，采集已停止并保留现有 CSV。", L"Could not switch automatically to the next GPU. Capture stopped and the existing CSV was kept.", L"次の GPU に自動切り替えできませんでした。収集を停止し、既存の CSV は保持しました。", L"다음 GPU로 자동 전환하지 못했습니다. 수집을 중지하고 기존 CSV를 보존했습니다.", L"Не удалось автоматически переключиться на следующий GPU. Сбор остановлен, существующий CSV сохранён."},
+    {L"写入下一张 GPU 的 Windows 显卡偏好失败，采集已停止并保留现有 CSV。", L"Could not save the Windows graphics preference for the next GPU. Capture stopped and the existing CSV was kept.", L"次の GPU の Windows グラフィックス設定を保存できませんでした。収集を停止し、既存の CSV は保持しました。", L"다음 GPU의 Windows 그래픽 기본 설정을 저장하지 못했습니다. 수집을 중지하고 기존 CSV를 보존했습니다.", L"Не удалось сохранить настройку графики Windows для следующего GPU. Сбор остановлен, существующий CSV сохранён."},
+    {L"无法正常关闭 VTube Studio，采集已停止并保留现有 CSV。", L"Could not close VTube Studio normally. Capture stopped and the existing CSV was kept.", L"VTube Studio を正常に終了できませんでした。収集を停止し、既存の CSV は保持しました。", L"VTube Studio를 정상적으로 종료하지 못했습니다. 수집을 중지하고 기존 CSV를 보존했습니다.", L"Не удалось корректно закрыть VTube Studio. Сбор остановлен, существующий CSV сохранён."},
+    {L"VTube Studio 未能在 15 秒内关闭，采集已停止并保留现有 CSV。", L"VTube Studio did not close within 15 seconds. Capture stopped and the existing CSV was kept.", L"VTube Studio が15秒以内に終了しませんでした。収集を停止し、既存の CSV は保持しました。", L"VTube Studio가 15초 안에 종료되지 않았습니다. 수집을 중지하고 기존 CSV를 보존했습니다.", L"VTube Studio не закрылся за 15 секунд. Сбор остановлен, существующий CSV сохранён."},
+    {L"无法启动 VTube Studio，采集已停止并保留现有 CSV。", L"Could not start VTube Studio. Capture stopped and the existing CSV was kept.", L"VTube Studio を起動できませんでした。収集を停止し、既存の CSV は保持しました。", L"VTube Studio를 시작하지 못했습니다. 수집을 중지하고 기존 CSV를 보존했습니다.", L"Не удалось запустить VTube Studio. Сбор остановлен, существующий CSV сохранён."},
+    {L"覆盖层自动重启失败，采集已停止并保留现有 CSV。", L"The overlay could not restart automatically. Capture stopped and the existing CSV was kept.", L"オーバーレイを自動再起動できませんでした。収集を停止し、既存の CSV は保持しました。", L"오버레이를 자동으로 다시 시작하지 못했습니다. 수집을 중지하고 기존 CSV를 보존했습니다.", L"Не удалось автоматически перезапустить оверлей. Сбор остановлен, существующий CSV сохранён."},
 };
 
 std::atomic<UiLanguage> gLanguage{UiLanguage::SimplifiedChinese};
@@ -502,26 +552,66 @@ void AppendMissingCustomTranslations(
 
 std::filesystem::path ResolveCustomLanguagePath() {
     if (!gCustomLanguagePath.empty()) return gCustomLanguagePath;
-    const std::filesystem::path portable =
-        ExecutableDirectory() / L"VTSFloat_Meow.custom-language.ini";
-    std::error_code error;
-    if (std::filesystem::exists(portable, error) ||
-        WriteCustomLanguageTemplate(portable)) {
-        gCustomLanguagePath = portable;
-        return gCustomLanguagePath;
+
+    // Tests can use an isolated template without touching the user's actual
+    // language file.
+    std::array<wchar_t, 32768> overridePath{};
+    const DWORD overrideLength = GetEnvironmentVariableW(
+        L"VTSFLOAT_CUSTOM_LANGUAGE_PATH", overridePath.data(),
+        static_cast<DWORD>(overridePath.size()));
+    if (overrideLength > 0 && overrideLength < overridePath.size()) {
+        const std::filesystem::path path(
+            std::wstring(overridePath.data(), overrideLength));
+        std::error_code error;
+        if (std::filesystem::exists(path, error) ||
+            WriteCustomLanguageTemplate(path)) {
+            gCustomLanguagePath = path;
+            return gCustomLanguagePath;
+        }
     }
 
+    const std::filesystem::path portable =
+        ExecutableDirectory() / L"VTSFloat_Meow.custom-language.ini";
     std::array<wchar_t, 32768> localAppData{};
     const DWORD length = GetEnvironmentVariableW(
         L"LOCALAPPDATA", localAppData.data(),
         static_cast<DWORD>(localAppData.size()));
-    const std::filesystem::path fallback = length > 0 && length < localAppData.size()
+    const std::filesystem::path managed = length > 0 && length < localAppData.size()
         ? std::filesystem::path(std::wstring(localAppData.data(), length)) /
             L"VTSFloat_Meow.custom-language.ini"
-        : portable;
-    if (std::filesystem::exists(fallback, error) ||
-        WriteCustomLanguageTemplate(fallback)) {
-        gCustomLanguagePath = fallback;
+        : std::filesystem::path{};
+    std::error_code error;
+    if (!managed.empty()) {
+        // Copy an existing portable template once so completed translations
+        // are preserved. Keep the source file untouched: it may be a sample
+        // shipped with a source checkout. The managed copy is used from now on.
+        if (!std::filesystem::exists(managed, error) &&
+            std::filesystem::exists(portable, error)) {
+            error.clear();
+            std::filesystem::copy_file(
+                portable, managed, std::filesystem::copy_options::none, error);
+        }
+        error.clear();
+        if (std::filesystem::exists(managed, error) ||
+            WriteCustomLanguageTemplate(managed)) {
+            gCustomLanguagePath = managed;
+            return gCustomLanguagePath;
+        }
+    }
+
+    // LOCALAPPDATA is expected on supported Windows versions. If it is not
+    // available or writable, use the temporary directory instead of leaving
+    // a generated configuration file beside an EXE placed on the desktop.
+    error.clear();
+    const std::filesystem::path temporaryDirectory =
+        std::filesystem::temp_directory_path(error);
+    if (!error) {
+        const std::filesystem::path fallback = temporaryDirectory /
+            L"VTSFloat_Meow.custom-language.ini";
+        if (std::filesystem::exists(fallback, error) ||
+            WriteCustomLanguageTemplate(fallback)) {
+            gCustomLanguagePath = fallback;
+        }
     }
     return gCustomLanguagePath;
 }

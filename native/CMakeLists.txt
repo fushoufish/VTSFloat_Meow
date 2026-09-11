@@ -33,6 +33,7 @@ add_executable(vts_spout_test_sender
 
 add_executable(vts_overlay_layered WIN32
     overlay_layered.cpp
+    benchmark_capture.cpp
     localization.cpp
     overlay_resources.rc
     ${SPOUT_DX11_SOURCES}
@@ -65,7 +66,10 @@ if(MSVC)
     target_compile_options(vts_overlay_dx11 PRIVATE /W3 /EHsc /utf-8)
     target_compile_options(vts_spout_bridge PRIVATE /W3 /EHsc /utf-8)
     target_compile_options(vts_spout_test_sender PRIVATE /W3 /EHsc /utf-8)
-    target_compile_options(vts_overlay_layered PRIVATE /W3 /EHsc /utf-8)
+    target_compile_options(vts_overlay_layered PRIVATE /W3 /EHsc /utf-8 /Zi)
+    # Keep optimized release code while producing a matching private PDB for
+    # symbolizing crash dumps collected on other computers.
+    target_link_options(vts_overlay_layered PRIVATE /DEBUG:FULL /OPT:REF /OPT:ICF)
     target_compile_options(vts_localization_audit PRIVATE /W3 /EHsc /utf-8)
 endif()
 
@@ -97,7 +101,7 @@ set(SPOUT_DX11_LIBRARIES
 target_link_libraries(vts_overlay_dx11 PRIVATE ${SPOUT_DX11_LIBRARIES})
 target_link_libraries(vts_spout_bridge PRIVATE ${SPOUT_DX11_LIBRARIES})
 target_link_libraries(vts_spout_test_sender PRIVATE ${SPOUT_DX11_LIBRARIES})
-target_link_libraries(vts_overlay_layered PRIVATE ${SPOUT_DX11_LIBRARIES} avrt winmm pdh winhttp gdiplus shlwapi iphlpapi dwmapi uxtheme)
+target_link_libraries(vts_overlay_layered PRIVATE ${SPOUT_DX11_LIBRARIES} avrt winmm pdh winhttp gdiplus shlwapi iphlpapi dwmapi uxtheme dbghelp)
 target_link_libraries(vts_localization_audit PRIVATE user32 gdi32)
 
 set_target_properties(vts_overlay_dx11 PROPERTIES
@@ -134,7 +138,13 @@ set(VTSFLOAT_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.." CACHE PATH "Direc
 
 set_target_properties(vts_overlay_layered PROPERTIES
     OUTPUT_NAME "${VTSFLOAT_LAYERED_OUTPUT_NAME}"
+    PDB_NAME "${VTSFLOAT_LAYERED_OUTPUT_NAME}"
     RUNTIME_OUTPUT_DIRECTORY "${VTSFLOAT_OUTPUT_DIRECTORY}"
+    PDB_OUTPUT_DIRECTORY "${VTSFLOAT_OUTPUT_DIRECTORY}"
+    PDB_OUTPUT_DIRECTORY_DEBUG "${VTSFLOAT_OUTPUT_DIRECTORY}"
+    PDB_OUTPUT_DIRECTORY_RELEASE "${VTSFLOAT_OUTPUT_DIRECTORY}"
+    PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO "${VTSFLOAT_OUTPUT_DIRECTORY}"
+    PDB_OUTPUT_DIRECTORY_MINSIZEREL "${VTSFLOAT_OUTPUT_DIRECTORY}"
     RUNTIME_OUTPUT_DIRECTORY_DEBUG "${VTSFLOAT_OUTPUT_DIRECTORY}"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${VTSFLOAT_OUTPUT_DIRECTORY}"
     RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${VTSFLOAT_OUTPUT_DIRECTORY}"
@@ -146,4 +156,13 @@ if(BUILD_TESTING)
     add_executable(vts_desktop_mode_tests desktop_mode_tests.cpp)
     target_compile_features(vts_desktop_mode_tests PRIVATE cxx_std_17)
     add_test(NAME desktop_mode_bounds COMMAND vts_desktop_mode_tests)
+
+    add_executable(vts_benchmark_capture_tests
+        benchmark_capture_tests.cpp
+        benchmark_capture.cpp)
+    target_compile_features(vts_benchmark_capture_tests PRIVATE cxx_std_17)
+    if(MSVC)
+        target_compile_options(vts_benchmark_capture_tests PRIVATE /W3 /EHsc /utf-8)
+    endif()
+    add_test(NAME benchmark_capture COMMAND vts_benchmark_capture_tests)
 endif()

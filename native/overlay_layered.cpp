@@ -14,6 +14,7 @@
 #include <pdh.h>
 #include <pdhmsg.h>
 #include <psapi.h>
+#include <dbghelp.h>
 #include <winhttp.h>
 #include <shlwapi.h>
 #include <iphlpapi.h>
@@ -37,6 +38,7 @@
 #include <fstream>
 #include <functional>
 #include <iomanip>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -47,6 +49,7 @@
 #include <vector>
 
 #include "SpoutDX.h"
+#include "benchmark_capture.h"
 #include "localization.h"
 #include "desktop_mode_policy.h"
 #include "resource.h"
@@ -116,6 +119,7 @@ constexpr int kScalingBalanced = 1;
 constexpr int kScalingQuality = 2;
 constexpr int kDefaultHoverOpacityPercent = 45;
 constexpr int kMinimumHoverOpacityPercent = 0;
+constexpr double kDefaultHoverOpacityRestoreDelaySeconds = 0.0;
 constexpr int kSubjectMaskCellPx = 4;
 constexpr int kSubjectMaskIniChunkChars = 1800;
 // A 4K overlay produces 72 chunks at the current 4 px mask grid. The old
@@ -143,6 +147,7 @@ constexpr int kMaximumUiScalePercent = 200;
 constexpr int kUiScaleStepPercent = 10;
 constexpr COLORREF kDefaultCustomBorderColor = RGB(24, 132, 255);
 constexpr wchar_t kGithubUrl[] = L"https://github.com/fushoufish/VTSFloat_Meow";
+constexpr wchar_t kDocsUrl[] = L"https://fushoufish.github.io/VTSFloat_Meow/";
 
 enum class ToolbarButton {
     None,
@@ -182,6 +187,7 @@ struct GpuAdapterInfo {
     UINT index = 0;
     std::wstring name;
     LUID luid{};
+    UINT64 dedicatedVideoMemory = 0;
 };
 
 // A precomputed source-coordinate pair used by the CPU bilinear scaler.
@@ -212,18 +218,231 @@ std::filesystem::path DesktopLogPath() {
     return L"VTSFloat_Meow_crash.log";
 }
 
+std::filesystem::path DesktopDumpPath() {
+    wchar_t path[MAX_PATH]{};
+    if (SHGetFolderPathW(
+            nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, 0, path) == S_OK) {
+        return std::filesystem::path(path) / L"VTSFloat_Meow_crash.dmp";
+    }
+    return L"VTSFloat_Meow_crash.dmp";
+}
+
+std::string CrashWideToUtf8(const std::wstring& value) {
+    if (value.empty()) return {};
+    const int length = WideCharToMultiByte(
+        CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+        nullptr, 0, nullptr, nullptr);
+    if (length <= 0) return {};
+    std::string result(static_cast<size_t>(length), '\0');
+    WideCharToMultiByte(
+        CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+        result.data(), length, nullptr, nullptr);
+    return result;
+}
+
+std::wstring CrashModulePath(DWORD64 address) {
+    if (address == 0) return {};
+    MEMORY_BASIC_INFORMATION memory{};
+    if (VirtualQuery(
+            reinterpret_cast<const void*>(address), &memory,
+            sizeof(memory)) == 0 || !memory.AllocationBase) {
+        return {};
+    }
+    std::vector<wchar_t> path(32768);
+    const DWORD length = GetModuleFileNameW(
+        static_cast<HMODULE>(memory.AllocationBase), path.data(),
+        static_cast<DWORD>(path.size()));
+    return length > 0 ? std::wstring(path.data(), length) : std::wstring{};
+}
+
+std::string CrashAccessDescription(EXCEPTION_POINTERS* info) {
+    if (!info || !info->ExceptionRecord) return {};
+    const EXCEPTION_RECORD* record = info->ExceptionRecord;
+    if ((record->ExceptionCode != EXCEPTION_ACCESS_VIOLATION &&
+         record->ExceptionCode != EXCEPTION_IN_PAGE_ERROR) ||
+        record->NumberParameters < 2) {
+        return {};
+    }
+    const char* operation = record->ExceptionInformation[0] == 0
+        ? "read" : record->ExceptionInformation[0] == 1
+            ? "write" : record->ExceptionInformation[0] == 8
+                ? "execute" : "unknown";
+    std::ostringstream text;
+    text << "Operation: " << operation << "\n"
+         << "Fault address: 0x" << std::hex << std::uppercase
+         << static_cast<DWORD64>(record->ExceptionInformation[1]) << "\n";
+    if (record->ExceptionCode == EXCEPTION_IN_PAGE_ERROR &&
+        record->NumberParameters >= 3) {
+        text << "Underlying status: 0x"
+             << static_cast<DWORD64>(record->ExceptionInformation[2]) << "\n";
+    }
+    return text.str();
+}
+
+std::string CrashStackTrace(EXCEPTION_POINTERS* info) {
+    CONTEXT context{};
+    if (info && info->ContextRecord) {
+        context = *info->ContextRecord;
+    } else {
+        RtlCaptureContext(&context);
+    }
+
+    STACKFRAME64 frame{};
+    DWORD machine = 0;
+#if defined(_M_X64)
+    machine = IMAGE_FILE_MACHINE_AMD64;
+    frame.AddrPC.Offset = context.Rip;
+    frame.AddrFrame.Offset = context.Rbp;
+    frame.AddrStack.Offset = context.Rsp;
+#elif defined(_M_IX86)
+    machine = IMAGE_FILE_MACHINE_I386;
+    frame.AddrPC.Offset = context.Eip;
+    frame.AddrFrame.Offset = context.Ebp;
+    frame.AddrStack.Offset = context.Esp;
+#else
+    return "Call stack unavailable for this architecture.\n";
+#endif
+    frame.AddrPC.Mode = AddrModeFlat;
+    frame.AddrFrame.Mode = AddrModeFlat;
+    frame.AddrStack.Mode = AddrModeFlat;
+
+    HANDLE process = GetCurrentProcess();
+    HANDLE thread = GetCurrentThread();
+    SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
+    if (!SymInitialize(process, nullptr, TRUE)) {
+        std::ostringstream failure;
+        failure << "Symbol engine initialization failed: "
+                << GetLastError() << "\n";
+        return failure.str();
+    }
+
+    std::ostringstream trace;
+    DWORD64 previousAddress = 0;
+    for (unsigned index = 0; index < 64; ++index) {
+        const DWORD64 address = frame.AddrPC.Offset;
+        if (address == 0 || address == previousAddress) break;
+        previousAddress = address;
+
+        trace << '#' << std::dec << index << " 0x"
+              << std::hex << std::uppercase << address;
+
+        IMAGEHLP_MODULE64 module{};
+        module.SizeOfStruct = sizeof(module);
+        const bool hasModule = SymGetModuleInfo64(
+            process, address, &module) != FALSE;
+        if (hasModule && module.ModuleName[0]) {
+            trace << ' ' << module.ModuleName;
+            if (module.BaseOfImage != 0 && address >= module.BaseOfImage) {
+                trace << "+0x" << (address - module.BaseOfImage);
+            }
+        } else {
+            const std::wstring path = CrashModulePath(address);
+            if (!path.empty()) {
+                trace << ' ' << CrashWideToUtf8(
+                    std::filesystem::path(path).filename().wstring());
+            }
+        }
+
+        alignas(SYMBOL_INFO) unsigned char symbolStorage[
+            sizeof(SYMBOL_INFO) + MAX_SYM_NAME]{};
+        auto* symbol = reinterpret_cast<SYMBOL_INFO*>(symbolStorage);
+        symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+        symbol->MaxNameLen = MAX_SYM_NAME;
+        DWORD64 displacement = 0;
+        if (SymFromAddr(process, address, &displacement, symbol)) {
+            trace << " ! " << symbol->Name;
+            if (displacement != 0) trace << "+0x" << displacement;
+        }
+
+        IMAGEHLP_LINE64 line{};
+        line.SizeOfStruct = sizeof(line);
+        DWORD lineDisplacement = 0;
+        if (SymGetLineFromAddr64(
+                process, address, &lineDisplacement, &line) &&
+            line.FileName) {
+            trace << " (" << line.FileName << ':' << std::dec
+                  << line.LineNumber << ')';
+        }
+        trace << '\n';
+
+        if (!StackWalk64(
+                machine, process, thread, &frame, &context, nullptr,
+                SymFunctionTableAccess64, SymGetModuleBase64, nullptr)) {
+            break;
+        }
+    }
+    SymCleanup(process);
+    return trace.str();
+}
+
+bool WriteMiniDump(
+    const std::filesystem::path& path, EXCEPTION_POINTERS* info,
+    DWORD& error) {
+    error = ERROR_SUCCESS;
+    HANDLE file = CreateFileW(
+        path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        error = GetLastError();
+        return false;
+    }
+
+    MINIDUMP_EXCEPTION_INFORMATION exception{};
+    exception.ThreadId = GetCurrentThreadId();
+    exception.ExceptionPointers = info;
+    exception.ClientPointers = FALSE;
+    const MINIDUMP_TYPE type = static_cast<MINIDUMP_TYPE>(
+        MiniDumpNormal | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules);
+    const BOOL written = MiniDumpWriteDump(
+        GetCurrentProcess(), GetCurrentProcessId(), file, type,
+        info ? &exception : nullptr, nullptr, nullptr);
+    if (!written) error = GetLastError();
+    CloseHandle(file);
+    if (!written) DeleteFileW(path.c_str());
+    return written != FALSE;
+}
+
 std::atomic_flag gCrashDumpWritten = ATOMIC_FLAG_INIT;
 
-void CopyLogToDesktop(const std::string& reason) {
+void CopyLogToDesktop(
+    const std::string& reason, EXCEPTION_POINTERS* info = nullptr) {
     if (gCrashDumpWritten.test_and_set(std::memory_order_acq_rel)) {
         return;
     }
     try {
         const auto src = LogPath();
         const auto dst = DesktopLogPath();
+        const auto dump = DesktopDumpPath();
+        DWORD dumpError = ERROR_SUCCESS;
+        const bool dumpWritten = WriteMiniDump(dump, info, dumpError);
         std::ofstream out(dst, std::ios::trunc);
         out << "===== CRASH / EXIT DUMP =====\n"
             << "Reason: " << reason << "\n"
+            << "Process ID: " << GetCurrentProcessId() << "\n"
+            << "Thread ID: " << GetCurrentThreadId() << "\n";
+        if (info && info->ExceptionRecord) {
+            const DWORD64 exceptionAddress = reinterpret_cast<DWORD64>(
+                info->ExceptionRecord->ExceptionAddress);
+            const std::wstring modulePath = CrashModulePath(exceptionAddress);
+            out << CrashAccessDescription(info);
+            if (!modulePath.empty()) {
+                out << "Exception module: "
+                    << CrashWideToUtf8(modulePath) << "\n";
+                MEMORY_BASIC_INFORMATION memory{};
+                if (VirtualQuery(
+                        info->ExceptionRecord->ExceptionAddress, &memory,
+                        sizeof(memory)) != 0 && memory.AllocationBase) {
+                    out << "Module offset: 0x" << std::hex << std::uppercase
+                        << exceptionAddress - reinterpret_cast<DWORD64>(
+                            memory.AllocationBase) << std::dec << "\n";
+                }
+            }
+        }
+        out << "Mini dump: " << CrashWideToUtf8(dump.wstring()) << "\n"
+            << "Mini dump written: " << (dumpWritten ? "yes" : "no")
+            << " (error " << dumpError << ")\n"
+            << "===== CALL STACK =====\n"
+            << CrashStackTrace(info)
             << "===== LOG TAIL (last 200 lines) =====\n";
         std::ifstream in(src, std::ios::binary);
         if (in) {
@@ -255,7 +474,7 @@ LONG WINAPI VectoredExceptionHandler(EXCEPTION_POINTERS* info) {
            << (info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionCode : 0)
            << " at 0x"
            << (info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionAddress : nullptr);
-    CopyLogToDesktop(reason.str());
+    CopyLogToDesktop(reason.str(), info);
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -265,7 +484,7 @@ LONG WINAPI UnhandledExceptionHandler(EXCEPTION_POINTERS* info) {
            << (info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionCode : 0)
            << " at 0x"
            << (info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionAddress : nullptr);
-    CopyLogToDesktop(reason.str());
+    CopyLogToDesktop(reason.str(), info);
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
@@ -285,6 +504,22 @@ std::filesystem::path ConfigPath() {
         return kConfigFileName;
     }
     return std::filesystem::path(localAppData) / kConfigFileName;
+}
+
+std::filesystem::path BenchmarkOutputDirectory() {
+    wchar_t documents[MAX_PATH]{};
+    std::filesystem::path base;
+    if (SHGetFolderPathW(
+            nullptr, CSIDL_PERSONAL, nullptr, SHGFP_TYPE_CURRENT,
+            documents) == S_OK) {
+        base = documents;
+    } else {
+        base = ConfigPath().parent_path();
+    }
+    const std::string timestamp = vtsfloat::benchmark::FolderTimestamp();
+    const std::wstring wideTimestamp(timestamp.begin(), timestamp.end());
+    return base / L"VTSFloat_Meow Benchmarks" /
+        (L"capture_" + wideTimestamp);
 }
 
 int ReadConfigInt(const wchar_t* section, const wchar_t* key, int fallback) {
@@ -320,6 +555,30 @@ void WriteConfigString(
     const wchar_t* section, const wchar_t* key, const std::wstring& value) {
     const std::wstring path = ConfigPath().wstring();
     WritePrivateProfileStringW(section, key, value.c_str(), path.c_str());
+}
+
+std::wstring JoinGpuIndexes(const std::vector<int>& indexes) {
+    std::wostringstream text;
+    for (std::size_t index = 0; index < indexes.size(); ++index) {
+        if (index) text << L',';
+        text << indexes[index];
+    }
+    return text.str();
+}
+
+std::vector<int> ParseGpuIndexes(const std::wstring& text) {
+    std::vector<int> indexes;
+    std::wistringstream input(text);
+    std::wstring item;
+    while (std::getline(input, item, L',')) {
+        if (item.empty()) continue;
+        try {
+            indexes.push_back(std::stoi(item));
+        } catch (...) {
+            return {};
+        }
+    }
+    return indexes;
 }
 
 bool IsHighFrequencyPerfLog(const std::string& line) {
@@ -521,6 +780,7 @@ constexpr int kVtsApiPollIntervalMs = 2000;
 // Keep API recovery responsive after the initial probe. The silent retry path
 // uses this cadence for the INI-saved endpoint only.
 constexpr int kVtsApiReconnectDelayMs = 600;
+constexpr int kVtsApiAuthorizationWaitMs = 60000;
 constexpr int kVtsApiModelReadyDelayMs = 2500;
 // Port discovery deliberately uses short timeouts, but reusing those values
 // for the authenticated WebSocket makes a busy game look like an API drop.
@@ -589,61 +849,96 @@ std::string LoadIconAsBase64Png(HINSTANCE instance) {
     ULONG_PTR token = 0;
     if (Gdiplus::GdiplusStartup(&token, &input, nullptr) != Gdiplus::Ok) return {};
 
-    IStream* srcStream = SHCreateMemStream(
-        static_cast<const BYTE*>(data), size);
-    if (!srcStream) { Gdiplus::GdiplusShutdown(token); return {}; }
-    Gdiplus::Bitmap* srcBitmap = Gdiplus::Bitmap::FromStream(srcStream);
-    if (!srcBitmap || srcBitmap->GetLastStatus() != Gdiplus::Ok) {
-        delete srcBitmap;
-        srcStream->Release();
-        Gdiplus::GdiplusShutdown(token);
-        return {};
-    }
+    std::vector<BYTE> pngBytes;
+    const bool converted = [&]() {
+        // Every GDI+ object intentionally lives inside this scope.  The old
+        // code called GdiplusShutdown while the stack-allocated `resized`
+        // Bitmap was still alive; its destructor then entered an already shut
+        // down GDI+ runtime and could raise 0xC0000005 exactly when an expired
+        // token forced VTS through the new-authorization/icon path.
+        ComPtr<IStream> srcStream;
+        srcStream.Attach(SHCreateMemStream(
+            static_cast<const BYTE*>(data), size));
+        if (!srcStream) return false;
 
-    Gdiplus::Bitmap resized(128, 128, PixelFormat32bppARGB);
-    {
-        Gdiplus::Graphics graphics(&resized);
-        graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
-        graphics.DrawImage(srcBitmap, 0, 0, 128, 128);
-    }
-    delete srcBitmap;
-    // GDI+ keeps reading from the source stream while the image exists.
-    // Releasing it immediately after FromStream caused an access violation
-    // when an expired VTS token triggered plugin-icon resizing at startup.
-    srcStream->Release();
+        Gdiplus::Bitmap srcBitmap(srcStream.Get());
+        if (srcBitmap.GetLastStatus() != Gdiplus::Ok) return false;
 
-    IStream* outStream = nullptr;
-    if (CreateStreamOnHGlobal(nullptr, TRUE, &outStream) != S_OK) {
-        Gdiplus::GdiplusShutdown(token);
-        return {};
-    }
-
-    CLSID pngClsid{};
-    UINT numEncoders = 0, sizeEncoders = 0;
-    Gdiplus::GetImageEncodersSize(&numEncoders, &sizeEncoders);
-    std::vector<BYTE> encoderBuf(sizeEncoders);
-    auto* encoders = reinterpret_cast<Gdiplus::ImageCodecInfo*>(encoderBuf.data());
-    Gdiplus::GetImageEncoders(numEncoders, sizeEncoders, encoders);
-    for (UINT i = 0; i < numEncoders; ++i) {
-        if (wcscmp(encoders[i].MimeType, L"image/png") == 0) {
-            pngClsid = encoders[i].Clsid;
-            break;
+        Gdiplus::Bitmap resized(128, 128, PixelFormat32bppARGB);
+        if (resized.GetLastStatus() != Gdiplus::Ok) return false;
+        {
+            Gdiplus::Graphics graphics(&resized);
+            if (graphics.GetLastStatus() != Gdiplus::Ok) return false;
+            graphics.SetInterpolationMode(
+                Gdiplus::InterpolationModeHighQualityBicubic);
+            if (graphics.DrawImage(&srcBitmap, 0, 0, 128, 128) !=
+                Gdiplus::Ok) {
+                return false;
+            }
         }
-    }
-    resized.Save(outStream, &pngClsid, nullptr);
 
-    HGLOBAL hGlobal = nullptr;
-    GetHGlobalFromStream(outStream, &hGlobal);
-    const SIZE_T pngSize = GlobalSize(hGlobal);
-    std::vector<BYTE> pngBytes(pngSize);
-    void* p = GlobalLock(hGlobal);
-    if (p) {
-        memcpy(pngBytes.data(), p, pngSize);
+        ComPtr<IStream> outStream;
+        IStream* rawOutStream = nullptr;
+        if (FAILED(CreateStreamOnHGlobal(
+                nullptr, TRUE, &rawOutStream)) || !rawOutStream) {
+            return false;
+        }
+        outStream.Attach(rawOutStream);
+
+        UINT numEncoders = 0;
+        UINT sizeEncoders = 0;
+        if (Gdiplus::GetImageEncodersSize(
+                &numEncoders, &sizeEncoders) != Gdiplus::Ok ||
+            numEncoders == 0 || sizeEncoders == 0) {
+            return false;
+        }
+        std::vector<BYTE> encoderBuf(sizeEncoders);
+        auto* encoders = reinterpret_cast<Gdiplus::ImageCodecInfo*>(
+            encoderBuf.data());
+        if (Gdiplus::GetImageEncoders(
+                numEncoders, sizeEncoders, encoders) != Gdiplus::Ok) {
+            return false;
+        }
+        const CLSID* pngClsid = nullptr;
+        for (UINT i = 0; i < numEncoders; ++i) {
+            if (encoders[i].MimeType &&
+                wcscmp(encoders[i].MimeType, L"image/png") == 0) {
+                pngClsid = &encoders[i].Clsid;
+                break;
+            }
+        }
+        if (!pngClsid ||
+            resized.Save(outStream.Get(), pngClsid, nullptr) != Gdiplus::Ok) {
+            return false;
+        }
+
+        STATSTG statistics{};
+        if (FAILED(outStream->Stat(&statistics, STATFLAG_NONAME)) ||
+            statistics.cbSize.QuadPart == 0 ||
+            statistics.cbSize.QuadPart >
+                static_cast<ULONGLONG>((std::numeric_limits<SIZE_T>::max)())) {
+            return false;
+        }
+        HGLOBAL hGlobal = nullptr;
+        if (FAILED(GetHGlobalFromStream(outStream.Get(), &hGlobal)) ||
+            !hGlobal) {
+            return false;
+        }
+        const SIZE_T pngSize = static_cast<SIZE_T>(
+            statistics.cbSize.QuadPart);
+        const void* bytes = GlobalLock(hGlobal);
+        if (!bytes) return false;
+        pngBytes.assign(
+            static_cast<const BYTE*>(bytes),
+            static_cast<const BYTE*>(bytes) + pngSize);
         GlobalUnlock(hGlobal);
-    }
-    outStream->Release();
+        return !pngBytes.empty();
+    }();
+
+    // All Bitmap/Graphics/stream wrappers above have been destroyed before
+    // the matching shutdown call.
     Gdiplus::GdiplusShutdown(token);
-    return Base64Encode(pngBytes);
+    return converted ? Base64Encode(pngBytes) : std::string{};
 }
 
 std::wstring Utf8ToWide(const std::string& utf8) {
@@ -897,6 +1192,8 @@ public:
         initialDiscoveryStarted_.store(false, std::memory_order_relaxed);
         initialDiscoveryDone_.store(false, std::memory_order_relaxed);
         authPending_.store(false, std::memory_order_relaxed);
+        authDenied_.store(false, std::memory_order_relaxed);
+        authorizationRetryRequested_.store(false, std::memory_order_relaxed);
         thread_ = std::thread([this]() { ThreadMain(); });
     }
 
@@ -1023,6 +1320,8 @@ public:
         initialDiscoveryStarted_.store(false, std::memory_order_relaxed);
         initialDiscoveryDone_.store(false, std::memory_order_relaxed);
         authPending_.store(false, std::memory_order_relaxed);
+        authDenied_.store(false, std::memory_order_relaxed);
+        authorizationRetryRequested_.store(false, std::memory_order_relaxed);
     }
 
     bool IsConnected() const {
@@ -1035,6 +1334,20 @@ public:
 
     bool IsAwaitingAuthorization() const {
         return authPending_.load(std::memory_order_relaxed);
+    }
+
+    bool WasAuthorizationDenied() const {
+        return authDenied_.load(std::memory_order_relaxed);
+    }
+
+    void RequestAuthorizationRetry() {
+        // A denial is sticky by design. Only this explicit user action clears
+        // it and wakes the API thread for one new authorization flow.
+        authorizationRetryRequested_.store(true, std::memory_order_relaxed);
+        authDenied_.store(false, std::memory_order_relaxed);
+        authPending_.store(false, std::memory_order_relaxed);
+        scanResult_.store(0, std::memory_order_relaxed);
+        Log("[vts-api] authorization retry requested by user");
     }
 
     bool HasConfiguredPort() const {
@@ -1077,6 +1390,29 @@ private:
         LoadCachedToken();
         Log("[vts-api] thread started");
         while (running_.load()) {
+            if (authDenied_.load(std::memory_order_relaxed)) {
+                // Do not keep reopening VTS's authorization prompt after the
+                // user explicitly denied error 50. A manual port scan remains
+                // available, but it must not imply authorization consent.
+                if (scanRequested_.load(std::memory_order_relaxed)) {
+                    ScanRequestedPorts();
+                    Disconnect();
+                }
+                constexpr int kDeniedWaitStepMs = 100;
+                for (int elapsed = 0;
+                     elapsed < kVtsApiReconnectDelayMs && running_.load() &&
+                     authDenied_.load(std::memory_order_relaxed) &&
+                     !authorizationRetryRequested_.load(std::memory_order_relaxed) &&
+                     !scanRequested_.load(std::memory_order_relaxed);
+                     elapsed += kDeniedWaitStepMs) {
+                    Sleep(kDeniedWaitStepMs);
+                }
+                continue;
+            }
+            if (authorizationRetryRequested_.exchange(
+                    false, std::memory_order_relaxed)) {
+                Log("[vts-api] starting user-requested authorization retry");
+            }
             bool connectedToApi = false;
             if (!initialDiscoveryStarted_.exchange(true, std::memory_order_relaxed)) {
                 Log("[vts-api] initial discovery started");
@@ -1093,6 +1429,22 @@ private:
                 }
                 continue;
             }
+            // Remember a verified VTS endpoint before authorization. This is
+            // required so the retry button can reconnect after a first-run
+            // denial even when no API port existed in the INI beforehand.
+            if (activePort_ > 0) {
+                const bool portChanged =
+                    !portConfigured_ || activePort_ != port_;
+                if (activePort_ != port_) {
+                    port_ = activePort_;
+                }
+                portConfigured_ = true;
+                if (portChanged) {
+                    WriteConfigInt(L"VtsApi", L"Port", activePort_);
+                    Log("[vts-api] saved verified port " +
+                        std::to_string(activePort_) + " to config");
+                }
+            }
             if (!Authenticate()) {
                 Disconnect();
                 SleepMs(kVtsApiReconnectDelayMs);
@@ -1101,14 +1453,6 @@ private:
             connected_.store(true);
             everAuthenticated_.store(true);
             RequestExpressionState();
-            if (activePort_ > 0) {
-                if (activePort_ != port_) {
-                    port_ = activePort_;
-                }
-                portConfigured_ = true;
-                WriteConfigInt(L"VtsApi", L"Port", activePort_);
-                Log("[vts-api] saved port " + std::to_string(activePort_) + " to config");
-            }
             int consecutivePollFailures = 0;
             while (running_.load()) {
                 if (!PollStatistics()) {
@@ -1358,7 +1702,8 @@ private:
         return err == ERROR_SUCCESS;
     }
 
-    std::string ReceiveJson() {
+    std::string ReceiveJson(DWORD* receiveError = nullptr) {
+        if (receiveError) *receiveError = ERROR_SUCCESS;
         if (!hWebSocket_) return {};
 
         // WinHTTP may split a large UTF-8 message into multiple fragments.
@@ -1375,8 +1720,14 @@ private:
             const DWORD err = WinHttpWebSocketReceive(
                 hWebSocket_, chunk.data(), static_cast<DWORD>(chunk.size()),
                 &bytesRead, &bufferType);
-            if (err != ERROR_SUCCESS) return {};
-            if (bufferType == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) return {};
+            if (err != ERROR_SUCCESS) {
+                if (receiveError) *receiveError = err;
+                return {};
+            }
+            if (bufferType == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) {
+                if (receiveError) *receiveError = ERROR_CONNECTION_ABORTED;
+                return {};
+            }
             if (bytesRead > 0) {
                 message.append(chunk.data(), bytesRead);
             }
@@ -1401,11 +1752,16 @@ private:
         if (response.empty()) return false;
 
         if (ExtractJsonBool(response, "authenticated")) {
+            authDenied_.store(false, std::memory_order_relaxed);
             Log("[vts-api] authenticated with cached token");
             return true;
         }
         Log("[vts-api] cached token rejected, requesting new one");
         cachedToken_.clear();
+        // A token belongs to the VTS installation that granted it.  When an
+        // INI is copied to another computer, do not leave the rejected token
+        // on disk and retry it on every application restart.
+        SaveToken();
         everAuthenticated_.store(false);
         return RequestNewToken();
     }
@@ -1413,26 +1769,50 @@ private:
     bool RequestNewToken() {
         Log("[vts-api] requesting new token");
         authPending_.store(true, std::memory_order_relaxed);
-        const std::string iconB64 = LoadIconAsBase64Png(instance_);
-        std::string data = R"("pluginName":"VTSFloat_Meow","pluginDeveloper":"fushoufish","pluginIcon":")" + iconB64 + R"(")";
+        if (!pluginIconLoaded_) {
+            pluginIconBase64_ = LoadIconAsBase64Png(instance_);
+            pluginIconLoaded_ = true;
+            Log("[vts-api] plugin icon prepared bytes=" +
+                std::to_string(pluginIconBase64_.size()));
+        }
+        std::string data = R"("pluginName":"VTSFloat_Meow","pluginDeveloper":"fushoufish","pluginIcon":")" + pluginIconBase64_ + R"(")";
         std::string request = BuildJsonRequest("AuthenticationTokenRequest", data);
         if (!SendJson(request)) {
             authPending_.store(false, std::memory_order_relaxed);
             return false;
         }
-        std::string response = ReceiveJson();
+        std::string response;
+        const ULONGLONG authorizationDeadline =
+            GetTickCount64() + kVtsApiAuthorizationWaitMs;
+        do {
+            DWORD receiveError = ERROR_SUCCESS;
+            response = ReceiveJson(&receiveError);
+            if (!response.empty() || !running_.load() ||
+                receiveError != ERROR_WINHTTP_TIMEOUT) {
+                break;
+            }
+            // Keep receiving the original request instead of sending another
+            // token request every time the short socket timeout expires.
+        } while (GetTickCount64() < authorizationDeadline);
         if (response.empty()) {
-            // VTS keeps the authorization dialog open while waiting for the
-            // user. Leave this state visible to the toolbar; the API thread
-            // will retry after the short reconnect interval if the request
-            // timed out.
+            authPending_.store(false, std::memory_order_relaxed);
+            Log("[vts-api] authorization request timed out");
             return false;
         }
 
         std::string token = ExtractJsonString(response, "authenticationToken");
         if (token.empty()) {
             authPending_.store(false, std::memory_order_relaxed);
-            Log("[vts-api] token request failed: " + ExtractJsonString(response, "message"));
+            const int errorId = ExtractJsonInt(response, "errorID");
+            const std::string message = ExtractJsonString(response, "message");
+            if (errorId == 50) {
+                authDenied_.store(true, std::memory_order_relaxed);
+                authorizationRetryRequested_.store(false, std::memory_order_relaxed);
+                Log("[vts-api] authorization denied by user errorID=50");
+            } else {
+                Log("[vts-api] token request failed errorID=" +
+                    std::to_string(errorId) + " message=" + message);
+            }
             return false;
         }
         cachedToken_ = token;
@@ -1450,6 +1830,7 @@ private:
 
         if (ExtractJsonBool(response, "authenticated")) {
             authPending_.store(false, std::memory_order_relaxed);
+            authDenied_.store(false, std::memory_order_relaxed);
             Log("[vts-api] authenticated with new token");
             return true;
         }
@@ -1687,12 +2068,16 @@ private:
     std::atomic<bool> initialDiscoveryStarted_{ false };
     std::atomic<bool> initialDiscoveryDone_{ false };
     std::atomic<bool> authPending_{ false };
+    std::atomic<bool> authDenied_{ false };
+    std::atomic<bool> authorizationRetryRequested_{ false };
     std::thread thread_;
     int realtimeFps_ = 0;
     int port_ = kVtsApiPort;
     bool portConfigured_ = false;
     int activePort_ = 0;
     std::string cachedToken_;
+    std::string pluginIconBase64_;
+    bool pluginIconLoaded_ = false;
     ExtraStats extraStats_;
     std::vector<ExpressionInfo> expressions_;
     std::string lastExpressionModelId_;
@@ -1780,6 +2165,44 @@ HWND FindMainWindowForProcess(DWORD processId) {
     return search.window;
 }
 
+bool SetWindowClientResolution(HWND window, int clientWidth, int clientHeight) {
+    if (!window || !IsWindow(window) || clientWidth <= 0 || clientHeight <= 0) {
+        return false;
+    }
+    if (IsIconic(window) || IsZoomed(window)) {
+        ShowWindow(window, SW_RESTORE);
+    }
+    RECT client{};
+    RECT outer{};
+    if (!GetClientRect(window, &client) || !GetWindowRect(window, &outer)) {
+        return false;
+    }
+    const int currentClientWidth = client.right - client.left;
+    const int currentClientHeight = client.bottom - client.top;
+    const int frameWidth = (outer.right - outer.left) - currentClientWidth;
+    const int frameHeight = (outer.bottom - outer.top) - currentClientHeight;
+    const int outerWidth = clientWidth + (std::max)(0, frameWidth);
+    const int outerHeight = clientHeight + (std::max)(0, frameHeight);
+
+    MONITORINFO monitor{};
+    monitor.cbSize = sizeof(monitor);
+    if (!GetMonitorInfoW(
+            MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor)) {
+        return false;
+    }
+    const int workWidth = monitor.rcWork.right - monitor.rcWork.left;
+    const int workHeight = monitor.rcWork.bottom - monitor.rcWork.top;
+    const int x = outerWidth <= workWidth
+        ? monitor.rcWork.left + (workWidth - outerWidth) / 2
+        : monitor.rcWork.left;
+    const int y = outerHeight <= workHeight
+        ? monitor.rcWork.top + (workHeight - outerHeight) / 2
+        : monitor.rcWork.top;
+    return SetWindowPos(
+        window, nullptr, x, y, outerWidth, outerHeight,
+        SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED) != FALSE;
+}
+
 bool IsVtsDirectory(const std::filesystem::path& directory) {
     std::error_code error;
     // start_without_steam.bat is optional in some VTube Studio installs.
@@ -1832,6 +2255,16 @@ std::wstring FormatNonNegativeDecimal(double value) {
     while (text.size() > 1 && text.back() == L'0') text.pop_back();
     if (!text.empty() && text.back() == L'.') text.pop_back();
     return text.empty() ? L"0" : text;
+}
+
+Clock::time_point DeadlineAfterSeconds(
+    Clock::time_point now, double seconds) {
+    if (!std::isfinite(seconds) || seconds <= 0.0) return now;
+    const double maximumSeconds = std::chrono::duration<double>(
+        Clock::time_point::max() - now).count();
+    if (seconds >= maximumSeconds) return Clock::time_point::max();
+    return now + std::chrono::duration_cast<Clock::duration>(
+        std::chrono::duration<double>(seconds));
 }
 
 bool HasVtsExternalLauncher(const std::filesystem::path& directory) {
@@ -2243,6 +2676,7 @@ public:
             PdhCloseQuery(gpuUsageQuery_);
             gpuUsageQuery_ = nullptr;
             gpuUsageCounter_ = nullptr;
+            gpuProcessMemoryCounter_ = nullptr;
         }
         if (hwnd_) {
             UnregisterHotKey(hwnd_, kHotkeyId);
@@ -2841,6 +3275,9 @@ private:
                 L"opacity", L"locked_hover_percent", kDefaultHoverOpacityPercent),
             kMinimumHoverOpacityPercent,
             100);
+        hoverOpacityRestoreDelaySeconds_ = ReadConfigNonNegativeDecimal(
+            L"opacity", L"hover_restore_delay_seconds",
+            kDefaultHoverOpacityRestoreDelaySeconds);
         modelOpacityPercent_ = (std::clamp)(
             ReadConfigInt(L"opacity", L"model_percent", 100), 10, 100);
         hoverExpandPx_ = (std::clamp)(
@@ -2926,6 +3363,9 @@ private:
         WriteConfigInt(L"render", L"scaling_quality", scalingQuality_);
         WriteConfigInt(L"opacity", L"locked_hover_fade", hoverFadeEnabled_ ? 1 : 0);
         WriteConfigInt(L"opacity", L"locked_hover_percent", hoverOpacityPercent_);
+        WriteConfigString(
+            L"opacity", L"hover_restore_delay_seconds",
+            FormatNonNegativeDecimal(hoverOpacityRestoreDelaySeconds_));
         WriteConfigInt(L"opacity", L"model_percent", modelOpacityPercent_);
         WriteConfigInt(L"opacity", L"hover_expand_px", hoverExpandPx_);
         WriteConfigInt(
@@ -2994,6 +3434,8 @@ private:
         scalingQuality_ = kScalingBalanced;
         hoverFadeEnabled_ = true;
         hoverOpacityPercent_ = kDefaultHoverOpacityPercent;
+        hoverOpacityRestoreDelaySeconds_ =
+            kDefaultHoverOpacityRestoreDelaySeconds;
         modelOpacityPercent_ = 100;
         uiScalePercent_ = kDefaultUiScalePercent;
         hoverExpandPx_ = 0;
@@ -3036,6 +3478,7 @@ private:
         scanStartedObserved_ = false;
         awaitingUserApproval_ = false;
         showingApiSuccess_ = false;
+        lastAuthorizationDenied_ = false;
         toolbarHovered_ = ToolbarButton::None;
         toolbarPressed_ = ToolbarButton::None;
         capturingFps_ = false;
@@ -3048,6 +3491,9 @@ private:
         hoverFadeStartAlpha_ = 255;
         hoverTargetAlpha_ = 255;
         hoverFadeStarted_ = Clock::now();
+        hoverOpacityCursorWasOverModel_ = false;
+        hoverOpacityRestorePending_ = false;
+        hoverOpacityRestoreAt_ = Clock::time_point{};
         debugFpsHistory_.clear();
         debugFrameMsHistory_.clear();
 
@@ -3481,6 +3927,9 @@ private:
                      << Tr(L"  道具 ") << extra.itemCount;
             }
         }
+        if (benchmarkActive_) {
+            text << L"\n" << BenchmarkProgressText();
+        }
         return text.str();
     }
 
@@ -3730,17 +4179,656 @@ private:
         }
     }
 
+    std::wstring BenchmarkProgressText() const {
+        if (!benchmarkActive_) return {};
+        const auto& plan = vtsfloat::benchmark::ResolutionPlan();
+        std::wostringstream text;
+        text << Tr(L"采集") << L" " << benchmarkPairIndex_ + 1
+             << L"/" << plan.size() << L"  "
+             << benchmarkSamples_.size() << L"/"
+             << vtsfloat::benchmark::kSamplesPerPair;
+        if (!benchmarkPairMatched_) {
+            text << L"  " << Tr(L"等待 VTS 分辨率");
+        } else if (Clock::now() < benchmarkWarmupUntil_) {
+            text << L"  " << Tr(L"预热中");
+        }
+        return text.str();
+    }
+
+    void SetBenchmarkRenderResolution(
+        const vtsfloat::benchmark::Resolution& resolution) {
+        if (!hwnd_ || !IsWindow(hwnd_)) return;
+        MONITORINFO monitor{};
+        monitor.cbSize = sizeof(monitor);
+        GetMonitorInfoW(
+            MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &monitor);
+        const int workWidth = monitor.rcWork.right - monitor.rcWork.left;
+        const int workHeight = monitor.rcWork.bottom - monitor.rcWork.top;
+        const int x = resolution.width <= workWidth
+            ? monitor.rcWork.left + (workWidth - resolution.width) / 2
+            : monitor.rcWork.left;
+        const int y = resolution.height <= workHeight
+            ? monitor.rcWork.top + (workHeight - resolution.height) / 2
+            : monitor.rcWork.top;
+        SetWindowPos(
+            hwnd_, WindowZOrder(), x, y,
+            resolution.width, resolution.height,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        PositionToolbar();
+        resetFrameSchedule_ = true;
+    }
+
+    bool PromptForBenchmarkPair() {
+        const auto& plan = vtsfloat::benchmark::ResolutionPlan();
+        if (!benchmarkActive_ || benchmarkPairIndex_ >= plan.size()) return false;
+        const auto& pair = plan[benchmarkPairIndex_];
+        ShowWindow(hwnd_, SW_HIDE);
+        ShowWindow(toolbarHwnd_, SW_HIDE);
+        std::wostringstream message;
+        message << Tr(L"采集组") << L" " << benchmarkPairIndex_ + 1
+                << L"/" << plan.size() << L"\n\n"
+                << Tr(L"请在 VTube Studio 中手动设置输出分辨率：")
+                << pair.vts.width << L"x" << pair.vts.height << L"\n"
+                << Tr(L"程序缩放分辨率将自动设置为：")
+                << pair.render.width << L"x" << pair.render.height << L"\n\n"
+                << Tr(L"设置完成后点击“确定”。程序检测到分辨率匹配后会先预热，再开始采集。")
+                << L"\n"
+                << Tr(L"取消将结束采集并保留已经写入的原始数据。");
+        const int result = MessageBoxW(
+            nullptr, message.str().c_str(), Tr(L"分辨率性能采集"),
+            MB_OKCANCEL | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND);
+        if (result != IDOK) return false;
+
+        aspectLocked_ = false;
+        SetBenchmarkRenderResolution(pair.render);
+        if (overlayVisible_) ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
+        if (!locked_ || debugMode_) ShowWindow(toolbarHwnd_, SW_SHOWNOACTIVATE);
+        PositionToolbar();
+        InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+        return true;
+    }
+
+    bool PrepareBenchmarkPair() {
+        const auto& plan = vtsfloat::benchmark::ResolutionPlan();
+        if (!benchmarkActive_ || benchmarkPairIndex_ >= plan.size()) return false;
+        const auto& pair = plan[benchmarkPairIndex_];
+        benchmarkSamples_.clear();
+        benchmarkPairMatched_ = false;
+        benchmarkManualFallbackShown_ = false;
+        aspectLocked_ = false;
+        SetBenchmarkRenderResolution(pair.render);
+
+        if (benchmarkVtsWindow_ && IsWindow(benchmarkVtsWindow_) &&
+            SetWindowClientResolution(
+                benchmarkVtsWindow_, pair.vts.width, pair.vts.height)) {
+            benchmarkResolutionDeadline_ = Clock::now() + std::chrono::seconds(8);
+            InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+            return true;
+        }
+        benchmarkManualFallbackShown_ = true;
+        return PromptForBenchmarkPair();
+    }
+
+    std::vector<int> BenchmarkGpuQueue() const {
+        std::vector<int> result;
+        const int current = activeGpuIndex_ >= 0
+            ? activeGpuIndex_ : senderGpuIndex_;
+        if (current >= 0) result.push_back(current);
+        for (const GpuAdapterInfo& adapter : gpuAdapters_) {
+            const int index = static_cast<int>(adapter.index);
+            if (index == current || WindowsGpuPreference(index) == 0) continue;
+            result.push_back(index);
+        }
+        return result;
+    }
+
+    bool ConfirmResolutionBenchmarkUse() {
+        constexpr int kContinueButton = 4201;
+        const std::wstring continueText = Tr(L"继续");
+        const TASKDIALOG_BUTTON button{
+            kContinueButton, continueText.c_str() };
+        TASKDIALOGCONFIG config{};
+        config.cbSize = sizeof(config);
+        config.hwndParent = toolbarHwnd_;
+        config.dwFlags =
+            TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
+        config.pszWindowTitle = kWindowTitle;
+        config.pszMainIcon = TD_WARNING_ICON;
+        config.pszMainInstruction =
+            Tr(L"你确定要进行该功能的使用吗？");
+        config.pszContent = Tr(
+            L"该功能设计在多组分辨率测试时获取性能数据，一般你是用不到该功能的！\n\n是否继续？");
+        config.pButtons = &button;
+        config.cButtons = 1;
+        config.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+        config.nDefaultButton = IDCANCEL;
+        int selected = 0;
+        const HRESULT result = RunModalWhileRendering([&]() {
+            return TaskDialogIndirect(&config, &selected, nullptr, nullptr);
+        });
+        return SUCCEEDED(result) && selected == kContinueButton;
+    }
+
+    int ShowBenchmarkStartDialog(const std::vector<int>& gpuQueue) {
+        constexpr int kCurrentGpuButton = 4211;
+        constexpr int kAllGpusButton = 4212;
+        const int minutesPerGpu = static_cast<int>(std::ceil(
+            vtsfloat::benchmark::ResolutionPlan().size() *
+            (4.0 + vtsfloat::benchmark::kSamplesPerPair * 2.0) / 60.0));
+        std::wostringstream content;
+        content << Tr(L"将测试 7×7 共 49 组分辨率组合，每组采集 24 条数据。")
+                << L"\n" << Tr(L"每张 GPU 预计用时约") << L" "
+                << minutesPerGpu << L" " << Tr(L"分钟。")
+                << L"\n\n" << Tr(L"测试分辨率：")
+                << L"\n" << Tr(L"640×480、960×540、1280×720、1600×900、1920×1080、2560×1440、3840×2160")
+                << L"\n\n"
+                << Tr(L"采集期间请勿运行游戏、渲染或其他高负载任务，否则结果会失真。")
+                << L"\n"
+                << Tr(L"请保持 VTube Studio、Spout2 与插件 API 正常运行。")
+                << L"\n"
+                << Tr(L"程序会自动调整分辨率，完成或停止后恢复窗口。");
+
+        std::wstring currentButton = Tr(L"测试当前 GPU");
+        std::wstring allButton;
+        TASKDIALOG_BUTTON buttons[2] = {
+            { kCurrentGpuButton, currentButton.c_str() },
+            { kAllGpusButton, nullptr },
+        };
+        UINT buttonCount = 1;
+        if (gpuQueue.size() > 1) {
+            std::wostringstream label;
+            label << Tr(L"测试全部 GPU") << L" (" << gpuQueue.size()
+                  << L" GPU, " << Tr(L"预计约") << L" "
+                  << minutesPerGpu * static_cast<int>(gpuQueue.size())
+                  << L" " << Tr(L"分钟") << L")";
+            allButton = label.str();
+            buttons[1].pszButtonText = allButton.c_str();
+            buttonCount = 2;
+        }
+        TASKDIALOGCONFIG config{};
+        config.cbSize = sizeof(config);
+        config.hwndParent = toolbarHwnd_;
+        config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
+        config.pszWindowTitle = kWindowTitle;
+        config.pszMainIcon = TD_INFORMATION_ICON;
+        config.pszMainInstruction = Tr(L"开始分辨率基准采集");
+        const std::wstring contentText = content.str();
+        config.pszContent = contentText.c_str();
+        config.pButtons = buttons;
+        config.cButtons = buttonCount;
+        config.nDefaultButton = kCurrentGpuButton;
+        config.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+        int selected = 0;
+        const HRESULT result = RunModalWhileRendering([&]() {
+            return TaskDialogIndirect(&config, &selected, nullptr, nullptr);
+        });
+        if (FAILED(result)) return 0;
+        if (selected == kCurrentGpuButton) return 1;
+        if (selected == kAllGpusButton) return 2;
+        // IDCANCEL (including the title-bar close button) and every unknown
+        // result are a real cancellation and must never begin a capture.
+        return 0;
+    }
+
+    void ResetBenchmarkFpsSummary() {
+        benchmarkTotalSampleCount_ = 0;
+        benchmarkVtsFpsSum_ = 0.0;
+        benchmarkVtsFpsMin_ = (std::numeric_limits<double>::max)();
+        benchmarkVtsFpsMax_ = 0.0;
+        benchmarkVtsmFpsSum_ = 0.0;
+        benchmarkVtsmFpsMin_ = (std::numeric_limits<double>::max)();
+        benchmarkVtsmFpsMax_ = 0.0;
+        benchmarkGpuSummaryWritten_ = false;
+        benchmarkGpuStartTime_ =
+            vtsfloat::benchmark::LocalTimestampMilliseconds();
+    }
+
+    double TotalRamGb() const {
+        MEMORYSTATUSEX memory{};
+        memory.dwLength = sizeof(memory);
+        return GlobalMemoryStatusEx(&memory)
+            ? static_cast<double>(memory.ullTotalPhys) /
+                (1024.0 * 1024.0 * 1024.0)
+            : 0.0;
+    }
+
+    double ActiveGpuRamGb() const {
+        const auto adapter = std::find_if(
+            gpuAdapters_.begin(), gpuAdapters_.end(),
+            [this](const GpuAdapterInfo& value) {
+                return static_cast<int>(value.index) == activeGpuIndex_;
+            });
+        return adapter == gpuAdapters_.end()
+            ? 0.0
+            : static_cast<double>(adapter->dedicatedVideoMemory) /
+                (1024.0 * 1024.0 * 1024.0);
+    }
+
+    vtsfloat::benchmark::CaptureSummary CurrentBenchmarkSummary(
+        bool includeStopTime) const {
+        vtsfloat::benchmark::CaptureSummary row;
+        row.cpu = WideToUtf8(cpuModel_.c_str());
+        row.gpu = WideToUtf8(GpuName(activeGpuIndex_).c_str());
+        row.ramGb = TotalRamGb();
+        row.gpuRamGb = ActiveGpuRamGb();
+        row.startTime = benchmarkGpuStartTime_;
+        if (includeStopTime) {
+            row.stopTime = vtsfloat::benchmark::LocalTimestampMilliseconds();
+        }
+        if (benchmarkTotalSampleCount_ > 0) {
+            const double count = static_cast<double>(benchmarkTotalSampleCount_);
+            row.avgVtsFps = benchmarkVtsFpsSum_ / count;
+            row.minVtsFps = benchmarkVtsFpsMin_;
+            row.maxVtsFps = benchmarkVtsFpsMax_;
+            row.avgVtsmFps = benchmarkVtsmFpsSum_ / count;
+            row.minVtsmFps = benchmarkVtsmFpsMin_;
+            row.maxVtsmFps = benchmarkVtsmFpsMax_;
+        }
+        return row;
+    }
+
+    bool FinalizeBenchmarkCsvSummary() {
+        if (benchmarkGpuSummaryWritten_ || !benchmarkWriter_) {
+            return true;
+        }
+        std::wstring error;
+        if (!benchmarkWriter_->FinalizeSummary(
+                CurrentBenchmarkSummary(true), error)) {
+            Log("[benchmark] CSV summary write failed: " +
+                WideToUtf8(error.c_str()));
+            return false;
+        }
+        benchmarkGpuSummaryWritten_ = true;
+        return true;
+    }
+
+    void SaveBenchmarkResumeState(
+        const std::filesystem::path& directory,
+        const std::filesystem::path& rawFileName) const {
+        WriteConfigString(
+            L"benchmark_resume", L"directory", directory.wstring());
+        WriteConfigString(
+            L"benchmark_resume", L"gpu_queue",
+            JoinGpuIndexes(benchmarkGpuQueue_));
+        WriteConfigInt(
+            L"benchmark_resume", L"gpu_cursor",
+            static_cast<int>(benchmarkGpuCursor_));
+        WriteConfigString(
+            L"benchmark_resume", L"raw_file", rawFileName.wstring());
+        WriteConfigInt(L"benchmark_resume", L"active", 1);
+    }
+
+    void ClearBenchmarkResumeState() const {
+        WriteConfigInt(L"benchmark_resume", L"active", 0);
+        WriteConfigString(L"benchmark_resume", L"directory", L"");
+        WriteConfigString(L"benchmark_resume", L"gpu_queue", L"");
+        WriteConfigString(L"benchmark_resume", L"raw_file", L"");
+        WriteConfigInt(L"benchmark_resume", L"gpu_cursor", 0);
+    }
+
+    void CaptureBenchmarkWindowState() {
+        benchmarkOriginalRectValid_ =
+            GetWindowRect(hwnd_, &benchmarkOriginalRect_) != FALSE;
+        benchmarkOriginalAspectLocked_ = aspectLocked_;
+        benchmarkOriginalDebugMode_ = debugMode_;
+        benchmarkVtsWindow_ = nullptr;
+        benchmarkVtsProcessId_ = 0;
+        benchmarkOriginalVtsPlacementValid_ = false;
+        if (const auto vts = FindRunningVts()) {
+            benchmarkVtsProcessId_ = vts->processId;
+            benchmarkVtsWindow_ = FindMainWindowForProcess(vts->processId);
+            if (benchmarkVtsWindow_) {
+                benchmarkOriginalVtsPlacement_ = {};
+                benchmarkOriginalVtsPlacement_.length = sizeof(WINDOWPLACEMENT);
+                benchmarkOriginalVtsPlacementValid_ = GetWindowPlacement(
+                    benchmarkVtsWindow_, &benchmarkOriginalVtsPlacement_) != FALSE;
+            }
+        }
+    }
+
+    void RestoreBenchmarkWindowState() {
+        if (benchmarkOriginalVtsPlacementValid_ && benchmarkVtsWindow_ &&
+            IsWindow(benchmarkVtsWindow_)) {
+            DWORD owner = 0;
+            GetWindowThreadProcessId(benchmarkVtsWindow_, &owner);
+            if (owner == benchmarkVtsProcessId_) {
+                SetWindowPlacement(
+                    benchmarkVtsWindow_, &benchmarkOriginalVtsPlacement_);
+            }
+        }
+        benchmarkVtsWindow_ = nullptr;
+        benchmarkVtsProcessId_ = 0;
+        benchmarkOriginalVtsPlacementValid_ = false;
+
+        aspectLocked_ = benchmarkOriginalAspectLocked_;
+        debugMode_ = benchmarkOriginalDebugMode_;
+        if (benchmarkOriginalRectValid_ && hwnd_ && IsWindow(hwnd_)) {
+            SetWindowPos(
+                hwnd_, WindowZOrder(),
+                benchmarkOriginalRect_.left, benchmarkOriginalRect_.top,
+                benchmarkOriginalRect_.right - benchmarkOriginalRect_.left,
+                benchmarkOriginalRect_.bottom - benchmarkOriginalRect_.top,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            SaveWindowPlacement();
+        }
+        benchmarkOriginalRectValid_ = false;
+    }
+
+    bool InitializeBenchmarkGpuTask(
+        const std::filesystem::path& directory,
+        const std::filesystem::path& rawFileName,
+        bool append) {
+        ResetBenchmarkFpsSummary();
+        benchmarkCurrentRawFileName_ = rawFileName;
+        benchmarkWriter_.emplace();
+        std::wstring error;
+        if (!benchmarkWriter_->Open(
+                directory, error, rawFileName,
+                CurrentBenchmarkSummary(false), append)) {
+            benchmarkWriter_.reset();
+            MessageBoxW(
+                toolbarHwnd_, error.c_str(), Tr(L"无法创建采集文件。"),
+                MB_OK | MB_ICONERROR);
+            return false;
+        }
+        CaptureBenchmarkWindowState();
+        benchmarkPairIndex_ = 0;
+        benchmarkActive_ = true;
+        debugMode_ = true;
+        PositionToolbar();
+        if (!PrepareBenchmarkPair()) {
+            FinishResolutionBenchmark(false);
+            return false;
+        }
+        return true;
+    }
+
+    void MaybeResumeResolutionBenchmark() {
+        if (benchmarkActive_ || benchmarkResumeChecked_) return;
+        if (ReadConfigInt(L"benchmark_resume", L"active", 0) == 0) {
+            benchmarkResumeChecked_ = true;
+            return;
+        }
+        const std::filesystem::path directory = ReadConfigString(
+            L"benchmark_resume", L"directory");
+        const std::filesystem::path rawFileName = ReadConfigString(
+            L"benchmark_resume", L"raw_file");
+        const std::vector<int> queue = ParseGpuIndexes(ReadConfigString(
+            L"benchmark_resume", L"gpu_queue"));
+        const int cursor = ReadConfigInt(
+            L"benchmark_resume", L"gpu_cursor", -1);
+        if (directory.empty() || rawFileName.empty() || queue.empty() ||
+            cursor < 0 || static_cast<std::size_t>(cursor) >= queue.size()) {
+            ClearBenchmarkResumeState();
+            benchmarkResumeChecked_ = true;
+            return;
+        }
+        const int targetGpu = queue[static_cast<std::size_t>(cursor)];
+        if (!hasReceivedModel_ || sourceWidth_ == 0 || sourceHeight_ == 0 ||
+            !vtsApi_.IsConnected() || vtsApiFps_ <= 0 ||
+            senderGpuIndex_ != targetGpu || activeGpuIndex_ != targetGpu) {
+            return;
+        }
+
+        benchmarkGpuQueue_ = queue;
+        benchmarkGpuCursor_ = static_cast<std::size_t>(cursor);
+        benchmarkTestAllGpus_ = queue.size() > 1;
+        benchmarkResumeChecked_ = true;
+        if (!InitializeBenchmarkGpuTask(directory, rawFileName, true)) {
+            ClearBenchmarkResumeState();
+            return;
+        }
+        Log("[benchmark] resumed GPU task " +
+            std::to_string(benchmarkGpuCursor_ + 1) + "/" +
+            std::to_string(benchmarkGpuQueue_.size()));
+    }
+
+    bool ContinueBenchmarkOnNextGpu() {
+        if (!benchmarkTestAllGpus_ ||
+            benchmarkGpuCursor_ + 1 >= benchmarkGpuQueue_.size()) {
+            return false;
+        }
+        if (!FinalizeBenchmarkCsvSummary()) return false;
+
+        const std::filesystem::path directory = benchmarkWriter_->Directory();
+        ++benchmarkGpuCursor_;
+        benchmarkCurrentRawFileName_ = std::filesystem::path(
+            Utf8ToWide(vtsfloat::benchmark::FolderTimestamp()) + L".csv");
+        SaveBenchmarkResumeState(directory, benchmarkCurrentRawFileName_);
+        RestoreBenchmarkWindowState();
+        if (!RestartVtsOnGpuForBenchmark(
+                benchmarkGpuQueue_[benchmarkGpuCursor_])) {
+            ClearBenchmarkResumeState();
+            return false;
+        }
+
+        benchmarkActive_ = false;
+        benchmarkPairMatched_ = false;
+        benchmarkSamples_.clear();
+        benchmarkWriter_.reset();
+        PostMessageW(hwnd_, WM_CLOSE, 0, 0);
+        return true;
+    }
+
+    void FinishResolutionBenchmark(bool completed, bool notify = true) {
+        if (!benchmarkActive_) return;
+        const std::filesystem::path directory = benchmarkWriter_
+            ? benchmarkWriter_->Directory() : std::filesystem::path{};
+        FinalizeBenchmarkCsvSummary();
+        ClearBenchmarkResumeState();
+        benchmarkActive_ = false;
+        benchmarkPairMatched_ = false;
+        benchmarkSamples_.clear();
+        benchmarkWriter_.reset();
+
+        RestoreBenchmarkWindowState();
+        if (overlayVisible_) ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
+        if (!locked_ || debugMode_) ShowWindow(toolbarHwnd_, SW_SHOWNOACTIVATE);
+        PositionToolbar();
+        InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+
+        if (!notify) return;
+        std::wstring message = completed
+            ? Tr(L"采集已完成。") : Tr(L"采集已停止，已保留现有数据。");
+        if (!directory.empty()) {
+            message += L"\n\n";
+            message += Tr(L"采集数据已保存到：");
+            message += L"\n" + directory.wstring();
+        }
+        MessageBoxW(
+            toolbarHwnd_, message.c_str(), Tr(L"分辨率性能采集"),
+            MB_OK | MB_ICONINFORMATION);
+        if (!directory.empty()) {
+            ShellExecuteW(
+                nullptr, L"open", directory.c_str(), nullptr, nullptr,
+                SW_SHOWNORMAL);
+        }
+    }
+
+    void StartResolutionBenchmark() {
+        if (benchmarkActive_) return;
+        if (!hasReceivedModel_ || sourceWidth_ == 0 || sourceHeight_ == 0) {
+            MessageBoxW(
+                toolbarHwnd_,
+                Tr(L"尚未接收到 VTube Studio 的 Spout2 画面。"),
+                Tr(L"分辨率性能采集"), MB_OK | MB_ICONWARNING);
+            return;
+        }
+        if (!vtsApi_.IsConnected() || vtsApiFps_ <= 0) {
+            MessageBoxW(
+                toolbarHwnd_,
+                Tr(L"请先连接 VTS API，以采集 VTS 实时帧数。"),
+                Tr(L"分辨率性能采集"), MB_OK | MB_ICONWARNING);
+            return;
+        }
+
+        if (!ConfirmResolutionBenchmarkUse()) {
+            Log("[benchmark] user cancelled usage confirmation");
+            return;
+        }
+
+        benchmarkGpuQueue_ = BenchmarkGpuQueue();
+        const int startChoice = ShowBenchmarkStartDialog(benchmarkGpuQueue_);
+        if (startChoice == 0) return;
+        benchmarkTestAllGpus_ = startChoice == 2 && benchmarkGpuQueue_.size() > 1;
+        if (!benchmarkTestAllGpus_ && !benchmarkGpuQueue_.empty()) {
+            benchmarkGpuQueue_.resize(1);
+        }
+        benchmarkGpuCursor_ = 0;
+
+        const std::filesystem::path directory = BenchmarkOutputDirectory();
+        benchmarkCurrentRawFileName_ = std::filesystem::path(
+            Utf8ToWide(vtsfloat::benchmark::FolderTimestamp()) + L".csv");
+        if (!InitializeBenchmarkGpuTask(
+                directory, benchmarkCurrentRawFileName_, false)) {
+            return;
+        }
+        if (benchmarkTestAllGpus_) {
+            SaveBenchmarkResumeState(directory, benchmarkCurrentRawFileName_);
+        }
+    }
+
+    void OpenBenchmarkDirectory() const {
+        std::filesystem::path directory;
+        if (benchmarkWriter_) {
+            directory = benchmarkWriter_->Directory();
+        } else {
+            wchar_t documents[MAX_PATH]{};
+            if (SHGetFolderPathW(
+                    nullptr, CSIDL_PERSONAL, nullptr, SHGFP_TYPE_CURRENT,
+                    documents) == S_OK) {
+                directory = std::filesystem::path(documents) /
+                    L"VTSFloat_Meow Benchmarks";
+            }
+        }
+        if (!directory.empty()) {
+            std::error_code error;
+            std::filesystem::create_directories(directory, error);
+            ShellExecuteW(
+                nullptr, L"open", directory.c_str(), nullptr, nullptr,
+                SW_SHOWNORMAL);
+        }
+    }
+
+    void UpdateResolutionBenchmark() {
+        if (!benchmarkActive_ || !benchmarkWriter_) return;
+        const auto& plan = vtsfloat::benchmark::ResolutionPlan();
+        if (benchmarkPairIndex_ >= plan.size()) return;
+        const auto& pair = plan[benchmarkPairIndex_];
+
+        RECT window{};
+        GetWindowRect(hwnd_, &window);
+        const int renderWidth = window.right - window.left;
+        const int renderHeight = window.bottom - window.top;
+        const bool resolutionMatches =
+            sourceWidth_ == static_cast<UINT>(pair.vts.width) &&
+            sourceHeight_ == static_cast<UINT>(pair.vts.height) &&
+            renderWidth == pair.render.width &&
+            renderHeight == pair.render.height;
+        if (!resolutionMatches) {
+            benchmarkPairMatched_ = false;
+            if (!benchmarkManualFallbackShown_ &&
+                Clock::now() >= benchmarkResolutionDeadline_) {
+                benchmarkManualFallbackShown_ = true;
+                if (!PromptForBenchmarkPair()) {
+                    FinishResolutionBenchmark(false);
+                }
+            }
+            return;
+        }
+        const auto now = Clock::now();
+        if (!benchmarkPairMatched_) {
+            benchmarkPairMatched_ = true;
+            benchmarkWarmupUntil_ = now + std::chrono::seconds(4);
+            return;
+        }
+        if (now < benchmarkWarmupUntil_) return;
+        if (vtsApiFps_ <= 0) {
+            return;
+        }
+
+        constexpr double kMegabyte = 1024.0 * 1024.0;
+        const double missing = std::numeric_limits<double>::quiet_NaN();
+        vtsfloat::benchmark::Sample sample;
+        sample.recordedAt = vtsfloat::benchmark::LocalTimestampMilliseconds();
+        sample.alignmentPercent = vtsfloat::benchmark::AlignmentPercent(pair);
+        sample.receiveMs = lastReceiveMs_;
+        sample.scaleMs = lastMapScaleMs_;
+        sample.presentMs = lastUpdateMs_;
+        sample.cpuPercent = cpuUsagePercent_.value_or(missing);
+        sample.gpuPercent = gpuUsagePercent_.value_or(missing);
+        sample.vramMb = static_cast<double>(
+            processGpuMemoryBytes_ > 0
+                ? processGpuMemoryBytes_ : gpuMemoryCurrentBytes_) / kMegabyte;
+        sample.memoryMb = processMemoryBytes_ > 0
+            ? static_cast<double>(processMemoryBytes_) / kMegabyte : missing;
+        sample.vtsFps = static_cast<double>(vtsApiFps_);
+        sample.programFps = lastUpdateFps_;
+        if (!benchmarkWriter_->AppendSample(
+                benchmarkPairIndex_, benchmarkSamples_.size(), pair,
+                WideToUtf8(GpuName(activeGpuIndex_).c_str()), sample)) {
+            FinishResolutionBenchmark(false);
+            return;
+        }
+        benchmarkSamples_.push_back(sample);
+        ++benchmarkTotalSampleCount_;
+        benchmarkVtsFpsSum_ += sample.vtsFps;
+        benchmarkVtsFpsMin_ = (std::min)(benchmarkVtsFpsMin_, sample.vtsFps);
+        benchmarkVtsFpsMax_ = (std::max)(benchmarkVtsFpsMax_, sample.vtsFps);
+        benchmarkVtsmFpsSum_ += sample.programFps;
+        benchmarkVtsmFpsMin_ = (std::min)(benchmarkVtsmFpsMin_, sample.programFps);
+        benchmarkVtsmFpsMax_ = (std::max)(benchmarkVtsmFpsMax_, sample.programFps);
+        InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+
+        if (benchmarkSamples_.size() < vtsfloat::benchmark::kSamplesPerPair) return;
+        ++benchmarkPairIndex_;
+        if (benchmarkPairIndex_ >= plan.size()) {
+            if (benchmarkTestAllGpus_ &&
+                benchmarkGpuCursor_ + 1 < benchmarkGpuQueue_.size()) {
+                if (!ContinueBenchmarkOnNextGpu()) {
+                    FinishResolutionBenchmark(false);
+                }
+                return;
+            }
+            FinishResolutionBenchmark(true);
+            return;
+        }
+        if (!PrepareBenchmarkPair()) {
+            FinishResolutionBenchmark(false);
+        }
+    }
+
     void ShowDebugMenu() {
         HMENU menu = CreatePopupMenu();
         if (!menu) return;
 
         constexpr UINT kDebugToggleCommand = 3401;
         constexpr UINT kResetSettingsCommand = 3402;
+        constexpr UINT kStartBenchmarkCommand = 3403;
+        constexpr UINT kStopBenchmarkCommand = 3404;
+        constexpr UINT kOpenBenchmarkDirectoryCommand = 3405;
+        std::wostringstream startBenchmarkLabel;
+        startBenchmarkLabel << Tr(L"分辨率基准采集") << L" ("
+                            << vtsfloat::benchmark::ResolutionPlan().size()
+                            << L" " << Tr(L"组") << L" × "
+                            << vtsfloat::benchmark::kSamplesPerPair
+                            << L" " << Tr(L"条") << L")";
+        const std::wstring startBenchmarkText = startBenchmarkLabel.str();
         AppendMenuW(
             menu,
             MF_STRING | (debugMode_ ? MF_CHECKED : 0),
             kDebugToggleCommand,
             Tr(L"调试"));
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(
+            menu, MF_STRING,
+            benchmarkActive_ ? kStopBenchmarkCommand : kStartBenchmarkCommand,
+            benchmarkActive_
+                ? Tr(L"停止并保存当前采集")
+                : startBenchmarkText.c_str());
+        AppendMenuW(
+            menu, MF_STRING, kOpenBenchmarkDirectoryCommand,
+            Tr(L"打开采集目录"));
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(
             menu,
@@ -3769,6 +4857,12 @@ private:
         } else if (command == kResetSettingsCommand) {
             Log("[toolbar] action=reset_settings");
             ResetSettingsToDefaults();
+        } else if (command == kStartBenchmarkCommand) {
+            StartResolutionBenchmark();
+        } else if (command == kStopBenchmarkCommand) {
+            FinishResolutionBenchmark(false);
+        } else if (command == kOpenBenchmarkDirectoryCommand) {
+            OpenBenchmarkDirectory();
         }
     }
 
@@ -4598,6 +5692,8 @@ private:
         int originalThickness = kDefaultBorderThickness;
         bool originalHoverFadeEnabled = true;
         int originalHoverOpacityPercent = kDefaultHoverOpacityPercent;
+        double originalHoverOpacityRestoreDelaySeconds =
+            kDefaultHoverOpacityRestoreDelaySeconds;
         int originalModelOpacityPercent = 100;
         int originalHoverExpandPx = 0;
         bool originalExcludeEffectsFromHover = false;
@@ -4618,6 +5714,9 @@ private:
         std::vector<std::string> originalHoverExpressionFiles;
         double originalHoverExpressionDurationSeconds =
             kDefaultHoverExpressionDurationSeconds;
+        bool editingHoverOpacityRestoreDelay = false;
+        bool replaceHoverOpacityRestoreDelayOnNextInput = false;
+        std::wstring hoverOpacityRestoreDelayInput;
         bool editingHoverExpressionDuration = false;
         bool replaceHoverExpressionDurationOnNextInput = false;
         std::wstring hoverExpressionDurationInput;
@@ -4974,10 +6073,14 @@ private:
         if (!overlay) return 560;
         const int baseHeight = overlay->borderMode_ == kBorderModeCustom
             ? 780 : 560;
+        // The opacity restore-delay editor is always visible directly above
+        // the hover-range slider.
+        constexpr int opacityRestoreDelayRowHeight = 42;
         // Enabling hover expressions inserts the duration editor. Reserve a
         // real row for it instead of pushing the expression selector into the
         // footer buttons.
-        return baseHeight + (overlay->hoverExpressionEnabled_ ? 38 : 0);
+        return baseHeight + opacityRestoreDelayRowHeight +
+            (overlay->hoverExpressionEnabled_ ? 38 : 0);
     }
 
     static double PersonalPanelScale(const LayeredOverlay* overlay) {
@@ -5235,6 +6338,46 @@ private:
             RGB(240, 246, 255), 13, true, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
         y += 42;
+        // Both delay editors use the same input column. Keep the default note
+        // on the left so the value, unit and edit confirmation never shift.
+        const RECT opacityDelayLabel{ 20, y + 2, 174, y + 28 };
+        const RECT opacityDelayDefault{ 174, y + 2, 279, y + 28 };
+        const RECT opacityDelayConfirm{ 174, y + 2, 279, y + 28 };
+        const RECT opacityDelayInput{ 284, y + 2, 390, y + 28 };
+        const RECT opacityDelayUnit{ 394, y + 2, 418, y + 28 };
+        PanelText(dc, Tr(L"透明度恢复延时"), opacityDelayLabel,
+            RGB(166, 198, 232), 13, true,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        PanelFill(dc, opacityDelayInput, state->editingHoverOpacityRestoreDelay
+            ? RGB(34, 78, 124) : RGB(26, 46, 71));
+        HPEN opacityDelayBorder = CreatePen(
+            PS_SOLID, 1, state->editingHoverOpacityRestoreDelay
+                ? RGB(68, 164, 255) : RGB(54, 82, 116));
+        HGDIOBJ oldOpacityDelayPen = SelectObject(dc, opacityDelayBorder);
+        HGDIOBJ oldOpacityDelayBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+        Rectangle(dc, opacityDelayInput.left, opacityDelayInput.top,
+            opacityDelayInput.right, opacityDelayInput.bottom);
+        SelectObject(dc, oldOpacityDelayBrush);
+        SelectObject(dc, oldOpacityDelayPen);
+        DeleteObject(opacityDelayBorder);
+        const std::wstring opacityDelayText = state->editingHoverOpacityRestoreDelay
+            ? state->hoverOpacityRestoreDelayInput
+            : FormatNonNegativeDecimal(overlay->hoverOpacityRestoreDelaySeconds_);
+        PanelText(dc, opacityDelayText, opacityDelayInput, RGB(240, 246, 255),
+            13, false, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        PanelText(dc, Tr(L"秒"), opacityDelayUnit, RGB(220, 232, 248), 13, false,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        if (state->editingHoverOpacityRestoreDelay) {
+            PanelText(dc, Tr(L"ENTER 确认"), opacityDelayConfirm,
+                RGB(112, 181, 246), 10, true,
+                DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        } else {
+            PanelText(dc, Tr(L"默认 0 秒"), opacityDelayDefault,
+                RGB(124, 151, 181), 10, false,
+                DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
+
+        y += 42;
         PanelText(dc, Tr(L"悬停扩展"), RECT{ 20, y, 125, y + 28 }, RGB(166, 198, 232), 13, true,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         PanelSlider(dc, RECT{ 130, y + 10, 330, y + 20 }, overlay->hoverExpandPx_, -500, 500,
@@ -5278,9 +6421,10 @@ private:
         if (overlay->hoverExpressionEnabled_) {
             // Align the row with the other settings while keeping the value
             // centered inside its edit box.
-            const RECT durationLabel{ 20, y + 2, 150, y + 28 };
-            const RECT durationInput{ 160, y + 2, 275, y + 28 };
-            const RECT durationUnit{ 283, y + 2, 303, y + 28 };
+            const RECT durationLabel{ 20, y + 2, 174, y + 28 };
+            const RECT durationConfirm{ 174, y + 2, 279, y + 28 };
+            const RECT durationInput{ 284, y + 2, 390, y + 28 };
+            const RECT durationUnit{ 394, y + 2, 418, y + 28 };
             PanelText(dc, Tr(L"表情恢复延时"), durationLabel,
                 RGB(166, 198, 232), 13, true,
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -5303,6 +6447,11 @@ private:
                 13, false, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
             PanelText(dc, Tr(L"秒"), durationUnit, RGB(220, 232, 248), 13, false,
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            if (state->editingHoverExpressionDuration) {
+                PanelText(dc, Tr(L"ENTER 确认"), durationConfirm,
+                    RGB(112, 181, 246), 10, true,
+                    DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            }
             y += 38;
         }
         RECT expressionButton{ 20, y, 405, y + 32 };
@@ -5358,15 +6507,16 @@ private:
         if (y >= base + 87 && y < base + 120 && x >= 130 && x < 405) return 18;
         if (y >= base + 129 && y < base + 162 && x < 350) return 9;
         if (y >= base + 171 && y < base + 204) return 7;
-        if (y >= base + 213 && y < base + 246) return 8;
-        if (y >= base + 255 && y < base + 292) {
+        if (y >= base + 215 && y < base + 241 && x >= 284 && x < 390) return 19;
+        if (y >= base + 255 && y < base + 288) return 8;
+        if (y >= base + 297 && y < base + 334) {
             return x < 198 ? 16 : 17;
         }
-        if (y >= base + 297 && y < base + 332 && x < 395) return 13;
-        const int expressionOptionsTop = base + 331;
+        if (y >= base + 339 && y < base + 374 && x < 395) return 13;
+        const int expressionOptionsTop = base + 373;
         if (overlay->hoverExpressionEnabled_ &&
-            y >= expressionOptionsTop && y < expressionOptionsTop + 34 &&
-            x >= 160 && x < 275) {
+            y >= expressionOptionsTop + 2 && y < expressionOptionsTop + 28 &&
+            x >= 284 && x < 390) {
             return 15;
         }
         const int expressionButtonTop = expressionOptionsTop +
@@ -5476,6 +6626,8 @@ private:
         overlay->borderThickness_ = kDefaultBorderThickness;
         overlay->hoverFadeEnabled_ = true;
         overlay->hoverOpacityPercent_ = kDefaultHoverOpacityPercent;
+        overlay->hoverOpacityRestoreDelaySeconds_ =
+            kDefaultHoverOpacityRestoreDelaySeconds;
         overlay->modelOpacityPercent_ = 100;
         overlay->uiScalePercent_ = kDefaultUiScalePercent;
         overlay->hoverExpandPx_ = 0;
@@ -5497,8 +6649,16 @@ private:
         overlay->hoverExpressionDurationSeconds_ =
             kDefaultHoverExpressionDurationSeconds;
         state->editingHoverExpressionDuration = false;
+        state->replaceHoverExpressionDurationOnNextInput = false;
         state->hoverExpressionDurationInput = FormatNonNegativeDecimal(
             overlay->hoverExpressionDurationSeconds_);
+        state->editingHoverOpacityRestoreDelay = false;
+        state->replaceHoverOpacityRestoreDelayOnNextInput = false;
+        state->hoverOpacityRestoreDelayInput = FormatNonNegativeDecimal(
+            overlay->hoverOpacityRestoreDelaySeconds_);
+        overlay->hoverOpacityCursorWasOverModel_ = false;
+        overlay->hoverOpacityRestorePending_ = false;
+        overlay->hoverOpacityRestoreAt_ = Clock::time_point{};
         overlay->RestorePanelExpressionPreview();
         overlay->hoverOpacityPreviewActive_ = true;
         SetTimer(panel, 91, 1000, nullptr);
@@ -5521,6 +6681,8 @@ private:
         overlay->borderThickness_ = state->originalThickness;
         overlay->hoverFadeEnabled_ = state->originalHoverFadeEnabled;
         overlay->hoverOpacityPercent_ = state->originalHoverOpacityPercent;
+        overlay->hoverOpacityRestoreDelaySeconds_ =
+            state->originalHoverOpacityRestoreDelaySeconds;
         overlay->modelOpacityPercent_ = state->originalModelOpacityPercent;
         overlay->uiScalePercent_ = state->originalUiScalePercent;
         overlay->hoverExpandPx_ = state->originalHoverExpandPx;
@@ -5553,6 +6715,13 @@ private:
         overlay->hoverExpressionFiles_ = state->originalHoverExpressionFiles;
         overlay->hoverExpressionDurationSeconds_ =
             state->originalHoverExpressionDurationSeconds;
+        state->editingHoverOpacityRestoreDelay = false;
+        state->replaceHoverOpacityRestoreDelayOnNextInput = false;
+        state->hoverOpacityRestoreDelayInput = FormatNonNegativeDecimal(
+            overlay->hoverOpacityRestoreDelaySeconds_);
+        overlay->hoverOpacityCursorWasOverModel_ = false;
+        overlay->hoverOpacityRestorePending_ = false;
+        overlay->hoverOpacityRestoreAt_ = Clock::time_point{};
         overlay->RestorePanelExpressionPreview();
         overlay->hoverOpacityPreviewActive_ = false;
         // Subject selection is persisted immediately. Cancelling the panel
@@ -6215,7 +7384,7 @@ private:
 
         const int base = overlay->borderMode_ == kBorderModeCustom ? 330 : 105;
         const int buttonTop = base +
-            (overlay->hoverExpressionEnabled_ ? 369 : 331);
+            (overlay->hoverExpressionEnabled_ ? 411 : 373);
         const double panelScale = PersonalPanelScale(overlay);
         POINT popup{
             static_cast<LONG>(std::lround(20 * panelScale)),
@@ -6267,6 +7436,39 @@ private:
         RefreshPersonalPanel(panel);
     }
 
+    static void ApplyHoverOpacityRestoreDelayInput(
+        HWND panel, BorderDialogState* state) {
+        if (!state || !state->overlay) return;
+        double seconds = 0.0;
+        if (TryParseNonNegativeDecimal(
+                state->hoverOpacityRestoreDelayInput, seconds)) {
+            state->overlay->hoverOpacityRestoreDelaySeconds_ = seconds;
+        }
+        RefreshPersonalPanel(panel);
+    }
+
+    static void EditNonNegativeDecimal(
+        std::wstring& input, bool& replaceOnNextInput, wchar_t character) {
+        if (character == L'\b') {
+            if (replaceOnNextInput) {
+                input.clear();
+                replaceOnNextInput = false;
+            } else if (!input.empty()) {
+                input.pop_back();
+            }
+            return;
+        }
+        const bool isDigit = character >= L'0' && character <= L'9';
+        const bool isFirstDot = character == L'.' &&
+            input.find(L'.') == std::wstring::npos;
+        if (!isDigit && !isFirstDot) return;
+        if (replaceOnNextInput) {
+            input.clear();
+            replaceOnNextInput = false;
+        }
+        input.push_back(character);
+    }
+
     static LRESULT CALLBACK PersonalPanelProc(
         HWND panel, UINT message, WPARAM wParam, LPARAM lParam) {
         auto* state = reinterpret_cast<BorderDialogState*>(GetWindowLongPtrW(panel, GWLP_USERDATA));
@@ -6284,7 +7486,8 @@ private:
             DrawPersonalPanel(panel, state);
             return 0;
         case WM_GETDLGCODE:
-            if (state->editingHoverExpressionDuration) {
+            if (state->editingHoverExpressionDuration ||
+                state->editingHoverOpacityRestoreDelay) {
                 return DLGC_WANTALLKEYS | DLGC_WANTCHARS;
             }
             break;
@@ -6295,7 +7498,7 @@ private:
                 ScreenToClient(panel, &point);
                 const int hit = PersonalPanelHitTest(
                     panel, overlay, point.x, point.y);
-                if (hit == 15) {
+                if (hit == 15 || hit == 19) {
                     SetCursor(LoadCursorW(nullptr, IDC_IBEAM));
                     return TRUE;
                 }
@@ -6308,6 +7511,22 @@ private:
             }
             break;
         case WM_KEYDOWN:
+            if (state->editingHoverOpacityRestoreDelay) {
+                if (wParam == VK_RETURN) {
+                    state->editingHoverOpacityRestoreDelay = false;
+                    state->replaceHoverOpacityRestoreDelayOnNextInput = false;
+                    RefreshPersonalPanel(panel);
+                    return 0;
+                }
+                if (wParam == VK_ESCAPE) {
+                    state->editingHoverOpacityRestoreDelay = false;
+                    state->replaceHoverOpacityRestoreDelayOnNextInput = false;
+                    state->hoverOpacityRestoreDelayInput = FormatNonNegativeDecimal(
+                        overlay->hoverOpacityRestoreDelaySeconds_);
+                    RefreshPersonalPanel(panel);
+                    return 0;
+                }
+            }
             if (state->editingHoverExpressionDuration) {
                 if (wParam == VK_RETURN) {
                     state->editingHoverExpressionDuration = false;
@@ -6326,29 +7545,20 @@ private:
             }
             break;
         case WM_CHAR:
+            if (state->editingHoverOpacityRestoreDelay) {
+                EditNonNegativeDecimal(
+                    state->hoverOpacityRestoreDelayInput,
+                    state->replaceHoverOpacityRestoreDelayOnNextInput,
+                    static_cast<wchar_t>(wParam));
+                ApplyHoverOpacityRestoreDelayInput(panel, state);
+                return 0;
+            }
             if (state->editingHoverExpressionDuration) {
-                const wchar_t character = static_cast<wchar_t>(wParam);
-                if (character == L'\b') {
-                    if (state->replaceHoverExpressionDurationOnNextInput) {
-                        state->hoverExpressionDurationInput.clear();
-                        state->replaceHoverExpressionDurationOnNextInput = false;
-                    } else if (!state->hoverExpressionDurationInput.empty()) {
-                        state->hoverExpressionDurationInput.pop_back();
-                    }
-                    ApplyHoverExpressionDurationInput(panel, state);
-                    return 0;
-                }
-                const bool isDigit = character >= L'0' && character <= L'9';
-                const bool isFirstDot = character == L'.' &&
-                    state->hoverExpressionDurationInput.find(L'.') == std::wstring::npos;
-                if (isDigit || isFirstDot) {
-                    if (state->replaceHoverExpressionDurationOnNextInput) {
-                        state->hoverExpressionDurationInput.clear();
-                        state->replaceHoverExpressionDurationOnNextInput = false;
-                    }
-                    state->hoverExpressionDurationInput.push_back(character);
-                    ApplyHoverExpressionDurationInput(panel, state);
-                }
+                EditNonNegativeDecimal(
+                    state->hoverExpressionDurationInput,
+                    state->replaceHoverExpressionDurationOnNextInput,
+                    static_cast<wchar_t>(wParam));
+                ApplyHoverExpressionDurationInput(panel, state);
                 // Deliberately consume minus signs, operators, spaces and
                 // paste-style expressions: this field only accepts a plain
                 // non-negative decimal number of seconds.
@@ -6395,6 +7605,10 @@ private:
             if (hit != 15) {
                 state->editingHoverExpressionDuration = false;
                 state->replaceHoverExpressionDurationOnNextInput = false;
+            }
+            if (hit != 19) {
+                state->editingHoverOpacityRestoreDelay = false;
+                state->replaceHoverOpacityRestoreDelayOnNextInput = false;
             }
             if (logical.y < 44 && hit == 0) {
                 RECT windowRect{};
@@ -6454,6 +7668,9 @@ private:
                     overlay->showHoverExpandPreview_ = false;
                     overlay->hoverExpandPreviewUntil_ = Clock::time_point{};
                     overlay->hoverExpandPreviewAlpha_ = 0.0;
+                    overlay->hoverOpacityRestorePending_ = false;
+                    overlay->hoverOpacityCursorWasOverModel_ = false;
+                    overlay->hoverOpacityRestoreAt_ = Clock::time_point{};
                 }
                 const int baseAlpha = overlay->modelOpacityPercent_ * 255 / 100;
                 overlay->currentOverlayAlpha_ = baseAlpha;
@@ -6505,6 +7722,16 @@ private:
                 state->replaceHoverExpressionDurationOnNextInput = true;
                 state->hoverExpressionDurationInput = FormatNonNegativeDecimal(
                     overlay->hoverExpressionDurationSeconds_);
+                SetForegroundWindow(panel);
+                SetFocus(panel);
+                RefreshPersonalPanel(panel);
+                return 0;
+            }
+            if (hit == 19) {
+                state->editingHoverOpacityRestoreDelay = true;
+                state->replaceHoverOpacityRestoreDelayOnNextInput = true;
+                state->hoverOpacityRestoreDelayInput = FormatNonNegativeDecimal(
+                    overlay->hoverOpacityRestoreDelaySeconds_);
                 SetForegroundWindow(panel);
                 SetFocus(panel);
                 RefreshPersonalPanel(panel);
@@ -6694,6 +7921,8 @@ private:
         state->originalThickness = borderThickness_;
         state->originalHoverFadeEnabled = hoverFadeEnabled_;
         state->originalHoverOpacityPercent = hoverOpacityPercent_;
+        state->originalHoverOpacityRestoreDelaySeconds =
+            hoverOpacityRestoreDelaySeconds_;
         state->originalModelOpacityPercent = modelOpacityPercent_;
         state->originalHoverExpandPx = hoverExpandPx_;
         state->originalExcludeEffectsFromHover = excludeEffectsFromHover_;
@@ -6718,6 +7947,8 @@ private:
         state->originalHoverExpressionEnabled = hoverExpressionEnabled_;
         state->originalHoverExpressionFiles = hoverExpressionFiles_;
         state->originalHoverExpressionDurationSeconds = hoverExpressionDurationSeconds_;
+        state->hoverOpacityRestoreDelayInput = FormatNonNegativeDecimal(
+            hoverOpacityRestoreDelaySeconds_);
         state->hoverExpressionDurationInput = FormatNonNegativeDecimal(
             hoverExpressionDurationSeconds_);
         CustomColorHueSaturation(customBorderColor_, state->colorHue, state->colorSaturation);
@@ -6779,14 +8010,19 @@ private:
     };
 
     static SubjectSelectionToolbarLayout SubjectSelectionToolbar() {
+        constexpr int scale = 2;
         const int left = 0;
         const int top = 0;
         SubjectSelectionToolbarLayout layout;
-        layout.panel = RECT{ left, top, left + 438, top + 56 };
-        layout.count = RECT{ left + 10, top + 8, left + 194, top + 48 };
-        layout.undo = RECT{ left + 202, top + 8, left + 242, top + 48 };
-        layout.redo = RECT{ left + 248, top + 8, left + 288, top + 48 };
-        layout.finish = RECT{ left + 298, top + 8, left + 428, top + 48 };
+        layout.panel = RECT{ left, top, left + 438 * scale, top + 56 * scale };
+        layout.count = RECT{ left + 10 * scale, top + 8 * scale,
+            left + 194 * scale, top + 48 * scale };
+        layout.undo = RECT{ left + 202 * scale, top + 8 * scale,
+            left + 242 * scale, top + 48 * scale };
+        layout.redo = RECT{ left + 248 * scale, top + 8 * scale,
+            left + 288 * scale, top + 48 * scale };
+        layout.finish = RECT{ left + 298 * scale, top + 8 * scale,
+            left + 428 * scale, top + 48 * scale };
         return layout;
     }
 
@@ -6982,7 +8218,7 @@ private:
         HDC dc = BeginPaint(window, &paint);
         const SubjectSelectionToolbarLayout toolbar = SubjectSelectionToolbar();
         PanelFill(dc, toolbar.panel, RGB(18, 31, 49));
-        HPEN toolbarBorder = CreatePen(PS_SOLID, 1, RGB(66, 103, 143));
+        HPEN toolbarBorder = CreatePen(PS_SOLID, 2, RGB(66, 103, 143));
         HGDIOBJ oldToolbarPen = SelectObject(dc, toolbarBorder);
         HGDIOBJ oldToolbarBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
         Rectangle(dc, toolbar.panel.left, toolbar.panel.top,
@@ -6996,18 +8232,18 @@ private:
         PanelFill(dc, toolbar.undo, canUndo ? RGB(30, 55, 84) : RGB(22, 38, 58));
         PanelFill(dc, toolbar.redo, canRedo ? RGB(30, 55, 84) : RGB(22, 38, 58));
         PanelText(dc, L"↶", toolbar.undo,
-            canUndo ? RGB(230, 241, 255) : RGB(75, 94, 116), 23, false,
+            canUndo ? RGB(230, 241, 255) : RGB(75, 94, 116), 46, false,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         PanelText(dc, L"↷", toolbar.redo,
-            canRedo ? RGB(230, 241, 255) : RGB(75, 94, 116), 23, false,
+            canRedo ? RGB(230, 241, 255) : RGB(75, 94, 116), 46, false,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         PanelText(dc,
             std::wstring(Tr(L"当前框选主体数量：")) +
                 std::to_wstring(subjectSelectionPolygons_.size()),
-            toolbar.count, RGB(210, 226, 245), 14, true,
+            toolbar.count, RGB(210, 226, 245), 28, true,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         PanelFill(dc, toolbar.finish, RGB(36, 103, 171));
-        PanelText(dc, Tr(L"完成  Enter"), toolbar.finish, RGB(245, 250, 255), 14, true,
+        PanelText(dc, Tr(L"完成  Enter"), toolbar.finish, RGB(245, 250, 255), 28, true,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         EndPaint(window, &paint);
     }
@@ -7496,7 +8732,8 @@ private:
         const int toolbarHeight = toolbar.panel.bottom - toolbar.panel.top;
         const int toolbarX = subjectSelectionVirtualLeft_ +
             (std::max)(16, width - toolbarWidth - 24);
-        const int toolbarY = subjectSelectionVirtualTop_ + 20;
+        const int toolbarY = subjectSelectionVirtualTop_ +
+            (std::max)(16, height - toolbarHeight - 24);
         subjectSelectionToolbarHwnd_ = CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
             kSubjectSelectionToolbarClass, kWindowTitle, WS_POPUP,
@@ -7716,13 +8953,24 @@ private:
         if (!borderPanelHwnd_ || !IsWindow(borderPanelHwnd_) || !hwnd_) return;
         const int panelW = PersonalPanelPixelWidth(this);
         const int panelH = PersonalPanelPixelHeight(this);
+        RECT currentPanel{};
+        GetWindowRect(borderPanelHwnd_, &currentPanel);
+        const bool sizeChanged =
+            currentPanel.right - currentPanel.left != panelW ||
+            currentPanel.bottom - currentPanel.top != panelH;
+        const UINT resizeFlags = sizeChanged ? SWP_NOCOPYBITS : 0;
         // Once the user drags the personalization panel during this session,
-        // keep its explicit position, but still apply layout-driven size
-        // changes (for example the expression-duration row).
+        // or starts moving/resizing the model window, keep the two windows
+        // independent.  Only touch the panel again when its own layout-driven
+        // size changes (for example the expression-duration row).  Calling
+        // SetWindowPos/RefreshPersonalPanel for every model WM_WINDOWPOSCHANGED
+        // made dragging the model needlessly repaint both layered windows.
         if (personalPanelManuallyPositioned_) {
-            SetWindowPos(borderPanelHwnd_, WindowZOrder(), 0, 0, panelW, panelH,
-                SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-            RefreshPersonalPanel(borderPanelHwnd_);
+            if (sizeChanged) {
+                SetWindowPos(borderPanelHwnd_, WindowZOrder(), 0, 0, panelW, panelH,
+                    SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW | resizeFlags);
+                RefreshPersonalPanel(borderPanelHwnd_);
+            }
             return;
         }
         RECT model{};
@@ -7738,7 +8986,12 @@ private:
         int y = model.bottom - panelH;
         y = (std::clamp)(y, static_cast<int>(mi.rcWork.top), static_cast<int>(mi.rcWork.bottom) - panelH);
         SetWindowPos(borderPanelHwnd_, WindowZOrder(), x, y, panelW, panelH,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            SWP_NOACTIVATE | SWP_SHOWWINDOW | resizeFlags);
+        if (sizeChanged) {
+            // Do not let Windows preserve the old footer pixels when an option
+            // inserts or removes a row. Repaint the complete resized panel now.
+            RefreshPersonalPanel(borderPanelHwnd_);
+        }
     }
 
     static void RestoreBorderDialogState(HWND dialog, BorderDialogState* state) {
@@ -8279,6 +9532,89 @@ private:
         return SUCCEEDED(result) ? selected : 0;
     }
 
+    bool RestartVtsOnGpuForBenchmark(int adapterIndex) {
+        const int preference = WindowsGpuPreference(adapterIndex);
+        const auto directory = FindVtsDirectory();
+        if (preference == 0 || !directory) {
+            MessageBoxW(
+                toolbarHwnd_,
+                Tr(L"无法自动切换到下一张 GPU，采集已停止并保留现有 CSV。"),
+                Tr(L"分辨率性能采集"), MB_OK | MB_ICONWARNING);
+            return false;
+        }
+
+        const std::filesystem::path vtsExecutable =
+            *directory / kVtsExecutableName;
+        const std::filesystem::path startBatch =
+            *directory / L"start_without_steam.bat";
+        RegistryValueBackup preferenceBackup;
+        if (!SetVtsGpuPreference(
+                vtsExecutable, preference, preferenceBackup)) {
+            MessageBoxW(
+                toolbarHwnd_,
+                Tr(L"写入下一张 GPU 的 Windows 显卡偏好失败，采集已停止并保留现有 CSV。"),
+                Tr(L"分辨率性能采集"), MB_OK | MB_ICONWARNING);
+            return false;
+        }
+
+        if (const auto running = FindRunningVts()) {
+            HANDLE process = OpenProcess(
+                SYNCHRONIZE, FALSE, running->processId);
+            const HWND window = FindMainWindowForProcess(running->processId);
+            if (!window || !PostMessageW(window, WM_CLOSE, 0, 0)) {
+                if (process) CloseHandle(process);
+                RestoreVtsGpuPreference(vtsExecutable, preferenceBackup);
+                MessageBoxW(
+                    toolbarHwnd_,
+                    Tr(L"无法正常关闭 VTube Studio，采集已停止并保留现有 CSV。"),
+                    Tr(L"分辨率性能采集"), MB_OK | MB_ICONWARNING);
+                return false;
+            }
+            const DWORD wait = process
+                ? WaitForSingleObject(process, 15000) : WAIT_FAILED;
+            if (process) CloseHandle(process);
+            if (wait != WAIT_OBJECT_0) {
+                RestoreVtsGpuPreference(vtsExecutable, preferenceBackup);
+                MessageBoxW(
+                    toolbarHwnd_,
+                    Tr(L"VTube Studio 未能在 15 秒内关闭，采集已停止并保留现有 CSV。"),
+                    Tr(L"分辨率性能采集"), MB_OK | MB_ICONWARNING);
+                return false;
+            }
+        }
+
+        const bool useBatch = std::filesystem::is_regular_file(startBatch);
+        const std::filesystem::path launchTarget = useBatch
+            ? startBatch : vtsExecutable;
+        const auto launchResult = reinterpret_cast<INT_PTR>(ShellExecuteW(
+            nullptr, L"open", launchTarget.c_str(), nullptr,
+            directory->c_str(), useBatch ? SW_HIDE : SW_SHOWNORMAL));
+        if (launchResult <= 32) {
+            RestoreVtsGpuPreference(vtsExecutable, preferenceBackup);
+            MessageBoxW(
+                toolbarHwnd_,
+                Tr(L"无法启动 VTube Studio，采集已停止并保留现有 CSV。"),
+                Tr(L"分辨率性能采集"), MB_OK | MB_ICONERROR);
+            return false;
+        }
+
+        selectedGpuIndex_ = adapterIndex;
+        gpuSelectionFallback_ = true;
+        SaveUiSettings();
+        WriteConfigInt(L"ui", L"start_unlocked_once", 1);
+        SaveWindowPlacement();
+        if (!StartOverlayRestartHelper()) {
+            MessageBoxW(
+                toolbarHwnd_,
+                Tr(L"覆盖层自动重启失败，采集已停止并保留现有 CSV。"),
+                Tr(L"分辨率性能采集"), MB_OK | MB_ICONWARNING);
+            return false;
+        }
+        Log("[benchmark] switching to GPU=" +
+            WideToUtf8(GpuName(adapterIndex).c_str()));
+        return true;
+    }
+
     bool RestartVtsOnGpu(int adapterIndex) {
         const int preference = WindowsGpuPreference(adapterIndex);
         if (preference == 0) {
@@ -8536,6 +9872,7 @@ private:
                     index,
                     description.Description,
                     description.AdapterLuid,
+                    static_cast<UINT64>(description.DedicatedVideoMemory),
                 });
             }
         }
@@ -8754,6 +10091,20 @@ private:
         DXGI_ADAPTER_DESC1 senderDescription{};
         senderAdapter->GetDesc1(&senderDescription);
 
+        // Record the sender even when the current D3D device is already on
+        // the correct adapter.  Multi-GPU benchmark resume waits for this
+        // positive identity; leaving the startup value at -1 made a
+        // successful same-adapter restart wait forever.
+        const auto normalizedSender = std::find_if(
+            gpuAdapters_.begin(), gpuAdapters_.end(),
+            [&senderDescription](const GpuAdapterInfo& info) {
+                return info.luid.HighPart == senderDescription.AdapterLuid.HighPart &&
+                       info.luid.LowPart == senderDescription.AdapterLuid.LowPart;
+            });
+        senderGpuIndex_ = normalizedSender == gpuAdapters_.end()
+            ? senderAdapterIndex
+            : static_cast<int>(normalizedSender->index);
+
         DXGI_ADAPTER_DESC1 activeDescription{};
         bool sameAdapter = false;
         if (activeAdapter3_ && SUCCEEDED(activeAdapter3_->GetDesc1(&activeDescription))) {
@@ -8763,6 +10114,8 @@ private:
                     senderDescription.AdapterLuid.LowPart;
         }
         if (sameAdapter) {
+            Log("[spout] sender confirmed on active GPU index=" +
+                std::to_string(senderGpuIndex_));
             return false;
         }
 
@@ -8806,6 +10159,7 @@ private:
             PdhCloseQuery(gpuUsageQuery_);
             gpuUsageQuery_ = nullptr;
             gpuUsageCounter_ = nullptr;
+            gpuProcessMemoryCounter_ = nullptr;
         }
         activeAdapter3_.Reset();
         context_.Reset();
@@ -9416,7 +10770,17 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     void CaptureHoverPreviewBase() {
         const bool debugOpacity = debugMode_ && currentOverlayAlpha_ < 255;
         const bool panelOpacity = borderDialogOpen_ && currentOverlayAlpha_ < 255;
-        if ((!hoverOpacityPreviewActive_ && !debugOpacity && !panelOpacity) || !dibBits_ ||
+        // The expansion indicator is derived from the model's alpha shape. Keep
+        // this raw snapshot in sync with every received frame while the range is
+        // being edited or its fade preview is visible; otherwise an old opacity
+        // preview snapshot makes the red/blue band stick to its first frame.
+        const bool hoverRangePreview =
+            !interactiveRendering_.load(std::memory_order_relaxed) &&
+            borderDialogOpen_ && hoverFadeEnabled_ &&
+            (hoverExpandEditing_ || showHoverExpandPreview_ ||
+             hoverExpandPreviewAlpha_ > 0.01);
+        if ((!hoverOpacityPreviewActive_ && !debugOpacity && !panelOpacity &&
+             !hoverRangePreview) || !dibBits_ ||
             dibWidth_ <= 0 || dibHeight_ <= 0) {
             return;
         }
@@ -9438,6 +10802,9 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         hoverFadeStartAlpha_ = 255;
         hoverTargetAlpha_ = 255;
         hoverFadeStarted_ = Clock::now();
+        hoverOpacityCursorWasOverModel_ = false;
+        hoverOpacityRestorePending_ = false;
+        hoverOpacityRestoreAt_ = Clock::time_point{};
     }
 
     bool UpdateHoverOpacity() {
@@ -9450,21 +10817,54 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             hoverFadeStartAlpha_ = 255;
             hoverTargetAlpha_ = 255;
             hoverFadeStarted_ = Clock::now();
+            hoverOpacityCursorWasOverModel_ = false;
+            hoverOpacityRestorePending_ = false;
+            hoverOpacityRestoreAt_ = Clock::time_point{};
             return changed;
         }
         // Model opacity is a normal target even while the personalization
         // panel is open. The render path below keeps the panel itself opaque.
         int baseAlpha = modelOpacityPercent_ * 255 / 100;
         int target = baseAlpha;
+        const auto now = Clock::now();
+        const bool hoverInteractionAvailable =
+            (locked_ || borderDialogOpen_) && hoverFadeEnabled_;
+        const bool cursorOverModel =
+            hoverInteractionAvailable && IsCursorOverModel();
         if (hoverOpacityPreviewActive_) {
             target = hoverFadeEnabled_
                 ? hoverOpacityPercent_ * 255 / 100
                 : modelOpacityPercent_ * 255 / 100;
-        } else if ((locked_ || borderDialogOpen_) && hoverFadeEnabled_ && IsCursorOverModel()) {
-            target = hoverOpacityPercent_ * 255 / 100;
+            hoverOpacityRestorePending_ = false;
+            hoverOpacityRestoreAt_ = Clock::time_point{};
+        } else if (hoverInteractionAvailable) {
+            const int hoverAlpha = hoverOpacityPercent_ * 255 / 100;
+            if (cursorOverModel) {
+                target = hoverAlpha;
+                hoverOpacityRestorePending_ = false;
+                hoverOpacityRestoreAt_ = Clock::time_point{};
+            } else {
+                if (hoverOpacityCursorWasOverModel_) {
+                    hoverOpacityRestorePending_ =
+                        hoverOpacityRestoreDelaySeconds_ > 0.0;
+                    hoverOpacityRestoreAt_ = hoverOpacityRestorePending_
+                        ? DeadlineAfterSeconds(
+                            now, hoverOpacityRestoreDelaySeconds_)
+                        : Clock::time_point{};
+                }
+                if (hoverOpacityRestorePending_ && now < hoverOpacityRestoreAt_) {
+                    target = hoverAlpha;
+                } else {
+                    hoverOpacityRestorePending_ = false;
+                    hoverOpacityRestoreAt_ = Clock::time_point{};
+                }
+            }
+        } else {
+            hoverOpacityRestorePending_ = false;
+            hoverOpacityRestoreAt_ = Clock::time_point{};
         }
+        hoverOpacityCursorWasOverModel_ = cursorOverModel;
 
-        const auto now = Clock::now();
         hoverTargetAlpha_ = target;
         // Exponential smoothing: alpha approaches target with time constant
         // proportional to kHoverFadeDurationMs. Frame-rate independent.
@@ -9863,10 +11263,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 // the model hit region. It does not shorten the expression's
                 // visible time while the pointer remains over the model.
                 hoverExpressionLeaving_ = true;
-                hoverExpressionRestoreAt_ = now +
-                    std::chrono::duration_cast<Clock::duration>(
-                        std::chrono::duration<double>(
-                            hoverExpressionDurationSeconds_));
+                hoverExpressionRestoreAt_ = DeadlineAfterSeconds(
+                    now, hoverExpressionDurationSeconds_);
             } else if (!hoverExpressionRestored_ &&
                        now >= hoverExpressionRestoreAt_) {
                 // If a 250 ms state refresh is already in flight, consume it
@@ -10127,6 +11525,14 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     }
 
     void DrawHoverExpandPreview(int width, int height) {
+        // Windows runs moving/resizing in a modal UI loop. The expansion mask
+        // performs several full-frame distance-transform passes, so running it
+        // on every interactive resize frame can starve the mouse-up message and
+        // leave the system resize cursor captured. Keep the live model render,
+        // but defer this diagnostic layer until the move/resize has finished.
+        if (interactiveRendering_.load(std::memory_order_relaxed)) {
+            return;
+        }
         // The expansion band is a hover affordance: show it only while the
         // cursor is over the model or its configured expansion hit area. Once
         // shown, keep it for 2.4 seconds after the cursor leaves.
@@ -11073,6 +12479,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         statusBatchRect_ = RECT{};
         statusAddPathRect_ = RECT{};
         statusManualPathRect_ = RECT{};
+        statusDocsRect_ = RECT{};
         const auto fill = [this](const RECT& rect, BYTE r, BYTE g, BYTE b, BYTE a) {
             const BYTE blue = static_cast<BYTE>((b * a + 127) / 255);
             const BYTE green = static_cast<BYTE>((g * a + 127) / 255);
@@ -11142,6 +12549,16 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, UiFontFace());
+        HFONT docsFont = CreateFontW(
+            -UiFontSize(nullptr, UiScaled(14)), 0, 0, 0,
+            FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, UiFontFace());
+        HFONT docsLinkFont = CreateFontW(
+            -UiFontSize(nullptr, UiScaled(14)), 0, 0, 0,
+            FW_SEMIBOLD, FALSE, TRUE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, UiFontFace());
         HGDIOBJ oldFont = SelectObject(memoryDc_, titleFont);
         SetBkMode(memoryDc_, TRANSPARENT);
         SetTextColor(memoryDc_, RGB(240, 246, 255));
@@ -11162,6 +12579,54 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             Tr(L"将背景调整成“ColorPicker”，然后启动透明推流。");
         DrawTextW(memoryDc_, instruction.c_str(), -1, &instructionRect,
                   DT_LEFT | DT_TOP | DT_WORDBREAK);
+
+        // Keep the surrounding sentence passive and expose only the project
+        // name as the hyperlink. At narrow widths the link moves to a second
+        // line so translated text never overlaps the launch controls.
+        const std::wstring docsPrefix = Tr(L"你可以访问该教程页面：");
+        const std::wstring docsLink = Tr(L"GitHub-VTSFloat_Meow_DOCS");
+        const std::wstring docsSuffix = Tr(L" 页面查看更多");
+        SIZE prefixSize{};
+        SIZE linkSize{};
+        SIZE suffixSize{};
+        SelectObject(memoryDc_, docsFont);
+        GetTextExtentPoint32W(memoryDc_, docsPrefix.c_str(),
+                              static_cast<int>(docsPrefix.size()), &prefixSize);
+        GetTextExtentPoint32W(memoryDc_, docsSuffix.c_str(),
+                              static_cast<int>(docsSuffix.size()), &suffixSize);
+        SelectObject(memoryDc_, docsLinkFont);
+        GetTextExtentPoint32W(memoryDc_, docsLink.c_str(),
+                              static_cast<int>(docsLink.size()), &linkSize);
+        const int docsLeft = panel.left + horizontalMargin;
+        const int docsRight = panel.right - horizontalMargin;
+        const int docsTop = panel.top + UiScaled(126);
+        const int docsLineHeight = UiScaled(22);
+        const int docsWidth = docsRight - docsLeft;
+        const bool docsWrap = prefixSize.cx + linkSize.cx + suffixSize.cx > docsWidth;
+        int docsLinkLeft = docsLeft + (docsWrap ? 0 : prefixSize.cx);
+        int docsLinkTop = docsTop + (docsWrap ? docsLineHeight : 0);
+        RECT docsPrefixRect{
+            docsLeft, docsTop, docsRight, docsTop + docsLineHeight };
+        SelectObject(memoryDc_, docsFont);
+        SetTextColor(memoryDc_, RGB(164, 204, 240));
+        DrawTextW(memoryDc_, docsPrefix.c_str(), -1, &docsPrefixRect,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        statusDocsRect_ = RECT{
+            docsLinkLeft, docsLinkTop,
+            (std::min)(docsRight, docsLinkLeft + static_cast<int>(linkSize.cx)),
+            docsLinkTop + docsLineHeight };
+        SelectObject(memoryDc_, docsLinkFont);
+        SetTextColor(memoryDc_, statusPressedButton_ == 4
+            ? RGB(131, 205, 255) : RGB(54, 157, 255));
+        DrawTextW(memoryDc_, docsLink.c_str(), -1, &statusDocsRect_,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        RECT docsSuffixRect{
+            statusDocsRect_.right, docsLinkTop, docsRight,
+            docsLinkTop + docsLineHeight };
+        SelectObject(memoryDc_, docsFont);
+        SetTextColor(memoryDc_, RGB(164, 204, 240));
+        DrawTextW(memoryDc_, docsSuffix.c_str(), -1, &docsSuffixRect,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         RECT pathRect{
             panel.left + horizontalMargin, panel.bottom - UiScaled(42),
@@ -11218,6 +12683,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         SelectObject(memoryDc_, oldFont);
         DeleteObject(titleFont);
         DeleteObject(bodyFont);
+        DeleteObject(docsFont);
+        DeleteObject(docsLinkFont);
         DeleteObject(manualPathFont);
 
         // GDI text on a 32-bit DIB may leave alpha at zero. Make glyph pixels
@@ -11255,6 +12722,16 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             Log("[gpu telemetry] GPU Engine counter unavailable=" +
                 std::to_string(counterStatus));
             return;
+        }
+        const PDH_STATUS memoryCounterStatus = PdhAddEnglishCounterW(
+            gpuUsageQuery_,
+            L"\\GPU Process Memory(*)\\Dedicated Usage",
+            0,
+            &gpuProcessMemoryCounter_);
+        if (memoryCounterStatus != ERROR_SUCCESS) {
+            gpuProcessMemoryCounter_ = nullptr;
+            Log("[gpu telemetry] GPU process memory counter unavailable=" +
+                std::to_string(memoryCounterStatus));
         }
         PdhCollectQueryData(gpuUsageQuery_); // Establish the first rate sample.
         Log("[gpu telemetry] enabled");
@@ -11361,6 +12838,51 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             return;
         }
 
+        const DWORD processId = GetCurrentProcessId();
+        const LUID expectedLuid = ActiveGpuLuid();
+        processGpuMemoryBytes_ = 0;
+        if (gpuProcessMemoryCounter_) {
+            DWORD memoryBytes = 0;
+            DWORD memoryItems = 0;
+            PDH_STATUS memoryStatus = PdhGetFormattedCounterArrayW(
+                gpuProcessMemoryCounter_, PDH_FMT_LARGE,
+                &memoryBytes, &memoryItems, nullptr);
+            if (memoryStatus == PDH_MORE_DATA && memoryBytes > 0) {
+                std::vector<BYTE> memoryStorage(memoryBytes);
+                auto* memoryValues =
+                    reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(
+                        memoryStorage.data());
+                memoryStatus = PdhGetFormattedCounterArrayW(
+                    gpuProcessMemoryCounter_, PDH_FMT_LARGE,
+                    &memoryBytes, &memoryItems, memoryValues);
+                if (memoryStatus == ERROR_SUCCESS) {
+                    for (DWORD index = 0; index < memoryItems; ++index) {
+                        const auto& value = memoryValues[index];
+                        if (value.FmtValue.CStatus != ERROR_SUCCESS ||
+                            !value.szName || value.FmtValue.largeValue <= 0) {
+                            continue;
+                        }
+                        unsigned long pid = 0;
+                        unsigned long high = 0;
+                        unsigned long low = 0;
+                        if (swscanf_s(
+                                value.szName,
+                                L"pid_%lu_luid_0x%lx_0x%lx",
+                                &pid, &high, &low) != 3) {
+                            continue;
+                        }
+                        if (pid == processId &&
+                            static_cast<DWORD>(high) ==
+                                static_cast<DWORD>(expectedLuid.HighPart) &&
+                            static_cast<DWORD>(low) == expectedLuid.LowPart) {
+                            processGpuMemoryBytes_ += static_cast<UINT64>(
+                                value.FmtValue.largeValue);
+                        }
+                    }
+                }
+            }
+        }
+
         DWORD bytes = 0;
         DWORD items = 0;
         PDH_STATUS status = PdhGetFormattedCounterArrayW(
@@ -11376,8 +12898,6 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             return;
         }
 
-        const DWORD processId = GetCurrentProcessId();
-        const LUID expectedLuid = ActiveGpuLuid();
         double utilization = 0.0;
         double systemGpuTotal = 0.0;
         bool found = false;
@@ -11444,6 +12964,21 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         }
         const int prevApiFps = vtsApiFps_;
         vtsApiFps_ = vtsApi_.GetRealtimeFps();
+        const bool authorizationDenied =
+            vtsApi_.WasAuthorizationDenied();
+        if (authorizationDenied != lastAuthorizationDenied_) {
+            lastAuthorizationDenied_ = authorizationDenied;
+            if (authorizationDenied) {
+                KillTimer(toolbarHwnd_, 45);
+                KillTimer(toolbarHwnd_, 46);
+                awaitingUserApproval_ = false;
+                showingApiSuccess_ = false;
+            }
+            PositionToolbar();
+            if (toolbarHwnd_) {
+                InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+            }
+        }
         const bool apiNotificationVisible = ShowApiNotification();
         if (apiNotificationVisible != lastApiNotificationVisible_) {
             lastApiNotificationVisible_ = apiNotificationVisible;
@@ -11516,10 +13051,14 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             InvalidateRect(toolbarHwnd_, nullptr, FALSE);
         }
 
-        statsStarted_ = now;
         requested_ = received_ = newFrames_ = updated_ = errors_ = 0;
         receiveMs_ = mapMs_ = updateMs_ = maxUpdateMs_ = 0.0;
         wakeLateMs_ = maxWakeLateMs_ = 0.0;
+        MaybeResumeResolutionBenchmark();
+        UpdateResolutionBenchmark();
+        // A completed pair may show a manual VTS-resolution prompt. Start the
+        // next statistics window after that modal pause, never before it.
+        statsStarted_ = Clock::now();
     }
 
     int UiScaled(int logicalPixels) const {
@@ -11557,6 +13096,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         if (statusMode_ != VtsStatusMode::Hidden) return false;
         if (!hasReceivedModel_) return false;
         if (!apiStartedAfterModel_) return false;
+        if (vtsApi_.WasAuthorizationDenied()) return true;
         if (holdNotificationForScanResult_) return true;
         if (awaitingUserApproval_ || vtsApi_.IsAwaitingAuthorization()) return true;
         if (showingApiSuccess_) return true;
@@ -11650,6 +13190,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         } else {
             height = kToolbarDebugHeight;
         }
+        if (benchmarkActive_) height += 18;
         return UiScaled(height) + TotalNotificationOffset();
     }
 
@@ -11697,7 +13238,9 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         const bool showMonitorButton = GetSystemMetrics(SM_CMONITORS) >= 2;
         if (ToolbarUsesCompactLayout()) {
             constexpr int gap = 4;
-            // Row 1: [graphics] [hotkey] on left, [close][hide][github][lock] on right
+            // Row 1: [graphics] [hotkey] on left, [close][hide][github][lock] on right.
+            // Keep the hotkey control compact instead of stretching it across
+            // every unused pixel; the remaining strip is the toolbar drag area.
             int row1Right = client.right - 5;
             close = take(row1Right, 40, 0);
             hide = take(row1Right, 40, 0);
@@ -11707,7 +13250,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 5, notifOffset + 5, 5 + 100, notifOffset + kToolbarHeight - 5 };
             {
                 int hkLeft = 5 + 100 + gap;
-                int hkRight = lock.left - gap;
+                const int hkRight = static_cast<int>(lock.left) - gap;
                 if (hkRight - hkLeft > 60) {
                     hotkey = RECT{ hkLeft, notifOffset + 5, hkRight,
                         notifOffset + kToolbarHeight - 5 };
@@ -11820,9 +13363,11 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         return ToolbarButton::None;
     }
 
-    std::array<int, 3> ApiNotificationActionWidths() const {
+    std::array<int, 4> ApiNotificationActionWidths() const {
         HDC dc = GetDC(toolbarHwnd_);
-        if (!dc) return { UiScaled(90), UiScaled(85), UiScaled(90) };
+        if (!dc) {
+            return { UiScaled(90), UiScaled(85), UiScaled(90), UiScaled(150) };
+        }
         HFONT font = CreateFontW(
             -UiFontSize(nullptr, UiScaled(15)), 0, 0, 0, FW_SEMIBOLD,
             FALSE, FALSE, FALSE, DEFAULT_CHARSET,
@@ -11837,6 +13382,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         };
         const int scan = width(Tr(L"[扫描端口]"), 90);
         const int how = width(Tr(L"[如何开启]"), 85);
+        const int retryAuthorization = width(Tr(L"[重新发起授权]"), 150);
         int result = UiScaled(90);
         for (const std::wstring value : {
                  std::wstring(Tr(L"扫描中")) + L"...",
@@ -11847,7 +13393,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         SelectObject(dc, previous);
         DeleteObject(font);
         ReleaseDC(toolbarHwnd_, dc);
-        return { scan, how, result };
+        return { scan, how, result, retryAuthorization };
     }
 
     void PaintToolbar() {
@@ -11870,12 +13416,17 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         const int notificationHeight = UiScaled(kApiNotificationHeight);
         int notifY = UiScaled(1);
         if (ShowApiNotification()) {
+            const bool authorizationDenied =
+                vtsApi_.WasAuthorizationDenied();
             const bool awaitingAuthorization =
-                awaitingUserApproval_ || vtsApi_.IsAwaitingAuthorization();
+                !authorizationDenied &&
+                (awaitingUserApproval_ || vtsApi_.IsAwaitingAuthorization());
             RECT notifRect{ UiScaled(1), notifY,
                 client.right - UiScaled(1), notifY + notificationHeight };
             HBRUSH notifBg = CreateSolidBrush(
-                (awaitingAuthorization || showingApiSuccess_) ? RGB(15, 50, 22) : RGB(50, 30, 10));
+                authorizationDenied ? RGB(58, 22, 22) :
+                ((awaitingAuthorization || showingApiSuccess_)
+                    ? RGB(15, 50, 22) : RGB(50, 30, 10)));
             FillRect(buffer, &notifRect, notifBg);
             DeleteObject(notifBg);
             HFONT notifFont = CreateFontW(
@@ -11885,12 +13436,16 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             HGDIOBJ oldNotifFont = SelectObject(buffer, notifFont);
             SetBkMode(buffer, TRANSPARENT);
             SetTextColor(buffer,
-                (awaitingAuthorization || showingApiSuccess_) ? RGB(130, 255, 150) : RGB(255, 200, 100));
+                authorizationDenied ? RGB(255, 145, 145) :
+                ((awaitingAuthorization || showingApiSuccess_)
+                    ? RGB(130, 255, 150) : RGB(255, 200, 100)));
             const bool disconnected = apiWasConnected_ && !vtsApi_.IsConnected();
             std::wstring notifBuf;
             const wchar_t* notifText;
             if (showingApiSuccess_) {
                 notifText = Tr(L"添加成功！");
+            } else if (authorizationDenied) {
+                notifText = Tr(L"你刚刚拒绝了VTSFloat_Meow");
             } else if (awaitingAuthorization) {
                 const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
                     Clock::now().time_since_epoch()).count();
@@ -11908,15 +13463,25 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 DrawTextW(buffer, notifText, -1, &textRect,
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             } else {
-                const auto [scanWidth, howWidth, resultWidth] = ApiNotificationActionWidths();
+                const auto [scanWidth, howWidth, resultWidth,
+                            retryAuthorizationWidth] =
+                    ApiNotificationActionWidths();
                 const int howRight = client.right - UiScaled(5);
                 const int howLeft = howRight - howWidth;
                 const int scanRight = howLeft - UiScaled(5);
                 const int scanLeft = scanRight - scanWidth;
-                const int resultRight = scanLeft - UiScaled(5);
+                const int retryAuthorizationRight = scanLeft - UiScaled(5);
+                const int retryAuthorizationLeft =
+                    retryAuthorizationRight - retryAuthorizationWidth;
+                const int firstActionLeft = authorizationDenied
+                    ? retryAuthorizationLeft : scanLeft;
+                const int resultRight = firstActionLeft - UiScaled(5);
                 const int resultLeft = resultRight - resultWidth;
-                const int textRight = vtsApi_.IsScanning()
-                    ? resultLeft - UiScaled(5) : scanLeft - UiScaled(5);
+                const bool showScanStatus = vtsApi_.IsScanning() ||
+                    vtsApi_.GetScanResult() != 0;
+                const int textRight = showScanStatus
+                    ? resultLeft - UiScaled(5)
+                    : firstActionLeft - UiScaled(5);
                 RECT textRect{ UiScaled(8), notifY, textRight,
                     notifY + notificationHeight };
                 DrawTextW(buffer, notifText, -1, &textRect,
@@ -11947,6 +13512,15 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                         DT_LEFT | DT_VCENTER | DT_SINGLELINE);
                 }
                 SetTextColor(buffer, RGB(100, 180, 255));
+                if (authorizationDenied) {
+                    RECT retryAuthorizationRect{
+                        retryAuthorizationLeft, notifY,
+                        retryAuthorizationRight, notifY + notificationHeight };
+                    DrawTextW(buffer, Tr(L"[重新发起授权]"), -1,
+                        &retryAuthorizationRect,
+                        DT_CENTER | DT_VCENTER | DT_SINGLELINE |
+                        DT_END_ELLIPSIS);
+                }
                 RECT scanBtnRect{ scanLeft, notifY, scanRight,
                     notifY + notificationHeight };
                 DrawTextW(buffer, Tr(L"[扫描端口]"), -1, &scanBtnRect,
@@ -12301,23 +13875,44 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             SetFocus(toolbarHwnd_);
             POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             if (ShowApiNotification() && point.y < TotalNotificationOffset()) {
-                if (awaitingUserApproval_ || vtsApi_.IsAwaitingAuthorization()) {
+                const bool authorizationDenied =
+                    vtsApi_.WasAuthorizationDenied();
+                if (!authorizationDenied &&
+                    (awaitingUserApproval_ || vtsApi_.IsAwaitingAuthorization())) {
                     return 0;
                 }
                 RECT clientR{};
                 GetClientRect(toolbarHwnd_, &clientR);
-                const auto [scanWidth, howWidth, resultWidth] = ApiNotificationActionWidths();
+                const auto [scanWidth, howWidth, resultWidth,
+                            retryAuthorizationWidth] =
+                    ApiNotificationActionWidths();
                 (void)resultWidth;
                 const int howLeft = clientR.right - UiScaled(5) - howWidth;
-                const int scanLeft = howLeft - UiScaled(5) - scanWidth;
+                const int scanRight = howLeft - UiScaled(5);
+                const int scanLeft = scanRight - scanWidth;
+                const int retryAuthorizationRight = scanLeft - UiScaled(5);
+                const int retryAuthorizationLeft =
+                    retryAuthorizationRight - retryAuthorizationWidth;
                 if (point.x >= howLeft) {
                     ShowVtsApiGuide();
                 } else if (point.x >= scanLeft &&
-                           point.x < howLeft - UiScaled(5)) {
+                           point.x < scanRight) {
                     vtsApi_.RequestScan();
                     holdNotificationForScanResult_ = true;
                     scanStartedObserved_ = false;
                     SetTimer(toolbarHwnd_, 42, 300, nullptr);
+                    InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+                } else if (authorizationDenied &&
+                           point.x >= retryAuthorizationLeft &&
+                           point.x < retryAuthorizationRight) {
+                    KillTimer(toolbarHwnd_, 45);
+                    KillTimer(toolbarHwnd_, 46);
+                    showingApiSuccess_ = false;
+                    awaitingUserApproval_ = true;
+                    vtsApi_.RequestAuthorizationRetry();
+                    SetTimer(toolbarHwnd_, 45, 500, nullptr);
+                    SetTimer(toolbarHwnd_, 46, 60000, nullptr);
+                    PositionToolbar();
                     InvalidateRect(toolbarHwnd_, nullptr, FALSE);
                 }
                 return 0;
@@ -12401,7 +13996,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 KillTimer(toolbarHwnd_, 43);
                 vtsApi_.ClearScanResult();
                 holdNotificationForScanResult_ = false;
-                if (vtsApiFps_ == 0) {
+                if (vtsApiFps_ == 0 &&
+                    !vtsApi_.WasAuthorizationDenied()) {
                     awaitingUserApproval_ = true;
                     SetTimer(toolbarHwnd_, 45, 500, nullptr);  // dot animation
                     SetTimer(toolbarHwnd_, 46, 60000, nullptr);  // 60s timeout
@@ -12412,7 +14008,13 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             }
             if (wParam == 45) {
                 if (awaitingUserApproval_) {
-                    if (vtsApiFps_ > 0) {
+                    if (vtsApi_.WasAuthorizationDenied()) {
+                        KillTimer(toolbarHwnd_, 45);
+                        KillTimer(toolbarHwnd_, 46);
+                        awaitingUserApproval_ = false;
+                        PositionToolbar();
+                        InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+                    } else if (vtsApiFps_ > 0) {
                         KillTimer(toolbarHwnd_, 45);
                         KillTimer(toolbarHwnd_, 46);
                         awaitingUserApproval_ = false;
@@ -12458,13 +14060,22 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 if (point.y < TotalNotificationOffset()) {
                     RECT clientR{};
                     GetClientRect(toolbarHwnd_, &clientR);
-                    const auto [scanWidth, howWidth, resultWidth] = ApiNotificationActionWidths();
+                    const auto [scanWidth, howWidth, resultWidth,
+                                retryAuthorizationWidth] =
+                        ApiNotificationActionWidths();
                     (void)resultWidth;
                     const int scanLeft = clientR.right - UiScaled(10) -
                         howWidth - scanWidth;
-                    if (ShowApiNotification() && !awaitingUserApproval_ &&
-                        !vtsApi_.IsAwaitingAuthorization() &&
-                        point.x >= scanLeft) {
+                    const bool authorizationDenied =
+                        vtsApi_.WasAuthorizationDenied();
+                    const int firstActionLeft = authorizationDenied
+                        ? scanLeft - UiScaled(5) - retryAuthorizationWidth
+                        : scanLeft;
+                    if (ShowApiNotification() &&
+                        (authorizationDenied ||
+                         (!awaitingUserApproval_ &&
+                          !vtsApi_.IsAwaitingAuthorization())) &&
+                        point.x >= firstActionLeft) {
                         cursor = IDC_HAND;
                     } else {
                         cursor = IDC_ARROW;
@@ -12620,7 +14231,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                     (PtInRect(&statusExeRect_, p) ||
                      PtInRect(&statusBatchRect_, p) ||
                      PtInRect(&statusAddPathRect_, p) ||
-                     PtInRect(&statusManualPathRect_, p))) {
+                     PtInRect(&statusManualPathRect_, p) ||
+                     PtInRect(&statusDocsRect_, p))) {
                     SetCursor(LoadCursorW(nullptr, IDC_HAND));
                     return TRUE;
                 }
@@ -12640,7 +14252,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 statusPressedButton_ = PtInRect(&statusExeRect_, point) ? 1
                     : (PtInRect(&statusBatchRect_, point) ? 2
                     : ((PtInRect(&statusAddPathRect_, point) ||
-                        PtInRect(&statusManualPathRect_, point)) ? 3 : 0));
+                        PtInRect(&statusManualPathRect_, point)) ? 3
+                    : (PtInRect(&statusDocsRect_, point) ? 4 : 0)));
                 if (statusPressedButton_ != 0) {
                     SetCapture(hwnd_);
                     statusFrameDirty_ = true;
@@ -12690,6 +14303,15 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                     (PtInRect(&statusAddPathRect_, point) ||
                      PtInRect(&statusManualPathRect_, point))) {
                     ChooseVtsLaunchPath();
+                } else if (pressed == 4 && PtInRect(&statusDocsRect_, point)) {
+                    Log("[vts status] action=open_docs");
+                    const INT_PTR openResult = reinterpret_cast<INT_PTR>(
+                        ShellExecuteW(nullptr, L"open", kDocsUrl, nullptr, nullptr,
+                                      SW_SHOWNORMAL));
+                    if (openResult <= 32) {
+                        Log("[vts status] open_docs failed=" +
+                            std::to_string(openResult));
+                    }
                 }
                 return 0;
             }
@@ -12706,7 +14328,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 if (PtInRect(&statusExeRect_, point) ||
                     PtInRect(&statusBatchRect_, point) ||
                     PtInRect(&statusAddPathRect_, point) ||
-                    PtInRect(&statusManualPathRect_, point)) {
+                    PtInRect(&statusManualPathRect_, point) ||
+                    PtInRect(&statusDocsRect_, point)) {
                     return HTCLIENT;
                 }
                 return HTTRANSPARENT;
@@ -12737,7 +14360,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         }
         case WM_GETMINMAXINFO: {
             auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
-            info->ptMinTrackSize.x = kMinimumWidth;
+            info->ptMinTrackSize.x = benchmarkActive_ ? 1 : kMinimumWidth;
             info->ptMinTrackSize.y = 96;
             return 0;
         }
@@ -12770,6 +14393,14 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             return TRUE;
         }
         case WM_ENTERSIZEMOVE:
+            // The panel is initially placed next to the model for convenience,
+            // but a user-initiated model move/resize detaches it immediately.
+            // From this point on, dragging either window cannot pull or repaint
+            // the other one for the remainder of this panel session.
+            if (borderDialogOpen_ && borderPanelHwnd_ &&
+                IsWindow(borderPanelHwnd_)) {
+                personalPanelManuallyPositioned_ = true;
+            }
             StartInteractiveRendering();
             return 0;
         case WM_WINDOWPOSCHANGED:
@@ -12795,6 +14426,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             SaveWindowPlacement();
             return 0;
         case WM_CLOSE:
+            FinishResolutionBenchmark(false, false);
             SaveWindowPlacement();
             RestoreExpressionsBeforeShutdown();
             DestroyWindow(hwnd_);
@@ -12884,6 +14516,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     RECT statusBatchRect_{};
     RECT statusAddPathRect_{};
     RECT statusManualPathRect_{};
+    RECT statusDocsRect_{};
     int statusPressedButton_ = 0;
     bool statusPathLookupFailed_ = false;
     bool statusFrameDirty_ = true;
@@ -12912,6 +14545,11 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     bool aspectLocked_ = true;
     bool hoverFadeEnabled_ = true;
     int hoverOpacityPercent_ = kDefaultHoverOpacityPercent;
+    double hoverOpacityRestoreDelaySeconds_ =
+        kDefaultHoverOpacityRestoreDelaySeconds;
+    bool hoverOpacityCursorWasOverModel_ = false;
+    bool hoverOpacityRestorePending_ = false;
+    Clock::time_point hoverOpacityRestoreAt_{};
     int modelOpacityPercent_ = 100;
     int uiScalePercent_ = kDefaultUiScalePercent;
     int hoverExpandPx_ = 0;
@@ -13035,6 +14673,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     bool scanStartedObserved_ = false;
     bool awaitingUserApproval_ = false;
     bool showingApiSuccess_ = false;
+    bool lastAuthorizationDenied_ = false;
     ULONG_PTR gdiplusToken_ = 0;
     std::vector<GpuAdapterInfo> gpuAdapters_;
     std::wstring fpsInput_;
@@ -13050,8 +14689,10 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     ComPtr<IDXGIAdapter3> activeAdapter3_;
     PDH_HQUERY gpuUsageQuery_ = nullptr;
     PDH_HCOUNTER gpuUsageCounter_ = nullptr;
+    PDH_HCOUNTER gpuProcessMemoryCounter_ = nullptr;
     std::optional<double> gpuUsagePercent_;
     std::optional<double> cpuUsagePercent_;
+    UINT64 processGpuMemoryBytes_ = 0;
     UINT64 gpuMemoryCurrentBytes_ = 0;
     UINT64 gpuMemoryBudgetBytes_ = 0;
     SIZE_T processMemoryBytes_ = 0;
@@ -13125,6 +14766,36 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     std::vector<double> debugFpsHistory_;
     std::vector<double> debugFrameMsHistory_;
     std::vector<std::uint8_t> debugTextScratch_;
+    std::optional<vtsfloat::benchmark::CsvCapture> benchmarkWriter_;
+    std::vector<vtsfloat::benchmark::Sample> benchmarkSamples_;
+    std::vector<int> benchmarkGpuQueue_;
+    std::size_t benchmarkGpuCursor_ = 0;
+    bool benchmarkTestAllGpus_ = false;
+    bool benchmarkResumeChecked_ = false;
+    std::filesystem::path benchmarkCurrentRawFileName_;
+    std::size_t benchmarkTotalSampleCount_ = 0;
+    double benchmarkVtsFpsSum_ = 0.0;
+    double benchmarkVtsFpsMin_ = 0.0;
+    double benchmarkVtsFpsMax_ = 0.0;
+    double benchmarkVtsmFpsSum_ = 0.0;
+    double benchmarkVtsmFpsMin_ = 0.0;
+    double benchmarkVtsmFpsMax_ = 0.0;
+    bool benchmarkGpuSummaryWritten_ = false;
+    std::string benchmarkGpuStartTime_;
+    std::size_t benchmarkPairIndex_ = 0;
+    bool benchmarkActive_ = false;
+    bool benchmarkPairMatched_ = false;
+    bool benchmarkOriginalAspectLocked_ = false;
+    bool benchmarkOriginalDebugMode_ = false;
+    bool benchmarkOriginalRectValid_ = false;
+    RECT benchmarkOriginalRect_{};
+    Clock::time_point benchmarkWarmupUntil_{};
+    Clock::time_point benchmarkResolutionDeadline_{};
+    bool benchmarkManualFallbackShown_ = false;
+    HWND benchmarkVtsWindow_ = nullptr;
+    DWORD benchmarkVtsProcessId_ = 0;
+    bool benchmarkOriginalVtsPlacementValid_ = false;
+    WINDOWPLACEMENT benchmarkOriginalVtsPlacement_{};
 };
 
 }  // namespace
