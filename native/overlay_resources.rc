@@ -14,9 +14,9 @@ EXSTYLE WS_EX_TOPMOST
 CAPTION "自定义帧率"
 FONT 9, "Microsoft YaHei UI"
 BEGIN
-    LTEXT           "请输入 1–240 FPS：", -1, 10, 10, 206, 12
+    LTEXT           "请输入 1–240 FPS：", IDC_FPS_PROMPT, 10, 10, 206, 12
     EDITTEXT        IDC_FPS_EDIT, 10, 26, 206, 20, ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "输入内容会在这里直接显示，确定后才会应用。", -1, 10, 51, 206, 12
+    LTEXT           "输入内容会在这里直接显示，确定后才会应用。", IDC_FPS_HINT, 10, 51, 206, 12
     DEFPUSHBUTTON   "确定", IDOK, 92, 69, 60, 15
     PUSHBUTTON      "取消", IDCANCEL, 156, 69, 60, 15
 END

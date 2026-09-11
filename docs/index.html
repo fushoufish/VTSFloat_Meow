@@ -3,6 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script>document.documentElement.classList.add('is-preloading');</script>
+  <style>
+    html.is-preloading { overflow: hidden; }
+    html.is-preloading .site-shell { visibility: hidden; opacity: 0; }
+    .resource-loader { position: fixed; inset: 0; z-index: 99999; display: grid; place-items: center; padding: 28px; background: #fbfbfa; color: #242427; transition: opacity .45s ease, visibility .45s ease; }
+    .resource-loader.is-leaving { opacity: 0; visibility: hidden; }
+    .resource-loader-card { width: min(720px, 72vw); }
+    .resource-loader-track { height: 7px; overflow: hidden; border-radius: 999px; background: rgba(190, 187, 241, .28); }
+    .resource-loader-progress { width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #bdb8ef, #8880ca); transition: width .28s ease; }
+    @media (prefers-reduced-motion: reduce) { .resource-loader, .resource-loader-progress { transition: none; } }
+  </style>
+  <noscript><style>html.is-preloading { overflow: auto; } html.is-preloading .site-shell { visibility: visible; opacity: 1; } .resource-loader { display: none; }</style></noscript>
   <title>VTSFloat_Meow - VTube Studio 透明模型桌面悬浮工具</title>
   <meta name="description" content="VTSFloat_Meow 是面向 Windows 10/11 的 VTube Studio 透明模型悬浮工具。通过 Spout2 和 D3D11 将 Live2D 模型置顶显示在桌面、游戏或其他应用上方，支持鼠标穿透、悬停透明化、表情触发、多显示器与 GPU 选择。">
   <meta name="keywords" content="VTSFloat_Meow,VTube Studio,VTube Studio overlay,Live2D,桌面宠物,桌面悬浮,透明模型,Spout2,VTuber,Win32,D3D11">
@@ -10,8 +22,8 @@
   <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">
   <meta name="theme-color" content="#0d0d10">
   <link rel="canonical" href="https://fushoufish.github.io/VTSFloat_Meow/">
-  <link rel="icon" type="image/png" href="assets/VTSFloat_Meow_small.png">
-  <link rel="apple-touch-icon" href="assets/VTSFloat_Meow_small.png">
+  <link rel="icon" type="image/webp" href="assets/VTSFloat_Meow_small.webp">
+  <link rel="apple-touch-icon" href="assets/VTSFloat_Meow_small.webp">
 
   <meta property="og:locale" content="zh_CN">
   <meta property="og:type" content="website">
@@ -19,8 +31,8 @@
   <meta property="og:title" content="VTSFloat_Meow - VTube Studio 透明模型桌面悬浮工具">
   <meta property="og:description" content="无需 OBS 或 Bandicam，将 VTube Studio 透明模型直接悬浮到桌面、游戏或其他应用上方。">
   <meta property="og:url" content="https://fushoufish.github.io/VTSFloat_Meow/">
-  <meta property="og:image" content="https://fushoufish.github.io/VTSFloat_Meow/assets/VTSFloat_Meow.png">
-  <meta property="og:image:secure_url" content="https://fushoufish.github.io/VTSFloat_Meow/assets/VTSFloat_Meow.png">
+  <meta property="og:image" content="https://fushoufish.github.io/VTSFloat_Meow/assets/VTSFloat_Meow.webp">
+  <meta property="og:image:secure_url" content="https://fushoufish.github.io/VTSFloat_Meow/assets/VTSFloat_Meow.webp">
   <meta property="og:image:type" content="image/png">
   <meta property="og:image:width" content="963">
   <meta property="og:image:height" content="963">
@@ -29,7 +41,7 @@
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="VTSFloat_Meow - VTube Studio 透明模型桌面悬浮工具">
   <meta name="twitter:description" content="通过 Spout2 与 D3D11，将 VTube Studio 透明模型直接显示在桌面和游戏上方。">
-  <meta name="twitter:image" content="https://fushoufish.github.io/VTSFloat_Meow/assets/VTSFloat_Meow.png">
+  <meta name="twitter:image" content="https://fushoufish.github.io/VTSFloat_Meow/assets/VTSFloat_Meow.webp">
   <meta name="twitter:image:alt" content="VTSFloat_Meow 项目角色与软件图标">
 
   <script type="application/ld+json">
@@ -51,11 +63,11 @@
         "alternateName": "VTube Studio Desktop Overlay",
         "url": "https://fushoufish.github.io/VTSFloat_Meow/",
         "sameAs": "https://github.com/fushoufish/VTSFloat_Meow",
-        "image": "https://fushoufish.github.io/VTSFloat_Meow/assets/VTSFloat_Meow.png",
+        "image": "https://fushoufish.github.io/VTSFloat_Meow/assets/VTSFloat_Meow.webp",
         "description": "通过 Spout2 与 Direct3D 11 将 VTube Studio 透明 Live2D 模型悬浮显示在 Windows 桌面、游戏或其他应用上方。",
         "applicationCategory": "UtilitiesApplication",
         "operatingSystem": "Windows 10, Windows 11",
-        "softwareVersion": "1.1",
+        "softwareVersion": "1.2",
         "downloadUrl": "https://github.com/fushoufish/VTSFloat_Meow/releases/latest",
         "isAccessibleForFree": true,
         "featureList": [
@@ -74,28 +86,79 @@
     ]
   }
   </script>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="vendor/viewerjs/viewer.min.css">
+  <link rel="stylesheet" href="styles.css?v=20260910-1">
 </head>
 <body>
+  <div class="resource-loader" id="resource-loader" role="status" aria-label="页面资源加载进度">
+    <div class="resource-loader-card">
+      <div class="resource-loader-track" role="progressbar" aria-label="资源加载进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="resource-loader-progress" data-loader-progress></div>
+      </div>
+    </div>
+  </div>
   <div class="site-shell">
     <header class="topbar">
-      <a class="brand" href="#top" aria-label="VTSFloat_Meow 首页"><img class="brand-image" src="assets/VTSFloat_Meow_small.png" alt=""><span>VTSFloat_Meow</span></a>
-      <div class="topbar-actions"><span class="version-pill">v1.1</span><a class="top-link" href="https://github.com/fushoufish/VTSFloat_Meow" target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a><label class="language-label" for="language-select">语言</label><select id="language-select" aria-label="选择语言"><option value="zh">中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ru">Русский</option></select><button class="menu-toggle" type="button" aria-expanded="false" aria-controls="sidebar">菜单</button></div>
+      <a class="brand" href="#top" aria-label="VTSFloat_Meow 首页"><img class="brand-image" src="assets/VTSFloat_Meow_small.webp" alt=""><span>VTSFloat_Meow</span></a>
+      <div class="topbar-actions"><span class="version-pill">v1.2</span><a class="top-link" href="https://github.com/fushoufish/VTSFloat_Meow" target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a><label class="language-label" for="language-select">语言</label><select id="language-select" aria-label="选择语言"><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="ru">Русский</option></select><button class="menu-toggle" type="button" aria-expanded="false" aria-controls="sidebar">菜单</button></div>
     </header>
 
     <aside class="sidebar" id="sidebar">
       <nav class="side-nav" aria-label="文档导航">
-        <a class="nav-link active" href="#overview">Overview</a>
+        <a class="nav-link active" href="#overview">项目概览</a>
         <a class="nav-link" href="#usage">如何使用</a>
-        <a class="nav-link nav-sub-link" href="#enable-spout2"><span>1</span>启用 Spout2</a>
-        <a class="nav-link nav-sub-link" href="#enable-vts-api"><span>2</span>启用 VTube Studio API</a>
+        <a class="nav-link nav-sub-link" href="#quick-start"><span>1</span>快捷开始</a>
+        <a class="nav-link nav-sub-link" href="#vts-setup"><span>2</span>设置 VTS</a>
+        <a class="nav-link nav-sub-sub-link" href="#enable-spout2">启用 Spout2</a>
+        <a class="nav-link nav-sub-sub-link" href="#enable-vts-api">启动VTS API</a>
+        <a class="nav-link nav-sub-sub-link" href="#transparent-stream-setup">设置透明推流</a>
+        <a class="nav-link nav-sub-sub-link" href="#finish-hotkey">完成与快捷键触发</a>
         <a class="nav-link nav-sub-link" href="#custom-features"><span>3</span>自定义功能展示</a>
-        <a class="nav-link" href="#gpu">为什么推荐核显</a>
+        <a class="nav-link" href="#other-notes">其他说明</a>
+        <a class="nav-link" href="#gpu">推荐核显或节能 GPU</a>
         <a class="nav-link" href="#how-it-works">工作原理</a>
         <a class="nav-link" href="#details">性能与构建</a>
+        <a class="nav-link nav-sub-link" href="#resolution-benchmark"><span>1</span>分辨率基准</a>
+        <a class="nav-link nav-sub-link" href="#common-resolution-latency"><span>2</span>常用分辨率延迟表现</a>
         <a class="nav-link" href="#requirements">使用前提与发布状态</a>
       </nav>
       <div class="sidebar-footer"><a href="https://github.com/fushoufish/VTSFloat_Meow/issues" target="_blank" rel="noreferrer">Report an issue <span aria-hidden="true">↗</span></a></div>
+    </aside>
+
+    <aside class="release-history" aria-label="版本历史">
+      <div class="release-history-header">
+        <span class="release-history-kicker">VTSFloat_Meow</span>
+        <h2>版本足迹</h2>
+      </div>
+      <ol class="release-timeline">
+        <li class="release-entry is-current">
+          <div class="release-entry-meta"><span class="release-version">v1.2</span><time datetime="2026-09">2026.09</time></div>
+          <p>桌面模式、全屏暂停、UI 缩放、添加透明延时设置、多国语言与自定义语言、DOCS 页面装修、修复错误</p>
+        </li>
+        <li class="release-entry">
+          <div class="release-entry-meta"><span class="release-version">v1.1</span><time datetime="2026-08-28">08.28</time></div>
+          <p>支持多选表情、播放时长、状态恢复、修复错误</p>
+        </li>
+        <li class="release-entry">
+          <div class="release-entry-meta"><span class="release-version">Beta 1.0.3</span><time datetime="2026-08-23">08.23</time></div>
+          <p>加入多区域框、面板重叠、优化 Spout 连接、表情逻辑重写</p>
+        </li>
+        <li class="release-entry">
+          <div class="release-entry-meta"><span class="release-version">Beta 1.0.2</span><time datetime="2026-08-20">08.20</time></div>
+          <p>优化 VTS API 会话、优化表情逻辑</p>
+        </li>
+        <li class="release-entry">
+          <div class="release-entry-meta"><span class="release-version">Beta 1.0.1</span><time datetime="2026-08-18">08.18</time></div>
+          <p>新增悬停表情、API 端口扫描、设置重置</p>
+        </li>
+        <li class="release-entry">
+          <div class="release-entry-meta"><span class="release-version">Beta 1.0.0</span><time datetime="2026-08-18">08.18</time></div>
+          <p>程序初版</p>
+        </li>
+      </ol>
+      <div class="release-history-footer">
+        <a href="https://github.com/fushoufish/VTSFloat_Meow/commits" target="_blank" rel="noreferrer">查看版本记录 <span aria-hidden="true">↗</span></a>
+      </div>
     </aside>
 
     <main class="main-content" id="top">
@@ -104,72 +167,154 @@
       <section class="hero section-anchor" id="overview">
         <div class="hero-layout">
           <div class="hero-copy-block">
-            <img class="hero-logo-over-title" src="assets/VTSFloat_Meow.png" alt="VTSFloat_Meow 角色插画">
+            <img class="hero-logo-over-title" src="assets/VTSFloat_Meow.webp" alt="VTSFloat_Meow 角色插画">
             <div class="hero-rotator" aria-live="polite"><span class="hero-rotator-text">跃入你的每一寸桌面日常</span></div>
             <p class="hero-copy"><span class="text-highlight">VTSFloat_Meow</span> 将 VTube Studio 的透明模型悬浮到桌面、游戏或其他应用上方无需依赖其他推流工具进行映射</p>
             <div class="hero-actions"><a class="button button-primary" href="https://github.com/fushoufish/VTSFloat_Meow/releases/latest" target="_blank" rel="noreferrer">下载 Windows 版 <span aria-hidden="true">↓</span></a><a class="button button-ghost" href="https://github.com/fushoufish/VTSFloat_Meow" target="_blank" rel="noreferrer"><img class="github-icon" src="https://github.githubassets.com/favicons/favicon.svg" alt="">前往 GitHub <span aria-hidden="true">↗</span></a></div>
             <div class="hero-meta"><span><i></i> Windows 10 / 11</span><span>·</span><span>Native C++17</span><span>·</span><span>Open Source</span></div>
           </div>
         </div>
-        <div class="media-placeholder hero-media" data-asset="hero-demo.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>Hero demo placeholder</strong><span>待上传：hero-demo.gif</span></div></div>
+        <figure class="capture-media usage-media hero-media"><video class="usage-step-video" src="assets/desktop-model.mp4" autoplay muted loop playsinline disablepictureinpicture disableremoteplayback controlslist="nodownload nofullscreen noremoteplayback" preload="auto" aria-label="VTSFloat_Meow 将透明模型显示在实际 Windows 桌面上的演示"></video><figcaption>演示 · 通过 VTSFloat_Meow 将 VTube Studio 模型输出在屏幕上方</figcaption></figure>
       </section>
 
       <section class="section-anchor usage-section" id="usage">
-        <div class="section-heading"><div><span class="section-kicker">01 · HOW TO USE</span><h2>如何使用？</h2></div><p class="section-note">按照下面的步骤完成启动 设置和自定义</p></div>
+        <div class="section-heading"><div><h2>如何使用？</h2></div><p class="section-note">按照下面的步骤完成启动 设置和自定义</p></div>
 
-        <div class="usage-group">
+        <div class="usage-group section-anchor" id="quick-start">
           <div class="usage-group-heading"><span class="usage-index">1、</span><div><h3>快捷开始</h3><p>脚本会主动从注册表寻找 Steam 中的 VTube Studio 路径或者由你手动选择路径</p></div></div>
-          <div class="media-placeholder usage-media" data-asset="quick-start.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：quick-start.gif</span></div></div>
+          <figure class="capture-media usage-media "><a class="" href="assets/desktop-controls.webp" target="_blank" rel="noopener"><img src="assets/desktop-controls.webp" alt="程序启动后的实际控制条，包含图形设置、窗口模式、锁定与个性化" width="759" height="34" loading="lazy"></a><a class="" href="assets/desktop-controls-2.webp" target="_blank" rel="noopener"><img src="assets/desktop-controls-2.webp" alt="启动并连接 VTS 后的透明模型窗口" width="759" height="432" loading="lazy"></a><figcaption>连接成功后的实际窗口与控制条。首次启动时，程序会查找 VTube Studio 安装路径；未找到时可手动选择。</figcaption></figure>
         </div>
 
-        <div class="usage-group">
-          <div class="usage-group-heading"><span class="usage-index">2、</span><div><h3>设置 VTS</h3><p>完成下面 3 项设置后即可开始接收透明模型</p></div></div>
+        <div class="usage-group section-anchor" id="vts-setup">
+          <div class="usage-group-heading"><span class="usage-index">2、</span><div><h3>设置 VTS</h3><p>完成下面 4 项设置后即可开始接收透明模型</p></div></div>
           <div class="usage-substeps">
-            <article class="usage-substep section-anchor" id="enable-spout2"><div class="usage-substep-copy"><span class="usage-subindex">1.</span><div><h3>启用 Spout2</h3><p>用于将 VTube Studio 的视频流推送至脚本</p></div></div><div class="media-placeholder usage-media" data-asset="enable-spout2.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：enable-spout2.gif</span></div></div></article>
-            <article class="usage-substep section-anchor" id="enable-vts-api"><div class="usage-substep-copy"><span class="usage-subindex">2.</span><div><h3>启用 VTube Studio API</h3><p>用于脚本获取实时渲染帧数 实现悬停更改模型表情等功能 如默认端口非 8001 请在脚本提示中手动点击“扫描端口”按钮</p></div></div><div class="media-placeholder usage-media" data-asset="enable-api.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：enable-api.gif</span></div></div></article>
-            <article class="usage-substep"><div class="usage-substep-copy"><span class="usage-subindex">3.</span><div><h3>设置透明推流</h3><p>用于将获取到的视频流透明化 输出到脚本当中</p></div></div><div class="media-placeholder usage-media" data-asset="transparent-stream.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：transparent-stream.gif</span></div></div></article>
+            <article class="usage-substep section-anchor" id="enable-spout2"><div class="usage-substep-copy"><span class="usage-subindex">1.</span><div><h3>启用 Spout2</h3><p>用于将 VTube Studio 的视频流推送至脚本</p></div></div><figure class="capture-media usage-media"><a href="assets/enable-spout2.webp" target="_blank" rel="noopener"><img src="assets/enable-spout2.webp" alt="VTube Studio 视频设置中的 Spout2 配置，激活 Spout2 开关已开启" width="1109" height="640" loading="lazy"></a><figcaption>视频设置 → Spout2 配置 → 激活 Spout2</figcaption></figure></article>
+            <article class="usage-substep section-anchor" id="enable-vts-api"><div class="usage-substep-copy"><span class="usage-subindex">2.</span><div><h3>启动VTS API</h3><p>用于脚本获取实时渲染帧数 实现悬停更改模型表情等功能 如默认端口非 8001 请在脚本提示中手动点击“扫描端口”按钮</p></div></div><figure class="capture-media usage-media"><a href="assets/enable-api.jpg" target="_blank" rel="noopener"><img src="assets/enable-api.jpg" alt="VTube Studio Plugins API 已开启，端口为 8001，状态为 API 已就绪" width="1109" height="640" loading="lazy"></a><div class="capture-caption">一般设置 → Plugins → 开启 API，默认端口 8001</div><a href="assets/api-authorization.jpg" target="_blank" rel="noopener"><img src="assets/api-authorization.jpg" alt="VTube Studio 请求授权 VTSFloat_Meow 插件访问 API 的实际确认弹窗" width="1109" height="640" loading="lazy"></a><figcaption>首次连接时，确认插件名称为 VTSFloat_Meow 后点击「允许」。截图中的悬浮模型来自正在运行的工具。</figcaption></figure></article>
+            <article class="usage-substep section-anchor" id="transparent-stream-setup"><div class="usage-substep-copy"><span class="usage-subindex">3.</span><div><h3>设置透明推流</h3><p>用于将获取到的视频流透明化 输出到脚本当中</p></div></div><figure class="capture-media usage-media"><a href="assets/background-selection.jpg" target="_blank" rel="noopener"><img src="assets/background-selection.jpg" alt="VTube Studio 的背景选择列表，包含 ColorPicker 背景" width="1440" height="912" loading="lazy"></a><div class="capture-caption">在背景选择中选择 ColorPicker。</div><a href="assets/transparent-stream.jpg" target="_blank" rel="noopener"><img src="assets/transparent-stream.jpg" alt="ColorPicker 颜色面板下方的透明推流开关已开启" width="605" height="373" loading="lazy"></a><figcaption>开启颜色面板下方的「透明推流」。VTS 窗口仍可显示粉色背景，输出给悬浮工具的画面保留透明通道。</figcaption></figure></article>
+            <article class="usage-substep section-anchor" id="finish-hotkey"><div class="usage-substep-copy"><span class="usage-subindex">4.</span><div><h3>完成与快捷键触发</h3><p>调整好模型窗口后点击「完成」进行锁定；默认使用 Ctrl+Shift+L 快捷键锁定或解锁，也可以在工具栏中重新设置快捷键。</p></div></div><figure class="capture-media finish-controls"><video class="usage-step-video" src="assets/donewhile.mp4" autoplay muted loop playsinline disablepictureinpicture disableremoteplayback controlslist="nodownload nofullscreen noremoteplayback" preload="metadata" aria-label="完成设置并通过快捷键切换锁定与解锁的操作演示"></video><figcaption>点击「完成」锁定窗口；通过快捷键快速切换锁定与解锁。</figcaption></figure></article>
           </div>
         </div>
 
         <div class="usage-group section-anchor" id="custom-features">
           <div class="usage-group-heading"><span class="usage-index">3、</span><div><h3>自定义功能展示</h3><p>根据你的使用习惯调整模型的显示与互动方式</p></div></div>
           <div class="usage-custom-grid">
-            <article class="usage-substep"><div class="usage-substep-copy"><span class="usage-subindex">1.</span><div><h3>自由拖拽 调整边框</h3></div></div><div class="media-placeholder usage-media" data-asset="drag-border.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：drag-border.gif</span></div></div></article>
-            <article class="usage-substep"><div class="usage-substep-copy"><span class="usage-subindex">2.</span><div><h3>鼠标悬停透明化模型</h3><p>你可以自由调整模型触发悬停透明化的程度</p></div></div><div class="media-placeholder usage-media" data-asset="hover-opacity.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：hover-opacity.gif</span></div></div></article>
-            <article class="usage-substep"><div class="usage-substep-copy"><span class="usage-subindex">3.</span><div><h3>悬停透明化边界扩展</h3><p>你可以自由调整模型触发悬停透明化的距离</p></div></div><div class="media-placeholder usage-media" data-asset="hover-range.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：hover-range.gif</span></div></div></article>
-            <article class="usage-substep"><div class="usage-substep-copy"><span class="usage-subindex">4.</span><div><h3>悬停模型时播放表情</h3><p>你可以自己选择或多选需要悬停时播放的表情与调整时长</p></div></div><div class="media-placeholder usage-media" data-asset="hover-expression.gif"><div class="placeholder-content"><span class="placeholder-icon">＋</span><strong>GIF 预览框</strong><span>待上传：hover-expression.gif</span></div></div></article>
+            <article class="usage-substep">
+              <div class="usage-substep-copy"><span class="usage-subindex">1.</span><div><h3>自定义调整边框颜色粗细</h3><p>可自由设置模型窗口的边框颜色和边框粗细。</p></div></div>
+              <figure class="capture-media usage-media"><video class="usage-step-video" src="assets/自定义调整边框颜色粗细.mp4" autoplay muted loop playsinline disablepictureinpicture disableremoteplayback controlslist="nodownload nofullscreen noremoteplayback" preload="metadata" aria-label="自定义调整边框颜色和粗细的操作演示"></video><figcaption>个性化设置 1：边框颜色与粗细。</figcaption></figure>
+            </article>
+            <article class="usage-substep">
+              <div class="usage-substep-copy"><span class="usage-subindex">2.</span><div><h3>自定义调整模型不透明度与界面缩放</h3><p>可调整模型平时显示的不透明度，并选择适合当前显示器的界面缩放比例。</p></div></div>
+              <figure class="capture-media usage-media"><video class="usage-step-video" src="assets/自定义调整模型不透明度与界面缩放.mp4" autoplay muted loop playsinline disablepictureinpicture disableremoteplayback controlslist="nodownload nofullscreen noremoteplayback" preload="metadata" aria-label="自定义调整模型不透明度和界面缩放的操作演示"></video><figcaption>个性化设置 2：模型不透明度与界面缩放。</figcaption></figure>
+            </article>
+            <article class="usage-substep">
+              <div class="usage-substep-copy"><span class="usage-subindex">3.</span><div><h3>自定义调整鼠标经过时的模型不透明度与范围扩展</h3><p>可设置鼠标经过模型时的透明程度，并调整自动触发区域向外扩展的距离。</p></div></div>
+              <figure class="capture-media usage-media"><video class="usage-step-video" src="assets/自定义调整鼠标经过时的模型不透明度与范围扩展.mp4" autoplay muted loop playsinline disablepictureinpicture disableremoteplayback controlslist="nodownload nofullscreen noremoteplayback" preload="metadata" aria-label="调整鼠标经过时的模型不透明度和范围扩展的操作演示"></video><figcaption>个性化设置 3：悬停不透明度与范围扩展。</figcaption></figure>
+            </article>
+            <article class="usage-substep">
+              <div class="usage-substep-copy"><span class="usage-subindex">4.</span><div><h3>支持框选多个模型触发范围</h3><p>可在模型窗口内框选并保存多个独立的鼠标触发区域。</p></div></div>
+              <figure class="capture-media usage-media"><video class="usage-step-video" src="assets/支持框选多个模型触发范围.mp4" autoplay muted loop playsinline disablepictureinpicture disableremoteplayback controlslist="nodownload nofullscreen noremoteplayback" preload="metadata" aria-label="框选多个模型触发范围的操作演示"></video><figcaption>个性化设置 4：多个模型触发范围。</figcaption></figure>
+            </article>
+            <article class="usage-substep">
+              <div class="usage-substep-copy"><span class="usage-subindex">5.</span><div><h3>支持设置多个鼠标离开时播放模型表情与播放时长</h3><p>可选择多个鼠标离开触发范围后播放的模型表情，并设置对应的播放时长。</p></div></div>
+              <figure class="capture-media usage-media"><video class="usage-step-video" src="assets/支持设置多个鼠标离开时播放模型表情与播放时长.mp4" autoplay muted loop playsinline disablepictureinpicture disableremoteplayback controlslist="nodownload nofullscreen noremoteplayback" preload="metadata" aria-label="设置多个鼠标离开时播放模型表情与播放时长的操作演示"></video><figcaption>个性化设置 5：离开时播放的模型表情与时长。</figcaption></figure>
+            </article>
           </div>
         </div>
       </section>
 
+      <section class="section-anchor readme-section" id="other-notes">
+        <div class="section-heading"><div><h2>其他说明</h2></div></div>
+        <div class="readme-copy other-notes-copy"><div class="readme-highlight"><h3>它支持 VTube Studio 的 VNet / 多人联动吗？框选范围的作用？</h3><p>理论上支持 VTube Studio 的多人联动！当画布内存在模型以外的内容时，除空背景外，任何没有透明图层的区域都会被判定为“模型区域”。如果添加了天气等特效或粒子效果，会干扰角色模型的“触碰隐藏”“移开播放表情”等功能，导致这些功能无法正常使用。此时需要借助框选范围工具，手动限定角色模型的触发区域。</p></div></div>
+      </section>
+
       <section class="section-anchor readme-section" id="gpu">
-        <div class="section-heading"><div><span class="section-kicker">02 · GPU</span><h2>为什么推荐核显或节能 GPU</h2></div><p>把模型链路与游戏渲染分开 减少 GPU 争用</p></div>
+        <div class="section-heading gpu-section-heading"><div><h2>为什么推荐核显或节能 GPU</h2></div><figure class="gpu-heading-art"><img src="assets/cutegif2.png" alt="VTSFloat_Meow 角色插画" width="307" height="334" loading="lazy"></figure></div>
         <div class="readme-copy gpu-explanation"><p><strong>当独显（高性能显卡）运行在极限负载的程序或游戏中时 VTSFloat_Meow 输出的透明模型可能出现异常卡顿</strong> 极限负载状态会最大占用独显的渲染队列 显存带宽和调度时间 导致模型渲染 共享纹理接收以及 Windows 透明窗口合成都可能得不到及时执行 从而出现掉帧 延迟甚至短暂卡死</p><div class="readme-highlight"><h3>为什么录屏或其他软件仍可以在极限负载场景正常运行？</h3><p>录屏主要在 GPU 内部完成 而 VTSFloat_Meow 还依赖 Windows 桌面透明窗口合成</p><p>VTSFloat_Meow 的 Spout2 接收和模型缩放已经通过 D3D11 在 GPU 内完成 但最后仍需由 Windows 桌面合成器显示透明窗口 独显满载时桌面合成得不到足够调度 因此比主要在 GPU 内部工作的录屏软件更容易卡顿</p><p>纯 GPU 的 DirectComposition 同样依赖桌面合成 甚至可能出现 Present 长时间阻塞 除非注入游戏内部绘制 但会带来反作弊和兼容风险</p></div><div class="readme-highlight"><h3>我使用过程中 VTSFloat_Meow 非常卡 / 我只有一个 GPU 显卡怎么办？</h3><p>请调整高负载程序或游戏的性能开销 特别针对显卡高负载的设置请降低其配置进行运行 特别留意类似“帧率上限”相关的设置 这将极大占用显卡的性能开销 可以将其调整至 60 帧或者其他更低的帧数进行尝试</p></div><p>因此 GPU 处理加 Windows 透明窗口上屏 是目前更稳定的非注入方案之一</p></div>
         <div class="callout callout-pink"><span class="callout-mark">!</span><p>如果游戏出现卡顿可以先降低画质和帧率上限 或把 VTube Studio Spout2 与 VTSFloat_Meow 切换到核显或节能 GPU</p></div>
       </section>
 
       <section class="section-anchor readme-section" id="how-it-works">
-        <div class="section-heading"><div><span class="section-kicker">03 · PIPELINE</span><h2>工作原理</h2></div><p>画面在 GPU 之间传递 最后交给 Windows 桌面合成器</p></div>
-        <div class="pipeline-card"><div class="pipeline-node"><span class="node-no">01</span><strong>VTube Studio</strong><small>渲染 Live2D 模型</small></div><span class="pipeline-arrow">→</span><div class="pipeline-node"><span class="node-no">02</span><strong>Spout2</strong><small>共享 GPU 纹理</small></div><span class="pipeline-arrow">→</span><div class="pipeline-node"><span class="node-no">03</span><strong>Direct3D 11</strong><small>接收与 GPU 缩放</small></div><span class="pipeline-arrow">→</span><div class="pipeline-node"><span class="node-no">04</span><strong>BGRA + Alpha</strong><small>透明图像缓冲</small></div><span class="pipeline-arrow">→</span><div class="pipeline-node"><span class="node-no">05</span><strong>Windows 桌面</strong><small>显示在游戏或应用上方</small></div></div>
-        <div class="flow-list"><div><span>①</span><p>检查纹理尺寸格式和宽高比</p></div><div><span>②</span><p>根据模式进行 GPU 缩放与滤波</p></div><div><span>③</span><p>叠加边框透明度和调试信息</p></div><div><span>④</span><p>通过 UpdateLayeredWindow 提交透明 Win32 分层窗口</p></div></div>
-        <div class="callout"><span class="callout-mark">i</span><p>程序不注入任何游戏或应用 不读取游戏画面 也不参与游戏渲染管线</p></div>
+        <div class="section-heading"><div><h2>工作原理</h2></div><p>画面在 GPU 之间传递 最后交给 Windows 桌面合成器</p></div>
+        <div class="pipeline-system-map">
+          <div class="pipeline-card">
+            <span class="pipeline-zone pipeline-zone-vts" aria-hidden="true"></span>
+            <span class="pipeline-zone pipeline-zone-shared" aria-hidden="true"></span>
+            <span class="pipeline-zone pipeline-zone-meow" aria-hidden="true"></span>
+            <div class="pipeline-node pipeline-step-01"><span class="node-no">01</span><strong>VTube Studio</strong><small>渲染 Live2D 模型</small></div>
+            <span class="pipeline-arrow pipeline-arrow-01">→</span>
+            <span class="pipeline-shared-caption">Windows GPU纹理/实时视频帧 共享</span>
+            <div class="pipeline-node pipeline-step-02"><span class="node-no">02</span><strong>Spout2</strong><small>共享 GPU 纹理</small></div>
+            <span class="pipeline-arrow pipeline-arrow-02">→</span>
+            <div class="pipeline-node pipeline-step-03"><span class="node-no">03</span><strong>Direct3D 11</strong><small>接收与 GPU 缩放</small></div>
+            <span class="pipeline-arrow pipeline-arrow-03">→</span>
+            <div class="pipeline-node pipeline-step-04"><span class="node-no">04</span><strong>BGRA + Alpha</strong><small>透明图像缓冲</small></div>
+            <span class="pipeline-arrow pipeline-arrow-04">→</span>
+            <div class="pipeline-node pipeline-step-05"><span class="node-no">05</span><strong>Windows 桌面</strong><small>显示在游戏或应用上方</small></div>
+            <div class="pipeline-ownership" aria-label="流程工作区域">
+              <div class="pipeline-owner pipeline-owner-vts"><span><strong>VTube Studio</strong> 工作部分</span></div>
+              <div class="pipeline-owner pipeline-owner-meow"><span><strong>VTSFloat_Meow</strong> 工作部分</span></div>
+            </div>
+            <p class="pipeline-gpu-note">*<strong>VTSFloat_Meow</strong> 与 <strong>VTube Studio</strong> 会自动对齐至同一 GPU，以确保画面共享正常工作</p>
+          </div>
+        </div>
+        <div class="callout privacy-callout">
+          <span class="callout-mark">i</span>
+          <div class="callout-copy">
+            <p>本程序不会注入任何游戏或应用，也不会读取游戏画面或参与游戏渲染。</p>
+            <p>本程序可完全离线运行，不会主动访问互联网；VTube Studio API 功能仅通过 localhost 与本机 VTube Studio 通信。</p>
+            <p>本程序不会访问 VTube Studio 使用的摄像头或其他连接设备。</p>
+            <p>接收到的模型画面仅在本机 GPU 与 Windows 桌面合成链路中处理，不会上传或录制保存。</p>
+          </div>
+        </div>
       </section>
 
       <section class="section-anchor readme-section" id="details">
-        <div class="section-heading"><div><span class="section-kicker">04 · DETAILS</span><h2>性能与构建</h2></div><p>README 中的性能建议 技术栈和构建信息</p></div>
-        <div class="detail-grid"><article class="info-card"><span class="card-index">01</span><h3>分辨率匹配</h3><p>建议 VTube Studio 画布分辨率与覆盖层窗口分辨率尽量接近 分辨率越大接收缩放显存读写和合成成本越高</p></article><article class="info-card"><span class="card-index">02</span><h3>帧率设置</h3><p>优先选择跟随 VTS 配置 或使用不高于 VTS 实际输出的固定帧率 覆盖层设置更高不会产生更多模型帧</p></article><article class="info-card"><span class="card-index">03</span><h3>INI 缓存</h3><p>窗口位置大小比例锁定帧率 GPU 选择和 API 端口会保存到本机</p><code>%LOCALAPPDATA%\vts_overlay_layered.ini</code></article></div>
+        <div class="section-heading"><div><h2>性能与构建</h2></div><p>README 中的性能建议 技术栈和构建信息</p></div>
         <div class="tech-table"><div><span>语言</span><strong>C++17</strong><small>主程序和渲染循环</small></div><div><span>窗口</span><strong>Win32 分层窗口</strong><small>显示透明像素 置顶 鼠标穿透</small></div><div><span>图形</span><strong>Direct3D 11 / DXGI</strong><small>GPU 设备 显卡和显示器</small></div><div><span>构建</span><strong>CMake + MSVC</strong><small>native/build_native.ps1</small></div></div>
-        <div class="build-block"><h3>构建</h3><p>安装 Visual Studio 2022 C++ 工具链后在项目根目录执行</p><pre><code>.\native\build_native.ps1 -Configuration Release</code></pre><p>输出为根目录的 <code>VTSFloat_Meow.exe</code> Spout2 接收端已编译进程序</p><h3>目录说明</h3><pre><code>VTSFloat_Meow.exe           可直接运行的程序&#10;native/                     C++ 源码和构建脚本&#10;native/third_party/Spout2   内置 Spout2 源码&#10;start_overlay.cmd           启动程序&#10;stop_overlay.cmd            关闭程序&#10;md/                         补充说明</code></pre></div>
+        <div class="benchmark-carousel section-anchor" id="resolution-benchmark" data-benchmark-carousel role="region" aria-label="AMD Radeon Graphics 分辨率基准图表轮播">
+          <header class="benchmark-carousel-heading">
+            <div><h3 data-benchmark-text="datasetTitle">AMD Radeon Graphics 分辨率基准</h3><p data-benchmark-text="method">测试平台 AMD Ryzen 7 9800X3D / DDR5-6400 CL28</p><p class="benchmark-caveat" data-benchmark-text="caveat">影响性能的因素包括 VTS 模型面数、渲染特效、挂件数量、物理效果及系统中的其他应用。采集过程中已尽量避免不平衡因素，包括暂停动捕。</p></div>
+            <span class="benchmark-page"><strong data-benchmark-current>1</strong>/5</span>
+          </header>
+          <div class="benchmark-carousel-stage" tabindex="0">
+            <button class="benchmark-nav benchmark-nav-prev" type="button" aria-label="上一张图表">‹</button>
+            <div class="benchmark-slides" aria-live="polite">
+              <article class="benchmark-slide" data-benchmark-slide="0"><div class="benchmark-native-chart" data-benchmark-chart="latency"></div></article>
+              <article class="benchmark-slide" data-benchmark-slide="1"><div class="benchmark-native-chart" data-benchmark-chart="fps"></div></article>
+              <article class="benchmark-slide" data-benchmark-slide="2"><div class="benchmark-native-chart" data-benchmark-chart="components"></div></article>
+              <article class="benchmark-slide" data-benchmark-slide="3"><div class="benchmark-native-chart" data-benchmark-chart="gpu"></div></article>
+              <article class="benchmark-slide" data-benchmark-slide="4"><div class="benchmark-native-chart" data-benchmark-chart="alignment"></div></article>
+            </div>
+            <button class="benchmark-nav benchmark-nav-next" type="button" aria-label="下一张图表">›</button>
+          </div>
+          <div class="benchmark-dots" role="group" aria-label="选择图表">
+            <button type="button" data-benchmark-dot="0" aria-label="显示第 1 张图表"></button><button type="button" data-benchmark-dot="1" aria-label="显示第 2 张图表"></button><button type="button" data-benchmark-dot="2" aria-label="显示第 3 张图表"></button><button type="button" data-benchmark-dot="3" aria-label="显示第 4 张图表"></button><button type="button" data-benchmark-dot="4" aria-label="显示第 5 张图表"></button>
+          </div>
+        </div>
+        <div class="benchmark-conclusion" data-benchmark-text="conclusion">
+          <p><strong>VTS原生分辨率：</strong>VTSM固定480p时，VTS由4K降至480p，帧率约180→240，延迟3.04→0.43ms。接收始终很快，但高分辨率原生纹理需读取更多像素并承担更重的缩小滤波，所以即使输出尺寸不变，高VTS画布仍增加GPU负担。这说明VTS源尺寸仍是次要影响因素。若模型没有明显画质收益，可降低VTS输出换取稳定帧率。</p>
+          <p><strong>VTSM分辨率：</strong>VTS固定480p时，VTSM由480p升至4K，帧率约240→48，延迟0.62→17.66ms。接收耗时变化很小，增长主要来自GPU缩放和Windows透明窗口上屏；1440p后负担明显增加，4K时两者成为主要瓶颈。GPU占用升高的同时，桌面合成调度也会进一步限制帧率。因此VTSM处理和提交的像素量，比VTS输入尺寸更直接决定性能。</p>
+          <p><strong>总结：</strong>两端越接近，越能减少无效缩放，使帧率和延迟更稳定；但对齐率不是唯一标准。相同对齐率下，低输出仍更快，4K即使完全对齐也需处理大量像素。日常推荐1280×720，兼顾清晰度、低延迟和高帧率；细节优先可选1920×1080。否则不建议长期使用高分辨率输出与高分辨率缩放，并应让VTS与VTSM的分辨率尺寸尽量接近。</p>
+        </div>
+        <section class="benchmark-video-section section-anchor" id="common-resolution-latency" aria-labelledby="benchmark-video-title">
+          <h3 id="benchmark-video-title" data-benchmark-text="videoTitle">在常用分辨率下的延迟表现（将 VTSFloat_Meow 重叠在 VTube Studio 中）</h3>
+          <p class="benchmark-video-subtitle" data-benchmark-text="videoSubtitle">在 1080p 对齐的分辨率下，日常模型映射延迟几乎无感</p>
+          <video class="benchmark-video" src="assets/帧率对比.mp4" autoplay muted loop playsinline disablepictureinpicture disableremoteplayback controlslist="nodownload nofullscreen noremoteplayback" preload="metadata" aria-label="在常用分辨率下的延迟表现（将 VTSFloat_Meow 重叠在 VTube Studio 中）"></video>
+        </section>
       </section>
 
       <section class="section-anchor readme-section" id="requirements">
-        <div class="section-heading"><div><span class="section-kicker">05 · RELEASE</span><h2>使用前提与发布状态</h2></div><p>当前版本 v1.1 正式版</p></div>
-        <div class="requirements-grid"><article class="info-card"><h3>使用前提</h3><ul><li>Windows 10 / 11</li><li>支持 Direct3D 11 的硬件 GPU</li><li>已安装并运行 VTube Studio</li><li>已开启 Spout2 透明推流</li><li>发送端名称为 VTubeStudioSpout</li><li>表情悬停功能需要 Plugins API 授权</li></ul></article><article class="info-card release-card"><h3>版本与状态</h3><p>v1.1 已进入正式发布阶段</p><p>源码和构建脚本可以前往 GitHub 查看</p><a class="button button-ghost" href="https://github.com/fushoufish/VTSFloat_Meow" target="_blank" rel="noreferrer">前往 GitHub <span aria-hidden="true">↗</span></a></article></div>
+        <div class="section-heading"><div><h2>使用前提与发布状态</h2></div><p>当前版本 v1.2 正式版</p></div>
+        <div class="requirements-grid"><article class="info-card"><h3>使用前提</h3><ul><li>Windows 10 / 11</li><li>支持 Direct3D 11 的硬件 GPU</li><li>已安装并运行 VTube Studio</li><li>已开启 Spout2 透明推流</li><li>发送端名称为 VTubeStudioSpout</li><li>表情悬停功能需要 Plugins API 授权</li></ul></article><article class="info-card release-card"><h3>版本与状态</h3><p>v1.2 已进入正式发布阶段</p><p>源码和构建脚本可以前往 GitHub 查看</p><a class="button button-ghost" href="https://github.com/fushoufish/VTSFloat_Meow" target="_blank" rel="noreferrer">前往 GitHub <span aria-hidden="true">↗</span></a></article></div>
       </section>
 
-      <footer class="footer"><div><img class="brand-image" src="assets/VTSFloat_Meow_small.png" alt=""><span>VTSFloat_Meow</span></div><span>Made for quiet desktop moments.</span><a href="https://github.com/fushoufish/VTSFloat_Meow" target="_blank" rel="noreferrer">GitHub ↗</a></footer>
+      <footer class="footer"><div><img class="brand-image" src="assets/VTSFloat_Meow_small.webp" alt=""><span>VTSFloat_Meow</span></div><span>Made for quiet desktop moments.</span><a href="https://github.com/fushoufish/VTSFloat_Meow" target="_blank" rel="noreferrer">GitHub ↗</a></footer>
     </main>
   </div>
-  <script src="script.js"></script>
+  <script src="preloader.js?v=20260912-1"></script>
+  <script src="vendor/viewerjs/viewer.min.js"></script>
+  <script src="i18n.js?v=20260912-2"></script>
+  <script src="benchmark-charts.js?v=20260910-1"></script>
+  <script src="script.js?v=20260909-4"></script>
 </body>
 </html>

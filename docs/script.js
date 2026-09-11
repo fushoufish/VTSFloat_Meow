@@ -4,16 +4,9 @@ const navLinks = [...document.querySelectorAll('.nav-link')];
 const sections = navLinks.map((link) => document.querySelector(link.getAttribute('href'))).filter(Boolean);
 const languageSelect = document.querySelector('#language-select');
 const rotatingText = document.querySelector('.hero-rotator-text');
-const rotatingLines = [
-  '跃入你的每一寸桌面日常',
-  '赋予“Live2D”生命力',
-  '展示你的专属看板娘',
-  '让你的模型跃入日常触手可及',
-  '重塑虚拟与现实的日常边界',
-  '褪去“仅限开播”的束缚',
-  '融入你的工作与游戏'
-];
-let rotatingIndex = Math.max(0, rotatingLines.indexOf(rotatingText?.textContent ?? ''));
+let rotatingLines = window.VTSFloatI18n?.getHeroLines() || [rotatingText?.textContent || 'VTSFloat_Meow'];
+let rotatingIndex = 0;
+let rotatingTimer = null;
 
 const showNextLine = () => {
   if (!rotatingText) return;
@@ -24,21 +17,17 @@ const showNextLine = () => {
   rotatingText.classList.add('is-animating');
 };
 
-if (rotatingText) {
-  rotatingText.classList.add('is-animating');
-  window.setInterval(showNextLine, 2600);
-}
+const restartHeroRotation = () => {
+  window.clearInterval(rotatingTimer);
+  rotatingTimer = null;
+  rotatingIndex = 0;
+  if (!rotatingText) return;
+  rotatingText.textContent = rotatingLines[0];
+  rotatingText.classList.toggle('is-animating', rotatingLines.length > 1);
+  if (rotatingLines.length > 1) rotatingTimer = window.setInterval(showNextLine, 2600);
+};
 
-// Language switching is intentionally only reserved for now. The page keeps
-// Chinese content until the translations are added to one shared config.
-languageSelect?.addEventListener('change', () => {
-  const languageName = languageSelect.options[languageSelect.selectedIndex].text;
-  const toast = document.createElement('div');
-  toast.className = 'language-toast';
-  toast.textContent = `${languageName} 界面预留中当前页面暂时保持中文`;
-  document.body.appendChild(toast);
-  window.setTimeout(() => toast.remove(), 2600);
-});
+restartHeroRotation();
 
 menuButton?.addEventListener('click', () => {
   const isOpen = sidebar.classList.toggle('open');
@@ -50,12 +39,119 @@ navLinks.forEach((link) => link.addEventListener('click', () => {
   menuButton?.setAttribute('aria-expanded', 'false');
 }));
 
+const previewRoot = document.querySelector('.main-content');
+const previewImages = previewRoot
+  ? [...previewRoot.querySelectorAll('.capture-media img')]
+  : [];
+
+previewImages.forEach((image) => {
+  image.classList.add('previewable-image');
+  const link = image.closest('a');
+  if (!link) return;
+
+  image.dataset.previewUrl = link.getAttribute('href') || image.currentSrc || image.src;
+  link.removeAttribute('href');
+  link.removeAttribute('target');
+  link.removeAttribute('rel');
+  link.setAttribute('role', 'button');
+  link.setAttribute('tabindex', '0');
+  link.setAttribute('aria-label', `${image.alt || ''} — ${window.VTSFloatI18n?.ui('imagePreview') || ''}`);
+  link.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    image.click();
+  });
+});
+
+if (previewRoot && previewImages.length && window.Viewer) {
+  new Viewer(previewRoot, {
+    filter: (image) => image.classList.contains('previewable-image'),
+    url: (image) => image.dataset.previewUrl || image.currentSrc || image.src,
+    backdrop: true,
+    button: true,
+    focus: true,
+    fullscreen: false,
+    keyboard: true,
+    loop: true,
+    movable: true,
+    navbar: false,
+    rotatable: false,
+    scalable: false,
+    slideOnTouch: true,
+    title: [1, (image) => image.alt || ''],
+    toggleOnDblclick: true,
+    toolbar: {
+      zoomIn: 1,
+      zoomOut: 1,
+      oneToOne: 1,
+      reset: 1,
+      prev: 1,
+      next: 1,
+    },
+    tooltip: true,
+    transition: true,
+    zoomable: true,
+    zoomOnTouch: true,
+    zoomOnWheel: true,
+    zoomRatio: 0.08,
+  });
+}
+
+const videos = [...document.querySelectorAll('video')];
+videos.forEach((video) => {
+  video.disablePictureInPicture = true;
+  video.disableRemotePlayback = true;
+  video.setAttribute('disablepictureinpicture', '');
+  video.setAttribute('disableremoteplayback', '');
+  video.setAttribute('controlslist', 'nodownload nofullscreen noremoteplayback');
+  video.setAttribute('x-webkit-airplay', 'deny');
+  video.controls = false;
+  video.setAttribute('role', 'button');
+  video.setAttribute('tabindex', '0');
+  video.setAttribute('aria-label', `${video.getAttribute('aria-label') || ''}${window.VTSFloatI18n?.ui('videoHint') || ''}`);
+
+  const revealControls = () => {
+    if (video.controls) return;
+    video.controls = true;
+    video.removeAttribute('role');
+    video.removeAttribute('tabindex');
+    const hint = window.VTSFloatI18n?.ui('videoHint') || '';
+    video.setAttribute('aria-label', video.getAttribute('aria-label').replace(hint, ''));
+  };
+
+  video.addEventListener('click', revealControls, { once: true });
+  video.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    revealControls();
+  });
+});
+
+window.addEventListener('vtsfloat:languagechange', () => {
+  rotatingLines = window.VTSFloatI18n?.getHeroLines() || rotatingLines;
+  restartHeroRotation();
+  previewImages.forEach((image) => {
+    const link = image.closest('a[role="button"]');
+    if (link) link.setAttribute('aria-label', `${image.alt || ''} — ${window.VTSFloatI18n?.ui('imagePreview') || ''}`);
+  });
+  videos.forEach((video) => {
+    if (!video.controls) video.setAttribute('aria-label', `${video.getAttribute('aria-label') || ''}${window.VTSFloatI18n?.ui('videoHint') || ''}`);
+  });
+});
+
 const updateActiveLink = () => {
-  const marker = window.scrollY + 150;
-  let current = sections[0]?.id;
-  sections.forEach((section) => { if (section.offsetTop <= marker) current = section.id; });
+  const pageBottom = document.documentElement.scrollHeight - (window.scrollY + window.innerHeight);
+  let current;
+  if (pageBottom <= 4) {
+    current = sections.at(-1)?.id;
+  } else {
+    const marker = window.scrollY + 150;
+    current = sections[0]?.id;
+    sections.forEach((section) => { if (section.offsetTop <= marker) current = section.id; });
+  }
   navLinks.forEach((link) => link.classList.toggle('active', link.getAttribute('href') === `#${current}`));
 };
 
 window.addEventListener('scroll', updateActiveLink, { passive: true });
+window.addEventListener('resize', updateActiveLink);
 updateActiveLink();

@@ -6,6 +6,7 @@ runtime_logs/
 native/build/
 native/bin/
 native/third_party/Spout2/.git/
+VTSFloat_Meow_LanguagePreview.exe
 
 # Temporary/compiler artifacts
 *.obj
@@ -26,3 +27,6 @@ steam_appid.txt
 
 # Private local project history
 private_project.md
+
+# Local validation profiles, screenshots, and benchmark captures
+output/
