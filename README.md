@@ -162,19 +162,6 @@ VTSFloat_Meow/
 │  ├─ 项目说明_实现原理与性能演进.md       渲染链路与性能演进记录
 │  └─ 分辨率性能采集.md                   基准采集流程、字段与文件格式
 │
-├─ docs/                                  GitHub Pages 介绍页与使用教程
-│  ├─ index.html                          页面结构与全部中文源文案
-│  ├─ styles.css                          响应式版式、配色与动画
-│  ├─ script.js                           导航、轮播、视频及图片预览交互
-│  ├─ preloader.js                        页面资源预加载进度条
-│  ├─ i18n.js                             六种语言映射与浏览器语言识别
-│  ├─ benchmark-charts.js                 五张原生性能图表
-│  ├─ robots.txt                          搜索引擎抓取规则
-│  ├─ sitemap.xml                         站点地图
-│  ├─ .nojekyll                           GitHub Pages 静态文件标记
-│  ├─ vendor/viewerjs/                    本地图片缩放预览库与许可证
-│  └─ assets/                             教程截图、演示视频与角色图
-│
 └─ native/                                Windows 原生程序源码
    ├─ CMakeLists.txt                      CMake 目标、依赖与测试配置
    ├─ build_native.ps1                    MSVC x64 Release 构建脚本
