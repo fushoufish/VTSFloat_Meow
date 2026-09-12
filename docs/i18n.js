@@ -107,6 +107,24 @@
     });
   });
 
+  const licenseTranslations = {
+    '开源协议': { 'zh-TW':'開源授權', en:'Open-source license', ja:'オープンソースライセンス', ko:'오픈 소스 라이선스', ru:'Лицензия открытого ПО' },
+    '自由使用，也让改进继续开放': { 'zh-TW':'自由使用，也讓改進持續開放', en:'Free to use, with improvements kept open', ja:'自由に使えて、改良もオープンに', ko:'자유롭게 사용하고, 개선 사항도 계속 공개합니다', ru:'Свободное использование и открытые улучшения' },
+    '本项目采用 GNU General Public License v3.0（GPLv3）发布。': { 'zh-TW':'本專案依 GNU General Public License v3.0（GPLv3）發布。', en:'This project is released under the GNU General Public License v3.0 (GPLv3).', ja:'本プロジェクトは GNU General Public License v3.0（GPLv3）のもとで公開されています。', ko:'이 프로젝트는 GNU General Public License v3.0(GPLv3)에 따라 배포됩니다.', ru:'Проект распространяется по лицензии GNU General Public License v3.0 (GPLv3).' },
+    '您可以使用、研究、修改和重新分发本程序；如果公开分发修改版或衍生版本，需要遵守 GPLv3 并提供对应源代码。': { 'zh-TW':'您可以使用、研究、修改及重新散布本程式；若公開散布修改版或衍生版本，須遵守 GPLv3 並提供對應原始碼。', en:'You may use, study, modify, and redistribute the program. If you distribute a modified or derivative version, you must follow GPLv3 and provide the corresponding source code.', ja:'本プログラムは使用・研究・改変・再配布できます。改変版または派生版を配布する場合は、GPLv3に従い、対応するソースコードを提供してください。', ko:'프로그램을 사용, 연구, 수정 및 재배포할 수 있습니다. 수정본이나 파생 버전을 배포할 때는 GPLv3를 준수하고 해당 소스 코드를 제공해야 합니다.', ru:'Программу можно использовать, изучать, изменять и распространять. При распространении изменённой или производной версии необходимо соблюдать GPLv3 и предоставить соответствующий исходный код.' },
+    '查看 GPLv3 完整条款': { 'zh-TW':'查看 GPLv3 完整條款', en:'Read the full GPLv3 terms', ja:'GPLv3 の全文を読む', ko:'GPLv3 전체 약관 보기', ru:'Полный текст GPLv3' },
+    '第三方组件': { 'zh-TW':'第三方元件', en:'Third-party components', ja:'サードパーティ製コンポーネント', ko:'서드파티 구성 요소', ru:'Сторонние компоненты' },
+    'Spout2 采用 BSD 2-Clause License。重新分发源码时须保留版权、许可条件和免责声明；重新分发二进制时，也须在随附文档或其他材料中保留这些内容。': { 'zh-TW':'Spout2 採用 BSD 2-Clause License。重新散布原始碼時須保留著作權、授權條件與免責聲明；重新散布二進位檔時，也須在隨附文件或其他材料中保留這些內容。', en:'Spout2 uses the BSD 2-Clause License. Source redistributions must retain its copyright notice, conditions, and disclaimer; binary redistributions must reproduce them in the accompanying documentation or other materials.', ja:'Spout2 は BSD 2-Clause License で提供されています。ソースを再配布する場合は著作権表示、条件、免責事項を保持し、バイナリを再配布する場合も付属文書などに同じ内容を記載する必要があります。', ko:'Spout2는 BSD 2-Clause License를 사용합니다. 소스 재배포 시 저작권 고지, 조건 및 면책 조항을 유지해야 하며, 바이너리 재배포 시에도 동봉 문서나 기타 자료에 이를 포함해야 합니다.', ru:'Spout2 распространяется по BSD 2-Clause License. При распространении исходного кода необходимо сохранить уведомление об авторских правах, условия и отказ от гарантий; при распространении бинарных файлов эти сведения также должны присутствовать в сопроводительной документации или других материалах.' },
+    'Viewer.js 采用 MIT License。所有第三方组件继续适用各自的许可证。': { 'zh-TW':'Viewer.js 採用 MIT License。所有第三方元件仍各自適用原有授權條款。', en:'Viewer.js uses the MIT License. Every third-party component remains governed by its own license.', ja:'Viewer.js は MIT License で提供されています。すべてのサードパーティ製コンポーネントには、それぞれのライセンスが引き続き適用されます。', ko:'Viewer.js는 MIT License를 사용합니다. 모든 서드파티 구성 요소에는 각자의 라이선스가 계속 적용됩니다.', ru:'Viewer.js распространяется по MIT License. Каждый сторонний компонент по-прежнему регулируется собственной лицензией.' },
+    '查看第三方许可证': { 'zh-TW':'查看第三方授權條款', en:'View third-party licenses', ja:'サードパーティライセンスを見る', ko:'서드파티 라이선스 보기', ru:'Лицензии сторонних компонентов' }
+  };
+  Object.entries(licenseTranslations).forEach(([source, localized]) => {
+    translations['zh-CN'][source] = source;
+    Object.entries(localized).forEach(([locale, value]) => {
+      translations[locale][source] = value;
+    });
+  });
+
   const localeMeta = {
     'zh-CN': { title:'VTSFloat_Meow - VTube Studio 透明模型桌面悬浮工具', description:'无需其他推流工具，将 VTube Studio 透明模型直接悬浮在 Windows 桌面、游戏或其他应用上方。', imageAlt:'VTSFloat_Meow 项目角色与软件图标', ogLocale:'zh_CN' },
     'zh-TW': { title:'VTSFloat_Meow｜讓 VTube Studio 模型自在浮現在桌面', description:'不必搭配其他串流工具，也能讓 VTube Studio 透明模型浮現在 Windows 桌面、遊戲或其他應用程式上方。', imageAlt:'VTSFloat_Meow 專案角色與軟體圖示', ogLocale:'zh_TW' },

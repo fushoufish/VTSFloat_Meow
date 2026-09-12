@@ -139,12 +139,27 @@ English、日本語、한국어或Русский；后续启动会记住用户�
 
 生成文件为根目录的 `VTSFloat_Meow.exe`。
 
+## 开源协议
+
+Copyright (C) 2026 fushoufish
+
+VTSFloat_Meow 采用 [GNU General Public License v3.0](./LICENSE) 发布。您可以使用、研究、修改和重新分发本程序；公开分发修改版或衍生版本时，需要遵守 GPLv3 并提供对应源代码。
+
+本项目包含独立授权的第三方组件：
+
+- **Spout2**：BSD 2-Clause License。重新分发源码时须保留版权声明、许可条件与免责声明；重新分发二进制时，也须在随附文档或其他材料中保留这些内容。
+- **Viewer.js**：MIT License。
+
+完整内容见 [第三方许可证声明](./THIRD_PARTY_NOTICES.md)。第三方组件继续适用各自的许可证，不因本项目采用 GPLv3 而改变。
+
 ## 项目结构
 
 ```text
 VTSFloat_Meow/
 ├─ .gitignore                             Git 忽略规则
 ├─ README.md                              项目介绍、使用方法与构建说明
+├─ LICENSE                                GNU GPL v3.0 项目许可证
+├─ THIRD_PARTY_NOTICES.md                 Spout2 与 Viewer.js 第三方许可证
 ├─ VTSFloat_Meow.exe                      Release 构建生成的主程序
 ├─ VTSFloat_Meow.custom-language.ini      仓库附带的自定义语言参考模板
 ├─ start_overlay.cmd                      启动主程序
