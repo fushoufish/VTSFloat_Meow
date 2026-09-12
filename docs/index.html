@@ -178,26 +178,8 @@
         <figure class="capture-media usage-media hero-media"><video class="usage-step-video" src="assets/desktop-model.mp4" autoplay muted loop playsinline disablepictureinpicture disableremoteplayback controlslist="nodownload nofullscreen noremoteplayback" preload="auto" aria-label="VTSFloat_Meow 将透明模型显示在实际 Windows 桌面上的演示"></video><figcaption>演示 · 通过 VTSFloat_Meow 将 VTube Studio 模型输出在屏幕上方</figcaption></figure>
       </section>
 
-      <section class="section-anchor usage-section" id="usage">
-        <div class="section-heading"><div><h2>如何使用？</h2></div><p class="section-note">按照下面的步骤完成启动 设置和自定义</p></div>
-
-        <div class="usage-group section-anchor" id="quick-start">
-          <div class="usage-group-heading"><span class="usage-index">1、</span><div><h3>快捷开始</h3><p>脚本会主动从注册表寻找 Steam 中的 VTube Studio 路径或者由你手动选择路径</p></div></div>
-          <figure class="capture-media usage-media "><a class="" href="assets/desktop-controls.webp" target="_blank" rel="noopener"><img src="assets/desktop-controls.webp" alt="程序启动后的实际控制条，包含图形设置、窗口模式、锁定与个性化" width="759" height="34" loading="lazy"></a><a class="" href="assets/desktop-controls-2.webp" target="_blank" rel="noopener"><img src="assets/desktop-controls-2.webp" alt="启动并连接 VTS 后的透明模型窗口" width="759" height="432" loading="lazy"></a><figcaption>连接成功后的实际窗口与控制条。首次启动时，程序会查找 VTube Studio 安装路径；未找到时可手动选择。</figcaption></figure>
-        </div>
-
-        <div class="usage-group section-anchor" id="vts-setup">
-          <div class="usage-group-heading"><span class="usage-index">2、</span><div><h3>设置 VTS</h3><p>完成下面 4 项设置后即可开始接收透明模型</p></div></div>
-          <div class="usage-substeps">
-            <article class="usage-substep section-anchor" id="enable-spout2"><div class="usage-substep-copy"><span class="usage-subindex">1.</span><div><h3>启用 Spout2</h3><p>用于将 VTube Studio 的视频流推送至脚本</p></div></div><figure class="capture-media usage-media"><a href="assets/enable-spout2.webp" target="_blank" rel="noopener"><img src="assets/enable-spout2.webp" alt="VTube Studio 视频设置中的 Spout2 配置，激活 Spout2 开关已开启" width="1109" height="640" loading="lazy"></a><figcaption>视频设置 → Spout2 配置 → 激活 Spout2</figcaption></figure></article>
-            <article class="usage-substep section-anchor" id="enable-vts-api"><div class="usage-substep-copy"><span class="usage-subindex">2.</span><div><h3>启动VTS API</h3><p>用于脚本获取实时渲染帧数 实现悬停更改模型表情等功能 如默认端口非 8001 请在脚本提示中手动点击“扫描端口”按钮</p></div></div><figure class="capture-media usage-media"><a href="assets/enable-api.jpg" target="_blank" rel="noopener"><img src="assets/enable-api.jpg" alt="VTube Studio Plugins API 已开启，端口为 8001，状态为 API 已就绪" width="1109" height="640" loading="lazy"></a><div class="capture-caption">一般设置 → Plugins → 开启 API，默认端口 8001</div><a href="assets/api-authorization.jpg" target="_blank" rel="noopener"><img src="assets/api-authorization.jpg" alt="VTube Studio 请求授权 VTSFloat_Meow 插件访问 API 的实际确认弹窗" width="1109" height="640" loading="lazy"></a><figcaption>首次连接时，确认插件名称为 VTSFloat_Meow 后点击「允许」。截图中的悬浮模型来自正在运行的工具。</figcaption></figure></article>
-            <article class="usage-substep section-anchor" id="transparent-stream-setup"><div class="usage-substep-copy"><span class="usage-subindex">3.</span><div><h3>设置透明推流</h3><p>用于将获取到的视频流透明化 输出到脚本当中</p></div></div><figure class="capture-media usage-media"><a href="assets/background-selection.jpg" target="_blank" rel="noopener"><img src="assets/background-selection.jpg" alt="VTube Studio 的背景选择列表，包含 ColorPicker 背景" width="1440" height="912" loading="lazy"></a><div class="capture-caption">在背景选择中选择 ColorPicker。</div><a href="assets/transparent-stream.jpg" target="_blank" rel="noopener"><img src="assets/transparent-stream.jpg" alt="ColorPicker 颜色面板下方的透明推流开关已开启" width="605" height="373" loading="lazy"></a><figcaption>开启颜色面板下方的「透明推流」。VTS 窗口仍可显示粉色背景，输出给悬浮工具的画面保留透明通道。</figcaption></figure></article>
-            <article class="usage-substep section-anchor" id="finish-hotkey"><div class="usage-substep-copy"><span class="usage-subindex">4.</span><div><h3>完成与快捷键触发</h3><p>调整好模型窗口后点击「完成」进行锁定；默认使用 Ctrl+Shift+L 快捷键锁定或解锁，也可以在工具栏中重新设置快捷键。</p></div></div><figure class="capture-media finish-controls"><video class="usage-step-video" src="assets/donewhile.mp4" autoplay muted loop playsinline disablepictureinpicture disableremoteplayback controlslist="nodownload nofullscreen noremoteplayback" preload="metadata" aria-label="完成设置并通过快捷键切换锁定与解锁的操作演示"></video><figcaption>点击「完成」锁定窗口；通过快捷键快速切换锁定与解锁。</figcaption></figure></article>
-          </div>
-        </div>
-
-        <div class="usage-group section-anchor" id="custom-features">
-          <div class="usage-group-heading"><span class="usage-index">3、</span><div><h3>自定义功能展示</h3><p>根据你的使用习惯调整模型的显示与互动方式</p></div></div>
+      <div class="usage-group section-anchor" id="custom-features">
+          <div class="usage-group-heading"><span class="usage-index">1、</span><div><h3>自定义功能展示</h3><p>根据你的使用习惯调整模型的显示与互动方式</p></div></div>
           <div class="usage-custom-grid">
             <article class="usage-substep">
               <div class="usage-substep-copy"><span class="usage-subindex">1.</span><div><h3>自定义调整边框颜色粗细</h3><p>可自由设置模型窗口的边框颜色和边框粗细。</p></div></div>
@@ -220,7 +202,25 @@
               <figure class="capture-media usage-media"><video class="usage-step-video" src="assets/支持设置多个鼠标离开时播放模型表情与播放时长.mp4" autoplay muted loop playsinline disablepictureinpicture disableremoteplayback controlslist="nodownload nofullscreen noremoteplayback" preload="metadata" aria-label="设置多个鼠标离开时播放模型表情与播放时长的操作演示"></video><figcaption>个性化设置 5：离开时播放的模型表情与时长。</figcaption></figure>
             </article>
           </div>
+
+      <section class="section-anchor usage-section" id="usage">
+        <div class="section-heading"><div><h2>如何使用？</h2></div><p class="section-note">按照下面的步骤完成启动 设置和自定义</p></div>
+
+        <div class="usage-group section-anchor" id="quick-start">
+          <div class="usage-group-heading"><span class="usage-index">2、</span><div><h3>快捷开始</h3><p>脚本会主动从注册表寻找 Steam 中的 VTube Studio 路径或者由你手动选择路径</p></div></div>
+          <figure class="capture-media usage-media "><a class="" href="assets/desktop-controls.webp" target="_blank" rel="noopener"><img src="assets/desktop-controls.webp" alt="程序启动后的实际控制条，包含图形设置、窗口模式、锁定与个性化" width="759" height="34" loading="lazy"></a><a class="" href="assets/desktop-controls-2.webp" target="_blank" rel="noopener"><img src="assets/desktop-controls-2.webp" alt="启动并连接 VTS 后的透明模型窗口" width="759" height="432" loading="lazy"></a><figcaption>连接成功后的实际窗口与控制条。首次启动时，程序会查找 VTube Studio 安装路径；未找到时可手动选择。</figcaption></figure>
         </div>
+
+        <div class="usage-group section-anchor" id="vts-setup">
+          <div class="usage-group-heading"><span class="usage-index">3、</span><div><h3>设置 VTS</h3><p>完成下面 4 项设置后即可开始接收透明模型</p></div></div>
+          <div class="usage-substeps">
+            <article class="usage-substep section-anchor" id="enable-spout2"><div class="usage-substep-copy"><span class="usage-subindex">1.</span><div><h3>启用 Spout2</h3><p>用于将 VTube Studio 的视频流推送至脚本</p></div></div><figure class="capture-media usage-media"><a href="assets/enable-spout2.webp" target="_blank" rel="noopener"><img src="assets/enable-spout2.webp" alt="VTube Studio 视频设置中的 Spout2 配置，激活 Spout2 开关已开启" width="1109" height="640" loading="lazy"></a><figcaption>视频设置 → Spout2 配置 → 激活 Spout2</figcaption></figure></article>
+            <article class="usage-substep section-anchor" id="enable-vts-api"><div class="usage-substep-copy"><span class="usage-subindex">2.</span><div><h3>启动VTS API</h3><p>用于脚本获取实时渲染帧数 实现悬停更改模型表情等功能 如默认端口非 8001 请在脚本提示中手动点击“扫描端口”按钮</p></div></div><figure class="capture-media usage-media"><a href="assets/enable-api.jpg" target="_blank" rel="noopener"><img src="assets/enable-api.jpg" alt="VTube Studio Plugins API 已开启，端口为 8001，状态为 API 已就绪" width="1109" height="640" loading="lazy"></a><div class="capture-caption">一般设置 → Plugins → 开启 API，默认端口 8001</div><a href="assets/api-authorization.jpg" target="_blank" rel="noopener"><img src="assets/api-authorization.jpg" alt="VTube Studio 请求授权 VTSFloat_Meow 插件访问 API 的实际确认弹窗" width="1109" height="640" loading="lazy"></a><figcaption>首次连接时，确认插件名称为 VTSFloat_Meow 后点击「允许」。截图中的悬浮模型来自正在运行的工具。</figcaption></figure></article>
+            <article class="usage-substep section-anchor" id="transparent-stream-setup"><div class="usage-substep-copy"><span class="usage-subindex">3.</span><div><h3>设置透明推流</h3><p>用于将获取到的视频流透明化 输出到脚本当中</p></div></div><figure class="capture-media usage-media"><a href="assets/background-selection.jpg" target="_blank" rel="noopener"><img src="assets/background-selection.jpg" alt="VTube Studio 的背景选择列表，包含 ColorPicker 背景" width="1440" height="912" loading="lazy"></a><div class="capture-caption">在背景选择中选择 ColorPicker。</div><a href="assets/transparent-stream.jpg" target="_blank" rel="noopener"><img src="assets/transparent-stream.jpg" alt="ColorPicker 颜色面板下方的透明推流开关已开启" width="605" height="373" loading="lazy"></a><figcaption>开启颜色面板下方的「透明推流」。VTS 窗口仍可显示粉色背景，输出给悬浮工具的画面保留透明通道。</figcaption></figure></article>
+            <article class="usage-substep section-anchor" id="finish-hotkey"><div class="usage-substep-copy"><span class="usage-subindex">4.</span><div><h3>完成与快捷键触发</h3><p>调整好模型窗口后点击「完成」进行锁定；默认使用 Ctrl+Shift+L 快捷键锁定或解锁，也可以在工具栏中重新设置快捷键。</p></div></div><figure class="capture-media finish-controls"><video class="usage-step-video" src="assets/donewhile.mp4" autoplay muted loop playsinline disablepictureinpicture disableremoteplayback controlslist="nodownload nofullscreen noremoteplayback" preload="metadata" aria-label="完成设置并通过快捷键切换锁定与解锁的操作演示"></video><figcaption>点击「完成」锁定窗口；通过快捷键快速切换锁定与解锁。</figcaption></figure></article>
+          </div>
+        </div>
+      </div>
       </section>
 
       <section class="section-anchor readme-section" id="other-notes">
