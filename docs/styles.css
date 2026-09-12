@@ -1303,3 +1303,41 @@ code {
     transition: none;
   }
 }
+/* Responsive three-column desktop layout: keep release history visible under browser zoom. */
+@media (min-width: 1180px) and (max-width: 1519px) {
+  :root { --sidebar: clamp(190px, 15vw, 210px); }
+
+  .sidebar {
+    left: 0;
+    width: var(--sidebar);
+    padding: 42px 20px 26px;
+  }
+
+  .release-history {
+    display: flex;
+    right: 0;
+    width: var(--sidebar);
+    padding: 42px 20px 26px;
+  }
+
+  .release-history-header {
+    padding: 0 3px 20px;
+  }
+
+  .release-timeline {
+    gap: 19px;
+    margin: 22px 0 25px 5px;
+    padding-left: 15px;
+  }
+
+  .release-entry::before {
+    left: -19px;
+  }
+
+  .main-content {
+    width: calc(100% - var(--sidebar) - var(--sidebar));
+    max-width: none;
+    margin-left: var(--sidebar);
+    padding-inline: clamp(30px, 3vw, 42px);
+  }
+}
