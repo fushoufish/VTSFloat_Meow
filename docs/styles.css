@@ -844,6 +844,11 @@ select {
   padding-top: 104px;
 }
 
+/* Add a little breathing room before the usage guide. */
+.usage-section {
+  margin-top: 28px;
+}
+
 .section-heading {
   align-items: center;
   gap: 46px;
