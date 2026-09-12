@@ -38,6 +38,7 @@
   const progressLabel = progressLabels[locale];
   const progress = loader.querySelector('[data-loader-progress]');
   const progressbar = loader.querySelector('[role="progressbar"]');
+  const progressText = loader.querySelector('[data-loader-percent]');
   loader.setAttribute('aria-label', progressLabel);
   progressbar.setAttribute('aria-label', progressLabel);
   document.body.setAttribute('aria-busy', 'true');
@@ -80,7 +81,7 @@
 
   [
     'vendor/viewerjs/viewer.min.js',
-    'i18n.js?v=20260912-2',
+    'i18n.js?v=20260912-3',
     'benchmark-charts.js?v=20260910-1',
     'script.js?v=20260909-4'
   ].forEach((asset) => urls.add(toAbsoluteUrl(asset)));
@@ -93,6 +94,7 @@
     const value = assets.length ? Math.round((completed / assets.length) * 100) : 100;
     progress.style.width = `${value}%`;
     progressbar.setAttribute('aria-valuenow', String(value));
+    if (progressText) progressText.textContent = `${value}%`;
   };
 
   const fetchAsset = async (url) => {
