@@ -186,7 +186,7 @@ VTSFloat_Meow/
 
 ## 开源协议
 
-Copyright (C) 2026 咕噜灵波fushoufish
+Copyright (C) 2026 fushoufish-咕噜灵波
 
 VTSFloat_Meow 采用 [GNU General Public License v3.0](./LICENSE) 发布。您可以使用、研究、修改和重新分发本程序；公开分发修改版或衍生版本时，需要遵守 GPLv3 并提供对应源代码。
 
