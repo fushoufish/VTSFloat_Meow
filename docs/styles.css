@@ -1346,3 +1346,33 @@ code {
     padding-inline: clamp(30px, 3vw, 42px);
   }
 }
+
+/* Viewport reveal motion: individual components rise in once as the page scrolls. */
+.scroll-reveal {
+  opacity: 0;
+  translate: 0 30px;
+  scale: .985;
+  will-change: opacity, translate, scale;
+}
+
+.scroll-reveal.is-revealed {
+  animation: component-reveal .72s cubic-bezier(.22, 1, .36, 1) both;
+  animation-delay: var(--reveal-delay, 0ms);
+}
+
+@keyframes component-reveal {
+  from {
+    opacity: 0;
+    translate: 0 30px;
+    scale: .985;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+    scale: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scroll-reveal { opacity: 1; translate: none; scale: none; animation: none; }
+}

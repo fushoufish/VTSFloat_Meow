@@ -139,6 +139,56 @@ window.addEventListener('vtsfloat:languagechange', () => {
   });
 });
 
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+const revealSelectors = [
+  '.main-content > section:not(.hero) > .section-heading',
+  '.usage-custom-grid > .usage-substep',
+  '.usage-group > .usage-group-heading',
+  '.usage-group > .capture-media',
+  '.usage-substeps > .usage-substep',
+  '.other-notes-copy > *',
+  '.gpu-explanation > *',
+  '.readme-section > .callout',
+  '.pipeline-system-map',
+  '.tech-table > div',
+  '.benchmark-carousel',
+  '.benchmark-conclusion > p',
+  '.benchmark-video-section',
+  '.requirements-grid > .info-card',
+  '.footer',
+];
+const revealItems = [...new Set(document.querySelectorAll(revealSelectors.join(',')))];
+
+if (!reducedMotion.matches && 'IntersectionObserver' in window) {
+  const groupIndexes = new Map();
+  revealItems.forEach((item) => {
+    const group = item.parentElement;
+    const index = groupIndexes.get(group) || 0;
+    groupIndexes.set(group, index + 1);
+    item.classList.add('scroll-reveal');
+    item.style.setProperty('--reveal-delay', `${Math.min(index, 4) * 70}ms`);
+  });
+
+  const revealObserver = new IntersectionObserver((entries, observer) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      const item = entry.target;
+      item.classList.add('is-revealed');
+      item.addEventListener('animationend', () => {
+        item.classList.remove('scroll-reveal', 'is-revealed');
+        item.style.removeProperty('--reveal-delay');
+      }, { once: true });
+      observer.unobserve(item);
+    });
+  }, {
+    rootMargin: '0px 0px -9% 0px',
+    threshold: 0.08,
+  });
+
+  revealItems.forEach((item) => revealObserver.observe(item));
+}
+
 const updateActiveLink = () => {
   const pageBottom = document.documentElement.scrollHeight - (window.scrollY + window.innerHeight);
   let current;
