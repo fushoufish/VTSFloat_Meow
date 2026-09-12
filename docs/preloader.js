@@ -83,7 +83,7 @@
     'vendor/viewerjs/viewer.min.js',
     'i18n.js?v=20260912-3',
     'benchmark-charts.js?v=20260910-1',
-    'script.js?v=20260909-4'
+    'script.js?v=20260912-2'
   ].forEach((asset) => urls.add(toAbsoluteUrl(asset)));
 
   const assets = Array.from(urls).filter(Boolean);
