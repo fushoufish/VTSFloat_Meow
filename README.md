@@ -188,6 +188,12 @@ VTSFloat_Meow/
 
 VTSFloat_Meow 采用 [GNU General Public License v3.0](./LICENSE) 发布。您可以使用、研究、修改和重新分发本程序；公开分发修改版或衍生版本时，需要遵守 GPLv3 并提供对应源代码。
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+项目的签名范围、维护者角色、隐私说明和发布安全流程见 [Code signing policy](./CODE_SIGNING_POLICY.md)。
+
 本项目包含独立授权的第三方组件：
 
 - **Spout2** — BSD 2-Clause License. Copyright and license notices must be retained.
