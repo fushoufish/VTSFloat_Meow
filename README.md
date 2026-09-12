@@ -5,9 +5,9 @@
 <h1 align="center">VTSFloat_Meow</h1>
 
 <p align="center">将 VTube Studio 的透明模型不借助其他工具直接悬浮到桌面、游戏或其他应用上方。</p>
-<p align="center">支援简体中文、繁體中文、English、日本語、한국어、Русский与自定义语言。</p>
 <p align="center"><a href="https://fushoufish.github.io/VTSFloat_Meow/">前往 VTSFloat_Meow 的介绍页查看教程与说明细节</a></p>
 <p align="center">Read the guide for more details.<a href="https://fushoufish.github.io/VTSFloat_Meow/"> VTSFloat_Meow DOCS</a></p>
+<p align="center">支援简体、繁體中文、English、日本語、한국어、Русский与自定义语言。</p>
 
 ## 1. 前话
 
