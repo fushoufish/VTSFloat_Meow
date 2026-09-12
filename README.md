@@ -139,19 +139,6 @@ English、日本語、한국어或Русский；后续启动会记住用户�
 
 生成文件为根目录的 `VTSFloat_Meow.exe`。
 
-## 开源协议
-
-Copyright (C) 2026 fushoufish
-
-VTSFloat_Meow 采用 [GNU General Public License v3.0](./LICENSE) 发布。您可以使用、研究、修改和重新分发本程序；公开分发修改版或衍生版本时，需要遵守 GPLv3 并提供对应源代码。
-
-本项目包含独立授权的第三方组件：
-
-- **Spout2**：BSD 2-Clause License。重新分发源码时须保留版权声明、许可条件与免责声明；重新分发二进制时，也须在随附文档或其他材料中保留这些内容。
-- **Viewer.js**：MIT License。
-
-完整内容见 [第三方许可证声明](./THIRD_PARTY_NOTICES.md)。第三方组件继续适用各自的许可证，不因本项目采用 GPLv3 而改变。
-
 ## 项目结构
 
 ```text
@@ -196,3 +183,16 @@ VTSFloat_Meow/
 ```
 
 `native/build/`、`native/bin/` 和 `output/` 属于本地构建、测试或采集生成目录，不计入源文件结构。
+
+## 开源协议
+
+Copyright (C) 2026 咕噜灵波fushoufish
+
+VTSFloat_Meow 采用 [GNU General Public License v3.0](./LICENSE) 发布。您可以使用、研究、修改和重新分发本程序；公开分发修改版或衍生版本时，需要遵守 GPLv3 并提供对应源代码。
+
+本项目包含独立授权的第三方组件：
+
+- **Spout2** — BSD 2-Clause License. Copyright and license notices must be retained.
+- **Viewer.js**：MIT License.
+
+完整内容见 [第三方许可证声明](./THIRD_PARTY_NOTICES.md)。第三方组件继续适用各自的许可证，不因本项目采用 GPLv3 而改变。
