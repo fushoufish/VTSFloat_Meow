@@ -11798,14 +11798,23 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         }
     }
 
-    void PresentLayeredFrame(const RECT& rect, int width, int height) {
+    void PresentLayeredFrame(const RECT& rect, int width, int height, bool modelFrame = true) {
         if (!memoryDc_ || !dibBits_ || width != dibWidth_ || height != dibHeight_) {
             return;
         }
-        DrawBgWarningOverlay(width, height);
-        DrawGpuWarningOverlay(width, height);
-        DrawHoverExpandPreview(width, height);
-        DrawSubjectRegionPreview(width, height);
+        // Status pages share the DIB, but contain UI rather than model alpha.
+        // Never expand their pixels or paint model diagnostics into the cache.
+        if (modelFrame) {
+            DrawBgWarningOverlay(width, height);
+            DrawGpuWarningOverlay(width, height);
+            DrawHoverExpandPreview(width, height);
+            DrawSubjectRegionPreview(width, height);
+        } else {
+            showHoverExpandPreview_ = false;
+            hoverExpandPreviewUntil_ = Clock::time_point{};
+            hoverExpandPreviewAlpha_ = 0.0;
+            hoverExpandFadeStarted_ = Clock::now();
+        }
         const auto updateStarted = Clock::now();
         POINT destination{ rect.left, rect.top };
         SIZE size{ width, height };
@@ -11857,7 +11866,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 statusDrawWidth_ = width;
                 statusDrawHeight_ = height;
             }
-            PresentLayeredFrame(current, width, height);
+            PresentLayeredFrame(current, width, height, false);
         };
         const auto receiveStarted = Clock::now();
         if (!receiver_.ReceiveTexture()) {
