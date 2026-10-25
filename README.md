@@ -71,6 +71,8 @@ Spout2 接收端已经集成到程序中，用户不需要单独安装或启动 
 
 ### 本地处理与隐私
 
+项目网站的隐私政策见：[隐私政策 / Privacy Policy](https://fushoufish.github.io/VTSFloat_Meow/privacy.html)。
+
 - 程序不会注入游戏或应用，不读取游戏画面，也不参与游戏渲染。
 - 程序可以完全离线运行；VTube Studio Plugins API 仅通过 `localhost` 与本机 VTube Studio 通信。
 - 程序不会访问 VTube Studio 使用的摄像头或其他连接设备。
@@ -197,6 +199,6 @@ Free code signing provided by [SignPath.io](https://about.signpath.io/), certifi
 本项目包含独立授权的第三方组件：
 
 - **Spout2** — BSD 2-Clause License. Copyright and license notices must be retained.
-- **Viewer.js**：MIT License.
+- **Viewer.js**：仅用于 `docs/` 文档网站的图片预览，采用 MIT License，不属于 Windows 桌面程序的运行依赖。
 
 完整内容见 [第三方许可证声明](./THIRD_PARTY_NOTICES.md)。第三方组件继续适用各自的许可证，不因本项目采用 GPLv3 而改变。
