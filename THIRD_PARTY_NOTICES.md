@@ -38,6 +38,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## Viewer.js — MIT License
 
+Scope: image previews on the documentation website (`docs/`) only. Viewer.js is
+not a runtime dependency of the native Windows desktop application. This notice
+is retained because the repository and documentation website distribute the library.
+
 Project: https://github.com/fengyuanchen/viewerjs
 
 ```text
