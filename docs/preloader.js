@@ -3,7 +3,6 @@
 
   const loader = document.getElementById('resource-loader');
   if (!loader) {
-    document.documentElement.classList.remove('is-preloading');
     return;
   }
 
@@ -41,14 +40,8 @@
   const progressText = loader.querySelector('[data-loader-percent]');
   loader.setAttribute('aria-label', progressLabel);
   progressbar.setAttribute('aria-label', progressLabel);
-  document.body.setAttribute('aria-busy', 'true');
-
-  const videos = Array.from(document.querySelectorAll('video'));
-  const autoplayVideos = videos.filter((video) => video.autoplay);
-  autoplayVideos.forEach((video) => {
-    video.pause();
-    video.autoplay = false;
-  });
+  loader.dataset.stage = 'downloading';
+  loader.setAttribute('aria-busy', 'true');
 
   const toAbsoluteUrl = (value) => {
     if (!value || value.startsWith('data:') || value.startsWith('blob:')) return '';
@@ -79,12 +72,10 @@
     if (url) urls.add(url);
   });
 
-  [
-    'vendor/viewerjs/viewer.min.js',
-    'i18n.js?v=20260912-3',
-    'benchmark-charts.js?v=20260910-1',
-    'script.js?v=20260912-2'
-  ].forEach((asset) => urls.add(toAbsoluteUrl(asset)));
+  document.querySelectorAll('script[src]').forEach((script) => {
+    const url = toAbsoluteUrl(script.getAttribute('src'));
+    if (url) urls.add(url);
+  });
 
   const assets = Array.from(urls).filter(Boolean);
   let completed = 0;
@@ -143,17 +134,12 @@
     .then(() => {
       completed = assets.length;
       updateProgress();
-      document.body.setAttribute('aria-busy', 'false');
+      loader.setAttribute('aria-busy', 'false');
       window.dispatchEvent(new CustomEvent('vtsfloat:assetsready', {
         detail: { total: assets.length, failures }
       }));
       window.setTimeout(() => {
         loader.classList.add('is-leaving');
-        document.documentElement.classList.remove('is-preloading');
-        autoplayVideos.forEach((video) => {
-          video.autoplay = true;
-          video.play().catch(() => {});
-        });
         window.setTimeout(() => loader.remove(), 480);
       }, 280);
     });

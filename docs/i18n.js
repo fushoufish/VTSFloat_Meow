@@ -187,6 +187,45 @@
     return 'en';
   };
 
+
+  const downloadTranslations = {
+  "前往 CNB": ["前往 CNB", "View on CNB", "CNBで見る", "CNB에서 보기", "Открыть CNB"],
+  "复制密码并跳转": ["複製密碼並前往", "Copy password and open", "パスワードをコピーして開く", "비밀번호 복사 후 열기", "Скопировать пароль и открыть"],
+  "复制失败，请手动复制密码 cici。": ["複製失敗，請手動複製密碼 cici。", "Copy failed. Please copy the password cici manually.", "コピーできませんでした。パスワード cici を手動でコピーしてください。", "복사하지 못했습니다. 비밀번호 cici를 직접 복사해 주세요.", "Не удалось скопировать. Скопируйте пароль cici вручную."],
+  "蓝奏云": ["藍奏雲", "Lanzou Cloud", "Lanzou Cloud", "Lanzou Cloud", "Lanzou Cloud"],
+  "密码": ["密碼", "Password", "パスワード", "비밀번호", "Пароль"],
+  "点击下载": ["點擊下載", "Download file", "ファイルをダウンロード", "파일 다운로드", "Скачать файл"],
+  "访问下载页面": ["前往下載頁面", "Open download page", "ダウンロードページを開く", "다운로드 페이지 열기", "Открыть страницу загрузки"],
+  "CNB-腾讯云": ["CNB-騰訊雲", "CNB-Tencent Cloud", "CNB-Tencent Cloud", "CNB-Tencent Cloud", "CNB-Tencent Cloud"],
+  "选择下载来源": [
+    "選擇下載來源",
+    "Choose a download source",
+    "ダウンロード元を選択",
+    "다운로드 경로 선택",
+    "Выберите источник загрузки"
+  ],
+  "关闭下载窗口": [
+    "關閉下載視窗",
+    "Close downloads",
+    "ダウンロード画面を閉じる",
+    "다운로드 창 닫기",
+    "Закрыть окно загрузки"
+  ],
+  "数据胶囊-中国科技云": [
+    "數據膠囊-中國科技雲",
+    "Data Capsule-CSTCloud",
+    "Data Capsule-CSTCloud",
+    "Data Capsule-CSTCloud",
+    "Data Capsule-CSTCloud"
+  ],
+  "推荐": ["推薦", "Recommended", "おすすめ", "추천", "Рекомендуем"]
+};
+  ['zh-TW', 'en', 'ja', 'ko', 'ru'].forEach((locale, index) => {
+    Object.entries(downloadTranslations).forEach(([text, labels]) => {
+      translations[locale][text] = labels[index];
+    });
+  });
+
   const textNodes = [];
   const attributes = [];
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {

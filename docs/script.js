@@ -205,3 +205,84 @@ const updateActiveLink = () => {
 window.addEventListener('scroll', updateActiveLink, { passive: true });
 window.addEventListener('resize', updateActiveLink);
 updateActiveLink();
+
+const downloadButton = document.querySelector('#download-button');
+const downloadDialog = document.querySelector('#download-dialog');
+
+downloadButton?.addEventListener('click', () => {
+  downloadDialog.showModal();
+  document.documentElement.classList.add('download-open');
+});
+
+downloadDialog?.querySelector('.download-close').addEventListener('click', () => downloadDialog.close());
+downloadDialog?.addEventListener('click', (event) => {
+  if (event.target !== downloadDialog) return;
+  const bounds = downloadDialog.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right ||
+      event.clientY < bounds.top || event.clientY > bounds.bottom) downloadDialog.close();
+});
+downloadDialog?.addEventListener('close', () => {
+  document.documentElement.classList.remove('download-open');
+});
+
+// Keep the page scrollbar in place while the modal owns scrolling.
+document.addEventListener('wheel', (event) => {
+  if (!downloadDialog?.open) return;
+  const insideDialog = downloadDialog.contains(event.target);
+  const atTop = downloadDialog.scrollTop <= 0;
+  const atBottom = downloadDialog.scrollTop + downloadDialog.clientHeight >= downloadDialog.scrollHeight - 1;
+  if (!insideDialog || (event.deltaY < 0 && atTop) || (event.deltaY > 0 && atBottom)) {
+    event.preventDefault();
+  }
+}, { passive: false });
+
+document.addEventListener('touchmove', (event) => {
+  if (downloadDialog?.open && (!downloadDialog.contains(event.target) ||
+      downloadDialog.scrollHeight <= downloadDialog.clientHeight)) event.preventDefault();
+}, { passive: false });
+
+document.addEventListener('keydown', (event) => {
+  if (!downloadDialog?.open || !['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault();
+  const page = downloadDialog.clientHeight;
+  const distances = { ArrowUp: -40, ArrowDown: 40, PageUp: -page, PageDown: page,
+    Home: -downloadDialog.scrollHeight, End: downloadDialog.scrollHeight };
+  downloadDialog.scrollBy(0, distances[event.key]);
+});
+
+const lanzouToggle = document.querySelector('#lanzou-toggle');
+const lanzouPanel = document.querySelector('#lanzou-panel');
+let lanzouAnimation = null;
+
+lanzouToggle?.addEventListener('click', () => {
+  const opening = lanzouToggle.getAttribute('aria-expanded') !== 'true';
+  const startHeight = lanzouPanel.getBoundingClientRect().height;
+  lanzouAnimation?.cancel();
+  lanzouPanel.hidden = false;
+  lanzouPanel.inert = !opening;
+  lanzouToggle.setAttribute('aria-expanded', String(opening));
+  lanzouAnimation = lanzouPanel.animate([
+    { height: `${startHeight}px`, opacity: opening ? 0 : 1 },
+    { height: `${opening ? lanzouPanel.scrollHeight : 0}px`, opacity: opening ? 1 : 0 }
+  ], {
+    duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 240,
+    easing: 'cubic-bezier(.2, .8, .2, 1)',
+    fill: 'forwards'
+  });
+  lanzouAnimation.onfinish = () => {
+    lanzouPanel.hidden = !opening;
+    lanzouAnimation.cancel();
+    lanzouAnimation = null;
+  };
+});
+
+document.querySelector('[data-copy-password]')?.addEventListener('click', async (event) => {
+  const link = event.currentTarget;
+  const status = document.querySelector('.download-copy-status');
+  status.textContent = '';
+  try {
+    await navigator.clipboard.writeText(link.dataset.copyPassword);
+  } catch (_) {
+    status.textContent = window.VTSFloatI18n.translate('复制失败，请手动复制密码 cici。');
+  }
+});
