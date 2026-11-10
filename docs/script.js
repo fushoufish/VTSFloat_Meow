@@ -250,30 +250,30 @@ document.addEventListener('keydown', (event) => {
   downloadDialog.scrollBy(0, distances[event.key]);
 });
 
-const lanzouToggle = document.querySelector('#lanzou-toggle');
-const lanzouPanel = document.querySelector('#lanzou-panel');
-let lanzouAnimation = null;
-
-lanzouToggle?.addEventListener('click', () => {
-  const opening = lanzouToggle.getAttribute('aria-expanded') !== 'true';
-  const startHeight = lanzouPanel.getBoundingClientRect().height;
-  lanzouAnimation?.cancel();
-  lanzouPanel.hidden = false;
-  lanzouPanel.inert = !opening;
-  lanzouToggle.setAttribute('aria-expanded', String(opening));
-  lanzouAnimation = lanzouPanel.animate([
-    { height: `${startHeight}px`, opacity: opening ? 0 : 1 },
-    { height: `${opening ? lanzouPanel.scrollHeight : 0}px`, opacity: opening ? 1 : 0 }
-  ], {
-    duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 240,
-    easing: 'cubic-bezier(.2, .8, .2, 1)',
-    fill: 'forwards'
+document.querySelectorAll('.download-option[aria-controls]').forEach((toggle) => {
+  const panel = document.getElementById(toggle.getAttribute('aria-controls'));
+  let animation = null;
+  toggle?.addEventListener('click', () => {
+    const opening = toggle.getAttribute('aria-expanded') !== 'true';
+    const startHeight = panel.getBoundingClientRect().height;
+    animation?.cancel();
+    panel.hidden = false;
+    panel.inert = !opening;
+    toggle.setAttribute('aria-expanded', String(opening));
+    animation = panel.animate([
+      { height: `${startHeight}px`, opacity: opening ? 0 : 1 },
+      { height: `${opening ? panel.scrollHeight : 0}px`, opacity: opening ? 1 : 0 }
+    ], {
+      duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 240,
+      easing: 'cubic-bezier(.2, .8, .2, 1)',
+      fill: 'forwards'
+    });
+    animation.onfinish = () => {
+      panel.hidden = !opening;
+      animation.cancel();
+      animation = null;
+    };
   });
-  lanzouAnimation.onfinish = () => {
-    lanzouPanel.hidden = !opening;
-    lanzouAnimation.cancel();
-    lanzouAnimation = null;
-  };
 });
 
 document.querySelector('[data-copy-password]')?.addEventListener('click', async (event) => {

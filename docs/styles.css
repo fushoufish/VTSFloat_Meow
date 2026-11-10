@@ -1397,7 +1397,7 @@ button.download-option { width: 100%; border: 0; color: inherit; background: tra
 .download-expander { overflow: hidden; }
 .download-recommendation { display: none; position: absolute; top: 11px; left: -28px; width: 86px; color: #fff; background: var(--accent-ink); text-align: center; font-size: 9px; font-weight: 600; line-height: 17px; transform: rotate(-45deg); pointer-events: none; }
 html:lang(zh) .download-source[data-download-region="domestic"],
-html:not(:lang(zh)) .download-source[data-download-region="global"] { border-color: var(--accent-ink); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-ink); }
+.download-source[data-download-region="global"] { border-color: var(--accent-ink); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-ink); }
 html:lang(zh) [data-download-region="domestic"] .download-recommendation { display: block; }
 .download-source:hover { border-color: var(--accent-ink); }
 .download-option:hover { background: var(--accent-soft); }
@@ -1407,14 +1407,19 @@ html:lang(zh) [data-download-region="domestic"] .download-recommendation { displ
 .download-option-copy strong { font-size: 15px; font-weight: 600; }
 .download-provider { color: var(--muted); font-weight: 400; }
 .download-source-cnb:hover { border-color: var(--line-dark); background: var(--panel); }
-.download-source-cnb .download-option:hover { background: var(--panel); }
 .download-option-arrow { width: 19px; height: 19px; margin-left: auto; flex: 0 0 auto; color: var(--accent-ink); transition: transform .18s ease; }
 .download-source[open] .download-option-arrow { transform: rotate(180deg); }
-#lanzou-toggle[aria-expanded="true"] .download-option-arrow { transform: rotate(180deg); }
+.download-option[aria-expanded="true"] .download-option-arrow { transform: rotate(180deg); }
 .download-panel { padding: 13px 18px 18px 24px; }
 .download-source[open] .download-panel { animation: download-expand .18s ease-out; }
 .download-link { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; border: 1px solid var(--accent); border-radius: 7px; color: #353149; background: var(--accent); font-size: 14px; font-weight: 600; }
 .download-link:hover { background: #aaa6e6; }
+.download-project-link { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; padding: 10px 13px; color: var(--muted); font-size: 14px; }
+.download-project-link:hover { color: var(--accent-ink); }
+.download-actions-row { display: flex; align-items: stretch; gap: 10px; }
+.download-actions-row > a { flex: 1; justify-content: center; text-align: center; }
+.download-actions-row .download-project-link { margin-top: 0; }
+.download-project-link:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: -2px; border-radius: 7px; }
 .download-password { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; padding: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
 .download-password > span, .download-password code { display: inline-flex; align-items: center; min-height: 28px; line-height: 1; }
 .download-password code { padding: 3px 8px; border: 1px solid var(--line); border-radius: 5px; color: var(--text); background: var(--bg); user-select: all; }
@@ -1429,3 +1434,5 @@ html:lang(zh) [data-download-region="domestic"] .download-recommendation { displ
 @keyframes download-expand { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes download-appear { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .download-dialog[open], .download-source[open] .download-panel { animation: none; } .download-option-arrow { transition: none; } }
+
+.download-region-note { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
