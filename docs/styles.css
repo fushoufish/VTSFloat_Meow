@@ -1405,6 +1405,9 @@ html:lang(zh) [data-download-region="domestic"] .download-recommendation { displ
 .download-option-icon svg, .download-option-icon img { width: 23px; height: 23px; display: block; object-fit: contain; }
 .download-option-copy { display: grid; gap: 3px; min-width: 0; }
 .download-option-copy strong { font-size: 15px; font-weight: 600; }
+.download-provider { color: var(--muted); font-weight: 400; }
+.download-source-cnb:hover { border-color: var(--line-dark); background: var(--panel); }
+.download-source-cnb .download-option:hover { background: var(--panel); }
 .download-option-arrow { width: 19px; height: 19px; margin-left: auto; flex: 0 0 auto; color: var(--accent-ink); transition: transform .18s ease; }
 .download-source[open] .download-option-arrow { transform: rotate(180deg); }
 #lanzou-toggle[aria-expanded="true"] .download-option-arrow { transform: rotate(180deg); }

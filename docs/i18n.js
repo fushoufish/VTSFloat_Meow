@@ -196,7 +196,7 @@
   "密码": ["密碼", "Password", "パスワード", "비밀번호", "Пароль"],
   "点击下载": ["點擊下載", "Download file", "ファイルをダウンロード", "파일 다운로드", "Скачать файл"],
   "访问下载页面": ["前往下載頁面", "Open download page", "ダウンロードページを開く", "다운로드 페이지 열기", "Открыть страницу загрузки"],
-  "CNB-腾讯云": ["CNB-騰訊雲", "CNB-Tencent Cloud", "CNB-Tencent Cloud", "CNB-Tencent Cloud", "CNB-Tencent Cloud"],
+  "-腾讯云": ["-騰訊雲", "-Tencent Cloud", "-Tencent Cloud", "-Tencent Cloud", "-Tencent Cloud"],
   "选择下载来源": [
     "選擇下載來源",
     "Choose a download source",

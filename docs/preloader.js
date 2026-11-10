@@ -53,8 +53,8 @@
   };
 
   const urls = new Set();
-  document.querySelectorAll('img[src], video[src], source[src]').forEach((element) => {
-    const url = toAbsoluteUrl(element.getAttribute('src'));
+  document.querySelectorAll('img[src], video[src], video[data-src], source[src]').forEach((element) => {
+    const url = toAbsoluteUrl(element.getAttribute('src') || element.getAttribute('data-src'));
     if (url) urls.add(url);
   });
   document.querySelectorAll('img[srcset], source[srcset]').forEach((element) => {
@@ -78,6 +78,10 @@
   });
 
   const assets = Array.from(urls).filter(Boolean);
+  const priorityUrls = new Set([
+    toAbsoluteUrl('assets/desktop-model.mp4'),
+    toAbsoluteUrl('assets/VTSFloat_Meow.webp')
+  ]);
   let completed = 0;
   let failures = 0;
 
@@ -96,7 +100,8 @@
         cache: 'force-cache',
         credentials: new URL(url).origin === window.location.origin ? 'same-origin' : 'omit',
         mode: new URL(url).origin === window.location.origin ? 'same-origin' : 'no-cors',
-        signal: controller.signal
+        signal: controller.signal,
+        priority: priorityUrls.has(url) ? 'high' : 'low'
       });
       if (!response.ok && response.type !== 'opaque') throw new Error(`HTTP ${response.status}`);
       if (response.type !== 'opaque') await response.arrayBuffer();
@@ -110,12 +115,22 @@
   };
 
   const runQueue = async () => {
+    // Finish both hero assets before starting other preload workers or video sources.
+    await Promise.all(assets.filter((url) => priorityUrls.has(url)).map(fetchAsset));
+    document.querySelectorAll('video[data-src]').forEach((video) => {
+      video.src = video.dataset.src;
+      video.removeAttribute('data-src');
+      video.preload = 'auto';
+      video.load();
+      if (video.autoplay) video.play().catch(() => {});
+    });
+    const remaining = assets.filter((url) => !priorityUrls.has(url));
     let next = 0;
     const worker = async () => {
-      while (next < assets.length) {
+      while (next < remaining.length) {
         const index = next;
         next += 1;
-        await fetchAsset(assets[index]);
+        await fetchAsset(remaining[index]);
       }
     };
     await Promise.all(Array.from({ length: Math.min(4, Math.max(assets.length, 1)) }, worker));
