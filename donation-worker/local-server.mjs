@@ -17,7 +17,7 @@ http.createServer(async(req,res)=>{
  try{
   if(req.headers.host!==`127.0.0.1:${port}`)return send(403,{error:'Use the 127.0.0.1 preview address.'});
   const url=new URL(req.url,origin);
-  if(url.pathname==='/api/config')return send(200,{mock,currency:'usd'});
+  if(url.pathname==='/api/config')return send(200,{mock,currency:'hkd'});
   if(url.pathname==='/mock-checkout'&&mock){
    const id=url.searchParams.get('id'),session=sessions.get(id);if(!session)return send(404,{error:'Demo session expired.'});
    return send(200,`<!doctype html><html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Local demo checkout</title><body style="font:18px/1.7 system-ui;max-width:550px;margin:60px auto;padding:24px"><h1>Local demo checkout</h1><p>This is a simulation, not Stripe. No card details or money are collected.</p><p>Amount: ${session.currency.toUpperCase()} ${(session.cents/100).toFixed(2)}</p><form method="post" action="/mock-complete"><input type="hidden" name="id" value="${id}"><button style="padding:14px">Simulate successful payment</button></form><p><a href="/support.html?status=cancel">Cancel and return</a></p></body></html>`,'text/html; charset=utf-8');

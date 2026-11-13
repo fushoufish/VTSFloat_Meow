@@ -1,5 +1,5 @@
-const amountLimits = { usd: [100, 30000], cny: [1000, 200000] };
-const allowedCurrency = currency => currency === 'usd' || currency === 'cny';
+const amountLimits = { hkd: [1000, 200000], usd: [100, 30000], cny: [1000, 200000] };
+const allowedCurrency = currency => Object.hasOwn(amountLimits, currency);
 
 export function parseAmount(value, currency = 'usd') {
   if (!allowedCurrency(currency)) throw Error('Unsupported donation currency.');
@@ -7,7 +7,7 @@ export function parseAmount(value, currency = 'usd') {
   const [whole, fraction = ''] = value.split('.');
   const cents = Number(whole)*100 + Number(fraction.padEnd(2,'0'));
   const [minimum, maximum] = amountLimits[currency];
-  if (cents < minimum || cents > maximum) throw Error(currency === 'usd' ? 'Choose USD 1 to USD 300.' : 'Choose CNY 10 to CNY 2,000.');
+  if (cents < minimum || cents > maximum) throw Error(currency === 'hkd' ? 'Choose HKD 10 to HKD 2,000.' : currency === 'usd' ? 'Choose USD 1 to USD 300.' : 'Choose CNY 10 to CNY 2,000.');
   return cents;
 }
 export default {
@@ -23,7 +23,7 @@ export default {
   const ready = keyPattern.test(env.STRIPE_SECRET_KEY || '') && !!env.RATE_LIMITER;
   const project = live ? 'vtsfloat-support' : 'vtsfloat-support-test';
   const path = new URL(request.url).pathname;
-  if(request.method==='GET' && path==='/api/config') return reply({live,ready,currency:'usd'});
+  if(request.method==='GET' && path==='/api/config') return reply({live,ready,currency:'hkd'});
   if(request.method==='OPTIONS') return new Response(null,{status:204,headers:{...headers,'Access-Control-Allow-Methods':'GET, POST','Access-Control-Allow-Headers':'Content-Type'}});
   if(request.method!=='POST') return reply({error:'Method not allowed.'},405);
   if(!request.headers.get('Content-Type')?.startsWith('application/json')) return reply({error:'JSON required.'},415);
@@ -49,7 +49,7 @@ export default {
     try { cents=parseAmount(data.amount,currency); } catch(e) { return reply({error:e.message},400); }
     if(typeof data.nickname!=='string' || data.nickname.length>60 || !/^[a-f0-9-]{36}$/.test(data.requestId||'')) return reply({error:'Invalid nickname or request ID.'},400);
     const body=new URLSearchParams({mode:'payment','managed_payments[enabled]':'false','line_items[0][price_data][currency]':currency,'line_items[0][price_data][unit_amount]':String(cents),'line_items[0][price_data][product_data][name]':live?'Support VTSFloat_Meow':'Support VTSFloat_Meow (test)','line_items[0][quantity]':'1','metadata[project]':project,'metadata[nickname]':data.nickname.trim(),success_url:returnUrl+'?session_id={CHECKOUT_SESSION_ID}',cancel_url:returnUrl+'?status=cancel'});
-    if(currency==='usd') body.set('adaptive_pricing[enabled]','false');
+    if(currency!=='cny') body.set('adaptive_pricing[enabled]','false');
     const result=await stripe('',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','Idempotency-Key':'vts-support-'+data.requestId},body});
     if(result.livemode!==live || !result.url?.startsWith('https://checkout.stripe.com/')) throw Error('Unexpected checkout response.');
     return reply({url:result.url});

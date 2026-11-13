@@ -15,7 +15,7 @@ test('both production origins pass CORS; unlisted and missing origins are reject
  for(const [origin] of sites){
   const config=await worker.fetch(new Request(workerOrigin+'/api/config',{headers:{Origin:origin}}),env);
   assert.equal(config.headers.get('access-control-allow-origin'),origin);
-  assert.deepEqual(await config.json(),{live:false,ready:true,currency:'usd'});
+  assert.deepEqual(await config.json(),{live:false,ready:true,currency:'hkd'});
   const preflight=await worker.fetch(new Request(workerOrigin+'/api/checkout',{method:'OPTIONS',headers:{Origin:origin,'Access-Control-Request-Method':'POST'}}),env);
   assert.equal(preflight.status,204);
   assert.equal(preflight.headers.get('access-control-allow-origin'),origin);
@@ -29,18 +29,18 @@ test('both production origins pass CORS; unlisted and missing origins are reject
 test('both sites create a USD checkout and return to their own page; cached pages stay in CNY',async()=>{
  const saved=globalThis.fetch;
  try{
-  for(const [origin,returnUrl] of sites) for(const currency of ['usd','cny']){
+  for(const [origin,returnUrl] of sites) for(const currency of ['usd','cny','hkd']){
    globalThis.fetch=async(url,options)=>{
     assert.equal(url,'https://api.stripe.com/v1/checkout/sessions');
     assert.equal(options.body.get('line_items[0][price_data][currency]'),currency);
     assert.equal(options.body.get('line_items[0][price_data][unit_amount]'),currency==='usd'?'100':'2001');
-    assert.equal(options.body.get('adaptive_pricing[enabled]'),currency==='usd'?'false':null);
+    assert.equal(options.body.get('adaptive_pricing[enabled]'),currency==='cny'?null:'false');
     assert.equal(options.body.get('success_url'),returnUrl+'?session_id={CHECKOUT_SESSION_ID}');
     assert.equal(options.body.get('cancel_url'),returnUrl+'?status=cancel');
     assert.equal(options.headers['Idempotency-Key'],'vts-support-'+valid.requestId);
     return Response.json({livemode:false,url:'https://checkout.stripe.com/test'});
    };
-   const r=await call('/api/checkout',{...valid,currency:currency==='usd'?currency:undefined,amount:currency==='usd'?'1.00':'20.01',return_url:'https://evil.example'},{},origin);
+   const r=await call('/api/checkout',{...valid,currency:currency==='cny'?undefined:currency,amount:currency==='usd'?'1.00':'20.01',return_url:'https://evil.example'},{},origin);
    assert.equal(r.status,200,await r.clone().text());
    assert.equal(r.headers.get('access-control-allow-origin'),origin);
   }
