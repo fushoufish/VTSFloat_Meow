@@ -16,7 +16,8 @@
 .stripe-action{display:flex;align-items:center;gap:9px}
 .stripe-action img{flex:none;width:46px;height:auto}
 .stripe-methods{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px;max-width:57%;font-size:11px;line-height:1.3}
-.stripe-methods img{display:block;width:33px;height:22px;object-fit:contain}
+.stripe-methods{align-items:center}
+.stripe-methods img{display:block;object-fit:contain}
 @media(max-width:480px){#pay{align-items:flex-start;flex-direction:column}.stripe-methods{max-width:100%;align-self:flex-end}}
 </style>
 </head>
@@ -31,9 +32,9 @@
 <button id="pay" class="pay" type="submit">
   <span class="stripe-action"><img src="assets/payment-stripe.svg?v=transparent-1" alt="" width="46" height="19"><span id="stripe-label">Support with Stripe</span></span>
   <span class="stripe-methods">
-    <img src="assets/payment-apple-pay.svg?v=transparent-1" alt="Apple Pay" width="33" height="22">
-    <img src="assets/payment-link.svg?v=transparent-1" alt="Link" width="33" height="22">
-    <img src="assets/payment-wechat-pay.svg?v=transparent-1" alt="WeChat Pay" width="33" height="22">
+    <img src="assets/payment-apple-pay.svg?v=wallet-size-1" alt="Apple Pay" width="42" height="22">
+    <img src="assets/payment-link.svg?v=wallet-size-1" alt="Link" width="46" height="22">
+    <img src="assets/payment-wechat-pay.svg?v=wallet-size-1" alt="WeChat Pay" width="24" height="22">
     <img src="assets/payment-jcb.svg?v=transparent-1" alt="JCB" width="33" height="22">
     <img src="assets/payment-visa.svg?v=transparent-1" alt="Visa" width="33" height="22">
     <img src="assets/payment-mastercard.svg?v=transparent-1" alt="Mastercard" width="33" height="22">
