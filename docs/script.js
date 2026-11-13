@@ -215,6 +215,7 @@ downloadButton?.addEventListener('click', () => {
 });
 
 downloadDialog?.querySelector('.download-close').addEventListener('click', () => downloadDialog.close());
+document.getElementById('download-verify-link')?.addEventListener('click', () => downloadDialog.close());
 downloadDialog?.addEventListener('click', (event) => {
   if (event.target !== downloadDialog) return;
   const bounds = downloadDialog.getBoundingClientRect();

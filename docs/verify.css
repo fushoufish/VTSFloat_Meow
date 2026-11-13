@@ -38,3 +38,70 @@
   .verify-page .topbar { padding-inline: 14px; }
   .verify-result dl { grid-template-columns: minmax(0, 1fr); }
 }
+
+.main-content > section.verify-inline {
+  margin-top: 20px;
+  padding-top: 0;
+}
+.main-content > .verify-inline + .custom-features-section {
+  padding-top: clamp(30px, 4vw, 54px);
+}
+.verify-inline .verify-drop {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  justify-items: stretch;
+  align-items: center;
+  gap: 14px;
+  min-height: 72px;
+  padding: 13px 20px;
+  text-align: start;
+  transition: background-color .2s ease, border-color .2s ease;
+}
+.verify-inline-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.verify-inline-copy strong {
+  color: #423963;
+  font-size: 16px;
+}
+.verify-inline-copy > span, .verify-inline-action {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.verify-inline .verify-inline-action {
+  max-width: 200px;
+  padding: 7px 12px;
+  border-radius: 9px;
+  color: #423963;
+  background: var(--panel);
+  text-align: center;
+}
+.verify-inline :focus-visible {
+  outline: 2px solid #62529c;
+  outline-offset: 3px;
+}
+.verify-reveal {
+  display: flow-root;
+  overflow: clip;
+}
+.verify-inline .verify-result {
+  margin-top: 12px;
+}
+.verify-inline .verify-result :focus-visible {
+  outline-offset: 1px;
+}
+.verify-inline .verify-result[hidden], .verify-inline .verify-result [hidden] {
+  display: none;
+}
+@media (max-width: 520px) {
+  .verify-inline .verify-drop {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 8px 12px;
+    padding-inline: 15px;
+  }
+  .verify-inline-action {
+    grid-column: 2;
+    justify-self: start;
+  }
+}

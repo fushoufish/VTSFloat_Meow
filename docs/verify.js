@@ -4,8 +4,12 @@
   const releases = 'https://github.com/' + repository + '/releases';
   const exeName = 'VTSFloat_Meow.exe';
   const drop = document.getElementById('verify-drop');
+  if (!drop) return;
   const input = document.getElementById('verify-file');
+  const prompt = document.getElementById('verify-prompt');
   const result = document.getElementById('verify-result');
+  const reveal = result.closest('.verify-reveal');
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const status = document.getElementById('verify-status');
   const detail = document.getElementById('verify-detail');
   const facts = document.getElementById('verify-facts');
@@ -20,11 +24,17 @@
   let pending;
   let dragDepth = 0;
   let view;
+  let revealAnimation;
 
   function render() {
     if (!view) return;
     const { state, title, description, file, digest, tag, provenance } = view;
-    result.hidden = false;
+    const previousHeight = reveal?.getBoundingClientRect().height;
+    revealAnimation?.cancel();
+    if (prompt) {
+      prompt.textContent = translate(state === 'loading' ? title : '或点击选择文件');
+    }
+    result.hidden = Boolean(prompt && state === 'loading');
     result.dataset.state = state;
     status.textContent = translate(title);
     detail.textContent = translate(description).replace('{version}', () => tag ?? '');
@@ -35,6 +45,17 @@
     release.hidden = !tag;
     proof.hidden = provenance !== 'GitHub 已记录构建证明';
     if (tag) release.href = releases + '/tag/' + encodeURIComponent(tag);
+
+    if (!reveal || reducedMotion.matches || result.hidden) return;
+    const nextHeight = reveal.getBoundingClientRect().height;
+    if (Math.abs(nextHeight - previousHeight) < 1) return;
+    revealAnimation = reveal.animate([
+      { height: previousHeight + 'px', opacity: previousHeight === 0 ? 0 : 1 },
+      { height: nextHeight + 'px', opacity: 1 }
+    ], {
+      duration: previousHeight === 0 ? 340 : 220,
+      easing: 'cubic-bezier(.2, .75, .25, 1)'
+    });
   }
 
   async function getJson(url, signal) {
@@ -174,10 +195,11 @@
     dragDepth = Math.max(0, dragDepth - 1);
     if (!dragDepth) delete drop.dataset.dragging;
   });
-  window.addEventListener('dragover', (event) => {
+  const dropTarget = prompt ? drop : window;
+  dropTarget.addEventListener('dragover', (event) => {
     if (event.dataTransfer?.types.includes('Files')) event.preventDefault();
   });
-  window.addEventListener('drop', (event) => {
+  dropTarget.addEventListener('drop', (event) => {
     if (!event.dataTransfer?.files.length) return;
     event.preventDefault();
     dragDepth = 0;
