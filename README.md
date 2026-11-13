@@ -65,16 +65,15 @@ UpdateLayeredWindow 提交为 Win32 透明分层窗口
 
 Spout2 接收端已经集成到程序中，用户不需要单独安装或启动 Spout2。
 
-完整的数据流、透明合成、GPU 同步、性能统计和早期瓶颈说明见：[项目说明：实现原理与性能演进](./md/项目说明_实现原理与性能演进.md)。
-
-分辨率采集步骤、字段口径与输出文件见：[分辨率性能采集](./md/分辨率性能采集.md)。
+开发进度见 [开发进度与任务流](./md/开发进度与任务流.md)。渲染管线、透明合成、GPU 同步和性能演进见 [项目说明_实现原理与性能演进](./md/项目说明_实现原理与性能演进.md)。
 
 ### 本地处理与隐私
 
 项目网站的隐私政策见：[隐私政策 / Privacy Policy](https://fushoufish.github.io/VTSFloat_Meow/privacy.html)。
 
-- 程序不会注入游戏或应用，不读取游戏画面，也不参与游戏渲染。
-- 程序可以完全离线运行；VTube Studio Plugins API 仅通过 `localhost` 与本机 VTube Studio 通信。
+- 程序在桌面独立合成模型。开启背景混合或阴影的背景取色时，程序会在本机采样模型周围的屏幕底色。
+- 模型悬浮可离线使用。VTube Studio Plugins API 通过 `localhost` 与本机 VTube Studio 通信。
+- 检查和下载更新会请求 GitHub 公开 Release，原生连接失败时尝试 `gh-proxy.com`。
 - 程序不会访问 VTube Studio 使用的摄像头或其他连接设备。
 - 接收到的模型画面只在本机 GPU 与 Windows 桌面合成链路中处理，不会上传或录制保存。
 
@@ -85,7 +84,13 @@ Spout2 接收端已经集成到程序中，用户不需要单独安装或启动 
 3. 启用 **Spout2**，背景选择 `ColorPicker`，然后开启**透明推流**。
 4. 运行 `VTSFloat_Meow.exe`。程序会从注册表查找 Steam 与 VTube Studio 路径；未找到时可手动选择。
 5. 首次使用 API 功能时，在 VTube Studio 中允许 `VTSFloat_Meow` 插件连接。
-6. 调整窗口后点击“完成”锁定；默认锁定/解锁快捷键为 `Ctrl+Shift+L`。
+6. 调整窗口后点击“完成”锁定并隐藏工具栏。首次点击“完成”会显示操作指引。按 `Ctrl+Shift+L` 可重新打开工具栏，点“快捷键”可直接设置组合键。
+
+### 检查更新
+
+鼠标停在工具栏的 GitHub 图标上可查看当前版本，并点击“检查更新”。程序只在用户点击后检查版本。“暂不更新”和 × 都会关闭本次提示。
+
+选择“更新并重启”后，程序会校验下载、保存当前设置，并在原路径替换 EXE。新版确认启动并显示成功提示后清理旧版备份，启动失败时恢复旧版。
 
 ### VTube Studio API
 
@@ -106,21 +111,23 @@ Spout2 接收端已经集成到程序中，用户不需要单独安装或启动 
 
 ## 6. 设置与重置
 
+首次启动时，程序会创建专用缓存目录 `%LOCALAPPDATA%\VTSFloat_Meow`。鼠标停在工具栏的 GitHub 图标上，从“调试 → 打开缓存文件夹”打开。
+
 程序设置保存在：
 
 ```text
-%LOCALAPPDATA%\vts_overlay_layered.ini
+%LOCALAPPDATA%\VTSFloat_Meow\vts_overlay_layered.ini
 ```
 
-其中包括窗口位置、尺寸、比例、帧率、GPU、边框、悬停范围、表情和快捷键。可通过“调试 → 清除缓存并重置脚本”恢复默认状态；该操作不会修改 VTube Studio 的安装目录、模型文件或已经生成的基准数据。
+其中包括窗口位置、尺寸、比例、帧率、GPU、边框、悬停范围、表情和快捷键。可通过 GitHub 菜单中的“调试 → 清除缓存并重置脚本”恢复默认设置。专用目录中没有设置文件时，程序会迁移旧版 Local 设置，并转换已知旧字段。
 
-运行日志保存在 `%LOCALAPPDATA%\vts_overlay_layered.log`。分辨率基准数据默认保存在“文档\VTSFloat_Meow Benchmarks”目录，每次任务使用独立的 `capture_日期_时间` 文件夹。
+运行日志保存在缓存目录中的 `vts_overlay_layered.log`，更新任务保存在 `VTSFloat_Meow-updates` 子目录。
 
 首次启动且尚未保存语言偏好时，程序会按照 Windows 显示语言自动选择简体中文、繁体中文、
 English、日本語、한국어或Русский；后续启动会记住用户在语言菜单中的选择。
 
-多语言版本会在 `%LOCALAPPDATA%\VTSFloat_Meow.custom-language.ini` 生成自定义语言模板，
-不会在桌面或程序旁创建配置文件。该模板以英文为对照，保留左侧
+程序会在缓存目录中生成自定义语言模板 `VTSFloat_Meow.custom-language.ini`。
+该模板以英文为对照，保留左侧
 `T_` 键并修改等号与 ` #英文备注` 之间的文字即可制作新的语言；行尾备注不会显示，缺失或留空的内容自动使用英文。可在
 “Language → Edit custom language file…”中打开，保存后重新选择 `Custom (INI)` 即可载入。
 
@@ -156,17 +163,13 @@ VTSFloat_Meow/
 ├─ st_vts_api.png                         VTube Studio API 设置示意图
 │
 ├─ md/
-│  ├─ 项目说明_实现原理与性能演进.md       渲染链路与性能演进记录
-│  └─ 分辨率性能采集.md                   基准采集流程、字段与文件格式
+│  └─ 项目说明_实现原理与性能演进.md       渲染链路与性能演进记录
 │
 └─ native/                                Windows 原生程序源码
    ├─ CMakeLists.txt                      CMake 目标、依赖与测试配置
    ├─ build_native.ps1                    MSVC x64 Release 构建脚本
    ├─ check_localization.ps1              本地化完整性检查
    ├─ overlay_layered.cpp                 主程序、窗口、渲染与交互逻辑
-   ├─ benchmark_capture.h                 基准采集接口
-   ├─ benchmark_capture.cpp               CSV 写入与采样实现
-   ├─ benchmark_capture_tests.cpp         基准采集测试
    ├─ desktop_mode_policy.h               桌面模式全屏判定规则
    ├─ desktop_mode_tests.cpp              桌面模式判定测试
    ├─ localization.h                      本地化接口与语言枚举
@@ -178,7 +181,7 @@ VTSFloat_Meow/
    ├─ overlay_resources.rc                Windows 图标与资源脚本
    ├─ resource.h                          Windows 资源标识
    ├─ github.svg                          GitHub 图标源文件
-   ├─ github_mark.ico                     GitHub 图标资源
+   ├─ github_mark.h                       GitHub 矢量图标绘制
    ├─ assets/
    │  └─ VTSFloat_Meow.ico                主程序图标
    └─ third_party/Spout2/                 内置 Spout2 第三方源码与许可证

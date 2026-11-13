@@ -31,11 +31,28 @@ jobs:
       - name: Run tests
         run: ctest --test-dir native/build -C Release --output-on-failure
 
-      - name: Upload unsigned artifact
+      - name: Check the Release tag matches the EXE version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -notmatch '^v\d+\.\d+(\.\d+)?$') {
+            Write-Host "Skipping update version validation for $tag."
+            exit 0
+          }
+          $expected = [version]$tag.Substring(1)
+          $file = [Diagnostics.FileVersionInfo]::GetVersionInfo(
+            (Resolve-Path 'artifacts/VTSFloat_Meow.exe').Path)
+          $actual = [version]::new($file.FileMajorPart, $file.FileMinorPart, $file.FileBuildPart)
+          $normalized = [version]::new($expected.Major, $expected.Minor, [Math]::Max(0, $expected.Build))
+          if ($actual -ne $normalized) {
+            throw "Release $tag does not match EXE version $actual. Update native/CMakeLists.txt."
+          }
+
+      - name: Upload release artifact
         id: release-artifact
         uses: actions/upload-artifact@v4
         with:
-          name: VTSFloat_Meow-unsigned
+          name: VTSFloat_Meow
           path: artifacts/VTSFloat_Meow.exe
           if-no-files-found: error
 

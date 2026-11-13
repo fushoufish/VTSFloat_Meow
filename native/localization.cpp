@@ -1,4 +1,5 @@
 #include "localization.h"
+#include "cache_directory.h"
 
 #include <array>
 #include <atomic>
@@ -32,21 +33,123 @@ struct Translation {
 // name (Spout2, Plugins API, expression), and normal desktop-app language
 // elsewhere. These are authored translations, not runtime machine output.
 constexpr Translation kTranslations[] = {
+    {L"检查更新", L"Check for updates", L"更新を確認", L"업데이트 확인", L"Проверить обновления"},
+    {L"当前版本：", L"Current version: ", L"現在のバージョン：", L"현재 버전: ", L"Текущая версия: "},
+    {L"正在检查更新…", L"Checking for updates…", L"更新を確認中…", L"업데이트 확인 중…", L"Проверка обновлений…"},
+    {L"尝试其他线路", L"Trying another route", L"別の経路で再試行中", L"다른 경로로 시도 중", L"Пробуем другой маршрут"},
+    {L"存在新版本：", L"New version: ", L"新しいバージョン：", L"새 버전: ", L"Новая версия: "},
+    {L"，是否更新？", L". Update?", L"。更新しますか？", L". 업데이트할까요?", L". Обновить?"},
+    {L"暂不更新", L"Not now", L"後で", L"나중에", L"Не сейчас"},
+    {L"更新并重启", L"Update and restart", L"更新して再起動", L"업데이트 후 재시작", L"Обновить и перезапустить"},
+    {L"当前已是最新版本", L"You're on the latest version", L"現在のバージョンは最新です", L"현재 최신 버전입니다", L"Установлена последняя версия"},
+    {L"检查失败", L"Update check failed", L"更新の確認に失敗しました", L"업데이트 확인 실패", L"Не удалось проверить обновления"},
+    {L"正在下载更新…", L"Downloading update…", L"更新をダウンロード中…", L"업데이트 다운로드 중…", L"Загрузка обновления…"},
+    {L"下载更新失败", L"Update download failed", L"更新のダウンロードに失敗しました", L"업데이트 다운로드 실패", L"Не удалось загрузить обновление"},
+    {L"正在准备更新…", L"Preparing update…", L"更新を準備中…", L"업데이트 준비 중…", L"Подготовка обновления…"},
+    {L"保存设置失败，更新已取消", L"Settings could not be saved. Update cancelled.", L"設定を保存できなかったため、更新を中止しました", L"설정을 저장할 수 없어 업데이트를 취소했습니다", L"Настройки не сохранены. Обновление отменено."},
+    {L"更新成功，当前版本号为 ", L"Update complete. Current version: ", L"更新完了。現在のバージョン：", L"업데이트 완료. 현재 버전: ", L"Обновление завершено. Версия: "},
+    {L"更新失败", L"Update failed", L"更新に失敗しました", L"업데이트 실패", L"Не удалось обновить"},
+    {L"更新失败，已恢复旧版本", L"Update failed. Previous version restored.", L"更新に失敗したため、以前のバージョンに戻しました", L"업데이트에 실패하여 이전 버전을 복원했습니다", L"Обновление не удалось. Предыдущая версия восстановлена."},
+    {L"更新未完成，已保留旧版本备份", L"Update incomplete. Previous version backup retained.", L"更新が完了していません。以前のバージョンのバックアップを保持しました", L"업데이트가 완료되지 않아 이전 버전 백업을 보관했습니다", L"Обновление не завершено. Резервная копия сохранена."},
     {L"：", L": ", L"：", L": ", L": "},
     {L"图形设置", L"Graphics", L"グラフィック", L"그래픽", L"Графика"},
-    {L"悬浮窗口", L"Floating", L"フロート", L"플로팅", L"Поверх"},
-    {L"桌面模式", L"Desktop", L"デスクトップ", L"데스크톱", L"На столе"},
+    {L"选择快捷应用", L"Choose a shortcut app", L"起動するアプリを選択", L"바로 실행할 앱 선택", L"Выбрать приложение"},
+    {L"无法保存快捷应用设置", L"Could not save the app shortcut.", L"アプリの設定を保存できませんでした。", L"앱 바로 가기를 저장하지 못했습니다.", L"Не удалось сохранить ярлык приложения."},
+    {L"无法启动快捷应用，请检查文件路径", L"Could not launch the app. Check its file path.", L"アプリを起動できません。ファイルのパスを確認してください。", L"앱을 실행할 수 없습니다. 파일 경로를 확인하세요.", L"Не удалось запустить приложение. Проверьте путь к файлу."},
+    {L"启动其他应用", L"Launch another app", L"別のアプリを起動", L"다른 앱 실행", L"Запустить приложение"},
+    {L"第三方", L"Third-party", L"外部アプリ", L"외부 앱", L"Стороннее ПО"},
+    {L"自动选择", L"Automatic", L"自動選択", L"자동 선택", L"Автовыбор"},
+    {L"Spout2 发送源", L"Spout2 sender", L"Spout2 送信元", L"Spout2 송신 소스", L"Источник Spout2"},
+    {L"请在图形设置中选择 Spout2 发送源", L"Choose a Spout2 sender in Graphics.", L"グラフィック設定で Spout2 の送信元を選択してください。", L"그래픽 설정에서 Spout2 송신 소스를 선택하세요.", L"Выберите источник Spout2 в настройках графики."},
+    {L"窗口模式", L"Window mode", L"ウィンドウモード", L"창 모드", L"Режим окна"},
+    {L"比例锁定", L"Lock aspect ratio", L"比率を固定", L"비율 잠금", L"Фиксация пропорций"},
     {L"桌面模式：其他程序全屏时暂停输出", L"Desktop mode: pause output while another app is fullscreen", L"デスクトップ：他のアプリが全画面の間は出力を一時停止", L"데스크톱 모드: 다른 앱이 전체 화면이면 출력 일시 정지", L"Режим рабочего стола: приостанавливать вывод, когда другое приложение на весь экран"},
-    {L"切换屏幕", L"Next", L"画面切替", L"화면 전환", L"Экран"},
-    {L"锁定/解锁 ", L"Lock/unlock ", L"ロック切替 ", L"잠금 전환 ", L"Блокировка "},
+    {L"裁剪", L"Crop", L"切り抜き", L"자르기", L"Обрезка"},
+    {L"快捷键", L"Shortcut", L"ショートカット", L"단축키", L"Клавиши"},
     {L"请按组合键（Esc取消）", L"Press shortcut (Esc to cancel)", L"ショートカットを入力（Escで取消）", L"단축키 입력(Esc: 취소)", L"Нажмите сочетание (Esc — отмена)"},
-    {L"比例 锁定", L"Aspect on", L"比率固定", L"비율 잠금", L"Фикс."},
-    {L"比例 自由", L"Free", L"比率自由", L"비율 자유", L"Своб."},
     {L"个性化", L"Style", L"カスタム", L"꾸미기", L"Вид"},
+    {L"画面编辑", L"Edit view", L"画面を編集", L"화면 편집", L"Правка кадра"},
+    {L"图像", L"Image", L"画像", L"이미지", L"Изображение"},
+    {L"画面混合", L"Image blending", L"画像の合成", L"이미지 혼합", L"Наложение"},
+    {L"对比度", L"Contrast", L"コントラスト", L"대비", L"Контраст"},
+    {L"饱和度", L"Saturation", L"彩度", L"채도", L"Насыщенность"},
+    {L"色相", L"Hue", L"色相", L"색조", L"Цветовой тон"},
+    {L"色温", L"Temperature", L"色温度", L"색온도", L"Темп. цвета"},
+    {L"清晰度", L"Clarity", L"明瞭度", L"명료도", L"Чёткость"},
+    {L"暗角", L"Vignette", L"周辺光量", L"비네팅", L"Виньетка"},
+    {L"锐化", L"Sharpening", L"シャープ", L"선명 효과", L"Резкость"},
+    {L"混合模式", L"Blend mode", L"描画モード", L"혼합 모드", L"Режим"},
+    {L"混合强度", L"Blend strength", L"合成の強さ", L"혼합 강도", L"Сила эффекта"},
+    {L"渐变网格", L"Gradient grid", L"グラデーション分割", L"그라데이션 격자", L"Сетка"},
+    {L"以角色下方的平均色作为混合底色", L"Uses the average color around the model", L"モデル周囲の平均色を使用", L"모델 주변의 평균 색상 사용", L"Используется средний цвет вокруг модели"},
+    {L"无法捕获屏幕背景", L"Screen backdrop is unavailable", L"画面の背景を取得できません", L"화면 배경을 캡처할 수 없음", L"Захват фона экрана недоступен"},
+    {L"正常", L"Normal", L"通常", L"표준", L"Обычный"},
+    {L"变暗", L"Darken", L"比較（暗）", L"어둡게 하기", L"Затемнение"},
+    {L"正片叠底", L"Multiply", L"乗算", L"곱하기", L"Умножение"},
+    {L"滤色", L"Screen", L"スクリーン", L"스크린", L"Экран"},
+    {L"颜色减淡", L"Color Dodge", L"覆い焼きカラー", L"색상 닷지", L"Осветление основы"},
+    {L"颜色加深", L"Color Burn", L"焼き込みカラー", L"색상 번", L"Затемнение основы"},
+    {L"线性减淡（添加）", L"Linear Dodge (Add)", L"覆い焼き（リニア）- 加算", L"선형 닷지(추가)", L"Линейный осветлитель (добавить)"},
+    {L"线性加深", L"Linear Burn", L"焼き込み（リニア）", L"선형 번", L"Линейный затемнитель"},
+    {L"深色", L"Darker Color", L"カラー比較（暗）", L"어두운 색상", L"Темнее"},
+    {L"实色混合", L"Hard Mix", L"ハードミックス", L"하드 혼합", L"Жёсткое смешение"},
+    {L"我不想连接VTube Studio API进行使用", L"Use without VTube Studio API", L"VTube Studio API に接続せず使う", L"VTube Studio API 연결 없이 사용", L"Продолжить без VTube Studio API"},
+    {L"正在连接 VTube Studio API", L"Connecting to VTube Studio API", L"VTube Studio API に接続中", L"VTube Studio API 연결 중", L"Связь с API VTube Studio"},
+    {L"连接VTube Studio API", L"Connect VTube Studio API", L"VTube Studio API に接続", L"VTube Studio API 연결", L"Подключить VTube Studio API"},
+    {L"可左右拖拽调整数值", L"Drag left or right to adjust", L"左右にドラッグして値を調整", L"좌우로 드래그하여 값 조절", L"Перетащите влево или вправо"},
+    {L"羽化与旋转", L"Feather & Rotate", L"境界のぼかしと回転", L"가장자리 흐림 및 회전", L"Растушёвка и поворот"},
+    {L"阴影", L"Shadow", L"シャドウ", L"그림자", L"Тень"},
+    {L"悬停时同时淡化阴影", L"Fade shadows on hover", L"ホバー時に影も薄くする", L"호버 시 그림자도 흐리게", L"Ослаблять тени при наведении"},
+    {L"启用阴影", L"Enable", L"シャドウを有効化", L"그림자 사용", L"Включить"},
+    {L"内部阴影", L"Inner Shadow", L"シャドウ（内側）", L"내부 그림자", L"Внутр. тень"},
+    {L"外部阴影", L"Drop Shadow", L"ドロップシャドウ", L"외부 그림자", L"Внешняя тень"},
+    {L"阴影距离", L"Distance", L"距離", L"거리", L"Смещение"},
+    {L"阴影扩展", L"Spread", L"スプレッド", L"확산", L"Расширение"},
+    {L"阴影模糊", L"Blur", L"ぼかし", L"흐림", L"Размытие"},
+    {L"阴影颜色", L"Shadow Color", L"シャドウの色", L"그림자 색상", L"Цвет тени"},
+    {L"不透明度", L"Opacity", L"不透明度", L"불투명도", L"Непрозрачность"},
+    {L"参考背景像素", L"Sample Background", L"背景色を取得", L"배경색 샘플링", L"Цвет из фона"},
+    {L"加深程度", L"Darkening", L"暗くする量", L"어둡게 하기", L"Степень затемнения"},
+    {L"颜色", L"Color", L"カラー", L"색상", L"Цвет"},
+    {L"明度", L"Luminosity", L"輝度", L"광도", L"Яркость"},
+    {L"旋转与翻转", L"Rotate / Flip", L"回転・反転", L"회전·뒤집기", L"Поворот / отражение"},
+    {L"水平翻转", L"Flip Horiz.", L"左右反転", L"좌우 뒤집기", L"Отразить ↔"},
+    {L"垂直翻转", L"Flip Vert.", L"上下反転", L"상하 뒤집기", L"Отразить ↕"},
+    {L"角度", L"Angle", L"角度", L"각도", L"Угол"},
+    {L"曝光", L"Exposure", L"露出", L"노출", L"Экспозиция"},
+    {L"色阶", L"Levels", L"レベル", L"레벨", L"Уровни"},
+    {L"黑场", L"Black", L"黒点", L"검은점", L"Чёрный"},
+    {L"白场", L"White", L"白点", L"흰점", L"Белый"},
+    {L"曲线", L"Curves", L"トーンカーブ", L"곡선", L"Кривые"},
+    {L"原始分辨率", L"Source resolution", L"元の解像度", L"원본 해상도", L"Исходное разрешение"},
+    {L"裁剪分辨率", L"Crop size", L"切り抜きサイズ", L"자르기 크기", L"Размер обрезки"},
+    {L"锁定裁剪比例", L"Lock crop ratio", L"切り抜き比率を固定", L"자르기 비율 잠금", L"Зафиксировать пропорции"},
+    {L"裁剪比例已锁定", L"Crop ratio locked", L"切り抜き比率を固定中", L"자르기 비율 잠김", L"Пропорции зафиксированы"},
+    {L"重置", L"Reset", L"リセット", L"초기화", L"Сбросить"},
+    {L"边缘羽化", L"Edge feather", L"境界のぼかし", L"가장자리 페더", L"Растушёвка краёв"},
+    {L"进行画面设置时可能会增加性能开销", L"Adjusting view settings may increase processing load", L"画面設定の調整中は処理負荷が上がる場合があります", L"화면 설정을 조정하는 동안 처리 부하가 증가할 수 있습니다", L"При настройке изображения нагрузка может возрасти"},
+    {L"画面编辑菜单-", L"Edit View –", L"画面編集メニュー –", L"화면 편집 메뉴 –", L"Редактирование –"},
+    {L"画面设置", L"View settings", L"画面設定", L"화면 설정", L"Настройки кадра"},
+    {L"重置旋转与翻转", L"Reset rotation and flip", L"回転・反転をリセット", L"회전 및 뒤집기 초기화", L"Сбросить поворот и отражение"},
+    {L"按住输入框左右拖动可调整数值。", L"Drag a value left or right to adjust it.", L"数値欄を左右にドラッグして調整できます。", L"값을 좌우로 드래그하여 조정합니다.", L"Перетащите значение влево или вправо, чтобы изменить его."},
+    {L"点击边缘开关羽化", L"Click an edge to toggle feathering", L"辺をクリックしてぼかしを切り替え", L"가장자리를 클릭하여 페더 켜기/끄기", L"Щёлкните по краю для растушёвки"},
+    {L"左边缘", L"Left edge", L"左辺", L"왼쪽 가장자리", L"Левый край"},
+    {L"上边缘", L"Top edge", L"上辺", L"위쪽 가장자리", L"Верхний край"},
+    {L"右边缘", L"Right edge", L"右辺", L"오른쪽 가장자리", L"Правый край"},
+    {L"下边缘", L"Bottom edge", L"下辺", L"아래쪽 가장자리", L"Нижний край"},
+    {L"宽度", L"Width", L"幅", L"너비", L"Ширина"},
+    {L"高度", L"Height", L"高さ", L"높이", L"Высота"},
     {L"调试", L"Debug", L"デバッグ", L"디버그", L"Отладка"},
     {L"完成", L"Done", L"完了", L"완료", L"Готово"},
+    {L"点击「完成」会锁定悬浮窗口并隐藏工具栏。", L"Click Done to lock the overlay and hide the toolbar.", L"「完了」を押すと、フロートウィンドウが固定され、ツールバーが非表示になります。", L"‘완료’를 누르면 플로팅 창이 잠기고 도구 모음이 숨겨집니다.", L"Нажмите «Готово», чтобы закрепить окно и скрыть панель инструментов."},
+    {L"如果担心找不到界面，你可以在系统托盘中进行重置恢复。", L"If you lose track of the window, use the system tray menu to reset its position.", L"ウィンドウが見つからないときは、システムトレイのメニューから位置をリセットできます。", L"창을 찾을 수 없으면 시스템 트레이 메뉴에서 창 위치를 초기화할 수 있습니다.", L"Если окно потерялось, сбросьте его положение через меню в системном трее."},
+    {L"重新打开工具栏的快捷键：", L"Reopen the toolbar with ", L"ツールバーを再表示：", L"도구 모음 다시 열기: ", L"Показать панель снова: "},
+    {L"点击「快捷键」可以自定义组合键。", L"Click Shortcut to set your own key combination.", L"「ショートカット」でキーの組み合わせを変更できます。", L"‘단축키’를 눌러 키 조합을 변경할 수 있습니다.", L"Нажмите «Клавиши», чтобы изменить сочетание."},
+    {L"下一步", L"Next", L"次へ", L"다음", L"Далее"},
+    {L"知道了", L"Got it", L"了解", L"확인", L"Понятно"},
     {L"解锁", L"Unlock", L"ロック解除", L"잠금 해제", L"Разблокировать"},
     {L"调试模式已打开", L"Debug mode is on", L"デバッグモード：オン", L"디버그 모드 켜짐", L"Режим отладки включён"},
+    {L"打开缓存文件夹", L"Open cache folder", L"キャッシュフォルダーを開く", L"캐시 폴더 열기", L"Открыть папку кэша"},
     {L"清除缓存并重置脚本", L"Clear settings and reset", L"設定を消去してリセット", L"설정 삭제 및 초기화", L"Очистить настройки и сбросить"},
     {L"推荐（核显/节能 GPU）", L"Recommended (integrated/power-saving GPU)", L"推奨（内蔵／省電力 GPU）", L"권장(내장/절전 GPU)", L"Рекомендуется (встроенный/энергосберегающий GPU)"},
     {L"GPU 选择", L"GPU selection", L"GPU 選択", L"GPU 선택", L"Выбор GPU"},
@@ -62,7 +165,7 @@ constexpr Translation kTranslations[] = {
     {L"性能（最近邻，最低开销）", L"Performance (nearest-neighbor, lowest cost)", L"パフォーマンス（最近傍、最小負荷）", L"성능(최근접, 최소 부하)", L"Производительность (по соседнему, минимум нагрузки)"},
     {L"平衡（GPU 双线性，推荐）", L"Balanced (GPU bilinear, recommended)", L"バランス（GPU バイリニア、推奨）", L"균형(GPU 이중 선형, 권장)", L"Баланс (билинейная GPU, рекомендуется)"},
     {L"质量（GPU 双三次，更细腻）", L"Quality (GPU bicubic, finer edges)", L"品質（GPU バイキュービック、精細）", L"품질(GPU 바이큐빅, 더 세밀함)", L"Качество (бикубическая GPU, чётче)"},
-    {L"如何开启 VTubeStudio Plugins API", L"How to enable the VTube Studio Plugins API", L"VTube Studio Plugins API の有効化方法", L"VTube Studio Plugins API 활성화 방법", L"Как включить VTube Studio Plugins API"},
+    {L"如何开启 VTube Studio Plugins API", L"How to enable the VTube Studio Plugins API", L"VTube Studio Plugins API の有効化方法", L"VTube Studio Plugins API 활성화 방법", L"Как включить VTube Studio Plugins API"},
     {L"1. 打开 VTube Studio 设置。\n2. 在“常规设置”中启用“允许插件 API 访问”。\n3. 返回 VTSFloat_Meow，点击“扫描端口”。\n4. VTube Studio 弹出授权请求时，选择允许。", L"1. Open VTube Studio Settings.\n2. Under General Settings, enable “Allow Plugin API access”.\n3. Return to VTSFloat_Meow and select “Scan ports”.\n4. When VTube Studio asks for authorization, select Allow.", L"1. VTube Studio の設定を開きます。\n2. 「一般設定」で「プラグイン API へのアクセスを許可」を有効にします。\n3. VTSFloat_Meow に戻り、「ポートを検索」を選択します。\n4. VTube Studio に承認リクエストが表示されたら、許可します。", L"1. VTube Studio 설정을 엽니다.\n2. 일반 설정에서 ‘플러그인 API 접근 허용’을 켭니다.\n3. VTSFloat_Meow로 돌아가 ‘포트 검색’을 선택합니다.\n4. VTube Studio에 승인 요청이 표시되면 허용을 선택합니다.", L"1. Откройте настройки VTube Studio.\n2. В общих настройках включите «Разрешить доступ к Plugin API».\n3. Вернитесь в VTSFloat_Meow и выберите «Сканировать порты».\n4. Когда VTube Studio запросит авторизацию, нажмите «Разрешить»."},
     {L"无法打开自定义帧率输入框。", L"Could not open the custom frame-rate input.", L"カスタムフレームレート入力を開けませんでした。", L"사용자 지정 프레임 속도 입력을 열 수 없습니다.", L"Не удалось открыть ввод частоты кадров."},
     {L"请输入 1 到 240 之间的整数。", L"Enter a whole number from 1 to 240.", L"1～240 の整数を入力してください。", L"1~240 사이의 정수를 입력하세요.", L"Введите целое число от 1 до 240."},
@@ -71,7 +174,7 @@ constexpr Translation kTranslations[] = {
     {L"彩虹跑马灯", L"Rainbow chase", L"レインボーチェイス", L"무지개 추적 효과", L"Бегущая радуга"},
     {L"起始颜色", L"Start color", L"開始色", L"시작 색상", L"Начальный цвет"},
     {L"结束颜色", L"End color", L"終了色", L"끝 색상", L"Конечный цвет"},
-    {L"边框模式", L"Border", L"枠線", L"테두리", L"Рамка"},
+    {L"边框样式", L"Border style", L"枠の種類", L"테두리 유형", L"Вид рамки"},
     {L"自定义", L"Solid color", L"単色", L"단색", L"Один цвет"},
     {L"跑马灯渐变", L"Chase", L"チェイス", L"추적", L"Бегущий"},
     {L"普通渐变", L"Gradient", L"グラデーション", L"그라데이션", L"Градиент"},
@@ -79,6 +182,7 @@ constexpr Translation kTranslations[] = {
     {L"亮度", L"Brightness", L"明るさ", L"밝기", L"Яркость"},
     {L"边框粗细", L"Border width", L"枠線の太さ", L"테두리 두께", L"Толщина"},
     {L"模型不透明度", L"Model opacity", L"モデルの不透明度", L"모델 불투명도", L"Непрозрачность"},
+    {L"如果觉得界面太大或者太小，可以点击此处自行设置缩放。", L"If the interface looks too large or too small, click here to adjust its scale.", L"画面が大きすぎたり小さすぎたりする場合は、ここをクリックして表示倍率を調整できます。", L"인터페이스가 너무 크거나 작으면 여기를 눌러 크기를 조절할 수 있습니다.", L"Если интерфейс слишком большой или маленький, нажмите здесь, чтобы изменить масштаб."},
     {L"界面缩放", L"UI scale", L"UIスケール", L"UI 크기", L"Масштаб UI"},
     {L"鼠标经过模型时将模型透明化", L"Fade the model when the pointer is over it", L"ポインターがモデル上にある間、モデルを透過", L"포인터가 모델 위에 있을 때 모델 투명화", L"Делать модель прозрачнее при наведении"},
     {L"悬停不透明度", L"Hover opacity", L"ホバー時の不透明度", L"호버 불투명도", L"При наведении"},
@@ -97,7 +201,8 @@ constexpr Translation kTranslations[] = {
     {L" 个表情", L" expressions", L" 件", L"개", L""},
     {L"恢复默认", L"Defaults", L"既定値", L"기본값", L"Сбросить"},
     {L"取消", L"Cancel", L"キャンセル", L"취소", L"Отмена"},
-    {L"暂无可用表情，请确认 VTS API 已连接", L"No expressions available. Check the VTS API connection.", L"利用可能な表情がありません。VTS API の接続を確認してください。", L"사용 가능한 표정이 없습니다. VTS API 연결을 확인하세요.", L"Нет доступных эмоций. Проверьте подключение к VTS API."},
+    {L"保存", L"Save", L"保存", L"저장", L"Сохранить"},
+    {L"暂无可用表情，请确认 VTube Studio API 已连接", L"No expressions. Check the VTube Studio API connection.", L"表情がありません。VTube Studio API の接続を確認してください。", L"표정 없음. VTube Studio API 연결을 확인하세요.", L"Нет выражений. Проверьте связь с VTube Studio API."},
     {L"未命名表情", L"Unnamed expression", L"名称未設定の表情", L"이름 없는 표정", L"Эмоция без имени"},
     {L"选择完成", L"Finish selection", L"選択を完了", L"선택 완료", L"Готово"},
     {L"已选 ", L"Selected: ", L"選択：", L"선택: ", L"Выбрано: "},
@@ -113,14 +218,15 @@ constexpr Translation kTranslations[] = {
     {L"从外部启动 VTS", L"Launch VTS externally", L"外部から VTS を起動", L"외부에서 VTS 실행", L"Запустить VTS отдельно"},
     {L"当前已经在使用这个 GPU，无需重启。", L"This GPU is already in use. No restart is needed.", L"この GPU は既に使用中です。再起動は不要です。", L"이미 이 GPU를 사용 중입니다. 다시 시작할 필요가 없습니다.", L"Этот GPU уже используется. Перезапуск не требуется."},
     {L"检测到当前 Spout 非透明推流：", L"The current Spout output is not transparent:", L"現在の Spout 出力は透明ではありません：", L"현재 Spout 출력이 투명하지 않습니다:", L"Текущий вывод Spout непрозрачен:"},
-    {L"[不再提示]", L"[Don't show again]", L"[今後表示しない]", L"[다시 표시 안 함]", L"[Больше не показывать]"},
+    {L"[不再提示]", L"[Don't show again]", L"[今後表示しない]", L"[다시 표시 안 함]", L"[Не показывать снова]"},
     {L"[关闭提示]", L"[Dismiss]", L"[閉じる]", L"[닫기]", L"[Закрыть]"},
     {L"当前运行在高性能显卡中，高负载场景性能将会受限", L"High-performance GPU: stutter may occur under heavy load", L"高性能 GPU：高負荷時にカクつく場合があります", L"고성능 GPU: 부하가 높으면 끊길 수 있습니다", L"Высокопроизводительный GPU: возможны рывки"},
     {L"未启用", L"Not enabled", L"未有効", L"사용 안 함", L"Не включено"},
     {L"读取失败", L"Failed", L"取得失敗", L"읽기 실패", L"Ошибка"},
-    {L"VTS API 未连接", L"VTS API not connected", L"VTS API 未接続", L"VTS API 연결 안 됨", L"VTS API не подключён"},
+    {L"VTube Studio API 未连接", L"VTube Studio API not connected", L"VTube Studio API 未接続", L"VTube Studio API 연결 안 됨", L"VTube Studio API не подключён"},
     {L"FPS / 帧时", L"FPS / frame time", L"FPS／フレーム時間", L"FPS / 프레임 시간", L"FPS / время кадра"},
     {L"已找到 VTube Studio，但当前尚未运行", L"VTube Studio was found but is not running", L"VTube Studio は見つかりましたが、起動していません", L"VTube Studio를 찾았지만 실행 중이 아닙니다", L"VTube Studio найден, но не запущен"},
+    {L"或使用其他支持Spout2的任意应用", L"Or use any other app that supports Spout2.", L"Spout2 対応の他のアプリも使用できます。", L"또는 Spout2를 지원하는 다른 앱을 사용하세요.", L"Можно использовать любое другое приложение с поддержкой Spout2."},
     {L"等待 VTube Studio 启动中", L"Waiting for VTube Studio to start", L"VTube Studio の起動を待っています", L"VTube Studio 시작 대기 중", L"Ожидание запуска VTube Studio"},
     {L"如已启动，请在 设置 - 相机 中打开“激活 Spout2”开关，\r\n", L"If it is running, open Settings > Camera and enable “Activate Spout2”,\r\n", L"起動済みの場合は、設定 > カメラで「Spout2を有効化」をオンにし、\r\n", L"실행 중이면 설정 > 카메라에서 ‘Spout2 활성화’를 켜고,\r\n", L"Если программа запущена, откройте Настройки > Камера и включите «Активировать Spout2»,\r\n"},
     {L"将背景调整成“ColorPicker”，然后启动透明推流。", L"set the background to “ColorPicker”, then start transparent streaming.", L"背景を「ColorPicker」にして透明配信を開始してください。", L"배경을 ‘ColorPicker’로 설정한 다음 투명 스트리밍을 시작하세요.", L"выберите фон «ColorPicker» и запустите прозрачную трансляцию."},
@@ -133,11 +239,10 @@ constexpr Translation kTranslations[] = {
     {L"手动选择路径", L"Choose path manually", L"手動で選択", L"경로 직접 선택", L"Выбрать путь вручную"},
     {L"添加启动路径", L"Add launch path", L"起動パスを追加", L"실행 경로 추가", L"Добавить путь запуска"},
     {L"添加成功！", L"Connected successfully!", L"接続しました！", L"연결되었습니다!", L"Подключено!"},
-    {L"等待 VTube Studio 授权插件连接中，请打开 VTS 插件进行授权", L"Waiting for VTube Studio authorization. Allow the plugin in VTS", L"VTube Studio の承認待ちです。VTS でプラグインを許可してください", L"VTube Studio 승인 대기 중입니다. VTS에서 플러그인을 허용하세요", L"Ожидание разрешения VTube Studio. Разрешите плагин в VTS"},
+    {L"请在 VTube Studio 中授权插件", L"Allow plugin in VTube Studio", L"VTube Studio でプラグインを許可", L"VTube Studio에서 플러그인 허용", L"Разрешите плагин в VTube Studio"},
     {L"你刚刚拒绝了VTSFloat_Meow", L"You just denied VTSFloat_Meow access", L"VTSFloat_Meow のアクセスを拒否しました", L"VTSFloat_Meow 접근을 거부했습니다", L"Вы отклонили доступ для VTSFloat_Meow"},
     {L"[重新发起授权]", L"[Request access again]", L"[承認を再リクエスト]", L"[승인 다시 요청]", L"[Запросить доступ снова]"},
-    {L"VTS API 连接已断开", L"VTS API disconnected", L"VTS API が切断されました", L"VTS API 연결 끊김", L"VTS API отключён"},
-    {L"VTS API 尚未授权", L"VTS API not authorized", L"VTS API が未承認です", L"VTS API 승인 필요", L"VTS API не разрешён"},
+    {L"VTube Studio API 连接已断开", L"VTube Studio API disconnected", L"VTube Studio API が切断されました", L"VTube Studio API 연결 끊김", L"VTube Studio API отключён"},
     {L"扫描中", L"Scanning", L"スキャン中", L"검색 중", L"Сканирование"},
     {L"扫描成功", L"Found", L"検出しました", L"찾음", L"Найдено"},
     {L"获取失败", L"Not found", L"見つかりません", L"찾지 못함", L"Не найдено"},
@@ -178,7 +283,7 @@ constexpr Translation kTranslations[] = {
     {L"Windows 只能一键指定“节能”或“高性能”GPU，无法可靠指定这张额外显卡。\n\n本次没有修改设置。", L"Windows can select only a power-saving or high-performance GPU automatically; this additional adapter cannot be selected reliably.\n\nNo settings were changed.", L"Windows が自動指定できるのは「省電力」または「高パフォーマンス」GPU のみで、この追加 GPU は確実に指定できません。\n\n設定は変更されませんでした。", L"Windows에서는 절전 또는 고성능 GPU만 자동 지정할 수 있어 이 추가 GPU를 안정적으로 지정할 수 없습니다.\n\n설정은 변경되지 않았습니다.", L"Windows позволяет автоматически выбрать только энергосберегающий или высокопроизводительный GPU; надёжно указать этот дополнительный адаптер нельзя.\n\nНастройки не изменены."},
     {L"没有找到 VTube Studio 安装目录。\n\n程序已经检查正在运行的 VTS、Steam 库和默认安装目录。请先启动一次 VTube Studio 后再尝试。", L"The VTube Studio installation folder was not found.\n\nRunning VTS instances, Steam libraries, and default locations were checked. Launch VTube Studio once, then try again.", L"VTube Studio のインストール先が見つかりません。\n\n実行中の VTS、Steam ライブラリ、既定の場所を確認しました。一度 VTube Studio を起動してから再試行してください。", L"VTube Studio 설치 폴더를 찾을 수 없습니다.\n\n실행 중인 VTS, Steam 라이브러리 및 기본 경로를 확인했습니다. VTube Studio를 한 번 실행한 뒤 다시 시도하세요.", L"Папка установки VTube Studio не найдена.\n\nПроверены запущенные экземпляры VTS, библиотеки Steam и стандартные папки. Один раз запустите VTube Studio и повторите попытку."},
     {L"将把 VTube Studio 切换到：\n\n", L"VTube Studio will be switched to:\n\n", L"VTube Studio の使用 GPU を次に切り替えます：\n\n", L"VTube Studio를 다음 GPU로 전환합니다:\n\n", L"VTube Studio будет переключена на:\n\n"},
-    {L"\n\n这会暂时中断面捕，并依次执行：\n1. 正常关闭 VTube Studio\n2. 保存 Windows 显卡偏好\n3. 运行 VTube Studio\n4. 自动重启覆盖层\n\n是否继续？", L"\n\nTracking will be interrupted briefly while the app:\n1. Closes VTube Studio normally\n2. Saves the Windows graphics preference\n3. Starts VTube Studio\n4. Restarts the overlay automatically\n\nContinue?", L"\n\nトラッキングを一時中断し、次の処理を行います：\n1. VTube Studio を正常終了\n2. Windows の GPU 設定を保存\n3. VTube Studio を起動\n4. オーバーレイを自動再起動\n\n続行しますか？", L"\n\n잠시 트래킹을 중단하고 다음 작업을 수행합니다:\n1. VTube Studio 정상 종료\n2. Windows 그래픽 기본 설정 저장\n3. VTube Studio 실행\n4. 오버레이 자동 재시작\n\n계속할까요?", L"\n\nОтслеживание ненадолго прервётся. Программа:\n1. Корректно закроет VTube Studio\n2. Сохранит графические настройки Windows\n3. Запустит VTube Studio\n4. Автоматически перезапустит оверлей\n\nПродолжить?"},
+    {L"\n\n这会暂时中断面捕，并依次执行：\n1. 正常关闭 VTube Studio\n2. 保存 Windows 显卡偏好\n3. 运行 VTube Studio\n4. 自动重启 VTSFloat_Meow\n\n是否继续？", L"\n\nTracking will be interrupted briefly while the app:\n1. Closes VTube Studio normally\n2. Saves the Windows graphics preference\n3. Starts VTube Studio\n4. Restarts VTSFloat_Meow automatically\n\nContinue?", L"\n\nトラッキングを一時中断し、次の処理を行います：\n1. VTube Studio を正常終了\n2. Windows の GPU 設定を保存\n3. VTube Studio を起動\n4. VTSFloat_Meow を自動再起動\n\n続行しますか？", L"\n\n잠시 트래킹을 중단하고 다음 작업을 수행합니다:\n1. VTube Studio 정상 종료\n2. Windows 그래픽 기본 설정 저장\n3. VTube Studio 실행\n4. VTSFloat_Meow 자동 재시작\n\n계속할까요?", L"\n\nОтслеживание ненадолго прервётся. Программа:\n1. Корректно закроет VTube Studio\n2. Сохранит графические настройки Windows\n3. Запустит VTube Studio\n4. Автоматически перезапустит VTSFloat_Meow\n\nПродолжить?"},
     {L"写入 Windows 显卡偏好失败，本次没有关闭 VTube Studio。", L"Could not save the Windows graphics preference. VTube Studio was not closed.", L"Windows の GPU 設定を保存できませんでした。VTube Studio は終了していません。", L"Windows 그래픽 기본 설정을 저장하지 못했습니다. VTube Studio는 종료하지 않았습니다.", L"Не удалось сохранить графические настройки Windows. VTube Studio не была закрыта."},
     {L"无法向 VTube Studio 发送正常退出命令。为了保护当前状态，程序不会强制结束它。", L"VTube Studio could not be asked to close normally. To protect its current state, it will not be terminated forcibly.", L"VTube Studio に正常終了を要求できませんでした。現在の状態を保護するため、強制終了は行いません。", L"VTube Studio에 정상 종료 요청을 보내지 못했습니다. 현재 상태를 보호하기 위해 강제 종료하지 않습니다.", L"Не удалось запросить корректное завершение VTube Studio. Чтобы сохранить текущее состояние, принудительное завершение не выполняется."},
     {L"VTube Studio 在 15 秒内没有退出。为了避免丢失状态，程序没有强制关闭它，GPU 设置也已还原。", L"VTube Studio did not close within 15 seconds. It was not terminated forcibly, and the GPU setting was restored to avoid losing state.", L"VTube Studio が15秒以内に終了しませんでした。状態を失わないよう強制終了せず、GPU 設定を元に戻しました。", L"VTube Studio가 15초 안에 종료되지 않았습니다. 상태 손실을 방지하기 위해 강제 종료하지 않고 GPU 설정을 복원했습니다.", L"VTube Studio не закрылась за 15 секунд. Чтобы не потерять состояние, принудительное завершение не выполнялось, а настройка GPU восстановлена."},
@@ -224,48 +329,6 @@ constexpr Translation kTranslations[] = {
     {L"编辑自定义语言配置…", L"Edit custom language file…", L"カスタム言語ファイルを編集…", L"사용자 언어 파일 편집…", L"Изменить файл своего языка…"},
     {L"无法打开自定义语言配置文件：\n", L"Could not open the custom language file:\n", L"カスタム言語ファイルを開けませんでした：\n", L"사용자 언어 파일을 열 수 없습니다:\n", L"Не удалось открыть файл своего языка:\n"},
     {L"自定义语言", L"Custom language", L"カスタム言語", L"사용자 언어", L"Свой язык"},
-    {L"采集", L"Capture", L"収集中", L"수집", L"Сбор"},
-    {L"等待 VTS 分辨率", L"Waiting for VTS resolution", L"VTS 解像度を待機中", L"VTS 해상도 대기 중", L"Ожидание разрешения VTS"},
-    {L"预热中", L"Warming up", L"ウォームアップ中", L"준비 중", L"Прогрев"},
-    {L"采集组", L"Capture group", L"収集グループ", L"수집 그룹", L"Группа сбора"},
-    {L"请在 VTube Studio 中手动设置输出分辨率：", L"Manually set the VTube Studio output resolution:", L"VTube Studio の出力解像度を手動で設定してください：", L"VTube Studio 출력 해상도를 직접 설정하세요:", L"Вручную задайте разрешение вывода VTube Studio:"},
-    {L"程序缩放分辨率将自动设置为：", L"The app render resolution will be set automatically to:", L"アプリの描画解像度は自動的に次へ設定されます：", L"앱 렌더링 해상도는 자동으로 다음 값으로 설정됩니다:", L"Разрешение рендеринга программы будет автоматически задано:"},
-    {L"取消将结束采集并保留已经写入的原始数据。", L"Cancel ends capture and keeps the raw data already written.", L"キャンセルすると収集を終了し、書き込み済みの生データを保持します。", L"취소하면 수집을 종료하고 이미 기록한 원시 데이터를 보존합니다.", L"Отмена завершит сбор и сохранит уже записанные исходные данные."},
-    {L"分辨率性能采集", L"Resolution performance capture", L"解像度パフォーマンス収集", L"해상도 성능 수집", L"Сбор данных производительности разрешений"},
-    {L"采集已完成。", L"Capture completed.", L"収集が完了しました。", L"수집이 완료되었습니다.", L"Сбор завершён."},
-    {L"采集已停止，已保留现有数据。", L"Capture stopped. Existing data was kept.", L"収集を停止しました。既存データは保持されています。", L"수집을 중지했습니다. 기존 데이터는 보존되었습니다.", L"Сбор остановлен. Имеющиеся данные сохранены."},
-    {L"采集数据已保存到：", L"Capture data was saved to:", L"収集データの保存先：", L"수집 데이터 저장 위치:", L"Данные сбора сохранены в:"},
-    {L"尚未接收到 VTube Studio 的 Spout2 画面。", L"No VTube Studio Spout2 frame has been received yet.", L"VTube Studio の Spout2 映像をまだ受信していません。", L"아직 VTube Studio Spout2 화면을 수신하지 못했습니다.", L"Кадр Spout2 от VTube Studio ещё не получен."},
-    {L"请先连接 VTS API，以采集 VTS 实时帧数。", L"Connect the VTS API first to collect live VTS FPS.", L"VTS の実測 FPS を収集するには、先に VTS API へ接続してください。", L"VTS 실시간 FPS를 수집하려면 먼저 VTS API를 연결하세요.", L"Сначала подключите VTS API, чтобы собирать текущий FPS VTS."},
-    {L"无法创建采集文件。", L"Could not create capture files.", L"収集ファイルを作成できませんでした。", L"수집 파일을 만들 수 없습니다.", L"Не удалось создать файлы сбора."},
-    {L"停止并保存当前采集", L"Stop and save capture", L"収集を停止して保存", L"수집 중지 및 저장", L"Остановить и сохранить сбор"},
-    {L"分辨率基准采集", L"Resolution benchmark", L"解像度ベンチマーク", L"해상도 벤치마크", L"Тест разрешений"},
-    {L"你确定要进行该功能的使用吗？", L"Are you sure you want to use this feature?", L"この機能を使用しますか？", L"이 기능을 사용하시겠습니까?", L"Вы уверены, что хотите использовать эту функцию?"},
-    {L"该功能设计在多组分辨率测试时获取性能数据，一般你是用不到该功能的！\n\n是否继续？", L"This feature collects performance data across multiple resolution combinations. Most users do not need it.\n\nContinue?", L"この機能は、複数の解像度の組み合わせでパフォーマンスデータを収集するためのものです。通常は使用する必要はありません。\n\n続行しますか？", L"이 기능은 여러 해상도 조합의 성능 데이터를 수집하기 위한 기능입니다. 일반적인 사용에는 필요하지 않습니다.\n\n계속하시겠습니까?", L"Эта функция собирает данные производительности для нескольких сочетаний разрешений. Большинству пользователей она не требуется.\n\nПродолжить?"},
-    {L"继续", L"Continue", L"続行", L"계속", L"Продолжить"},
-    {L"组", L"groups", L"グループ", L"그룹", L"групп"},
-    {L"条", L"samples", L"件", L"개", L"замеров"},
-    {L"设置完成后点击“确定”。程序检测到分辨率匹配后会先预热，再开始采集。", L"After setting it, select OK. Once both resolutions match, the app warms up and starts capture.", L"設定後に「OK」を選択してください。解像度の一致を検出すると、ウォームアップ後に収集を開始します。", L"설정 후 확인을 선택하세요. 해상도가 일치하면 준비 후 수집을 시작합니다.", L"После настройки нажмите «ОК». Когда разрешения совпадут, программа выполнит прогрев и начнёт сбор."},
-    {L"打开采集目录", L"Open capture folder", L"収集フォルダーを開く", L"수집 폴더 열기", L"Открыть папку сбора"},
-    {L"开始分辨率基准采集", L"Start resolution benchmark", L"解像度ベンチマークを開始", L"해상도 벤치마크 시작", L"Начать тест разрешений"},
-    {L"将测试 7×7 共 49 组分辨率组合，每组采集 24 条数据。", L"Tests all 49 combinations in a 7×7 resolution matrix and collects 24 samples per group.", L"7×7 の全49解像度組み合わせをテストし、各グループで24件を収集します。", L"7×7 해상도 조합 49개를 모두 테스트하고 그룹마다 샘플 24개를 수집합니다.", L"Будут проверены все 49 сочетаний разрешений 7×7, по 24 замера на группу."},
-    {L"每张 GPU 预计用时约", L"Estimated time per GPU:", L"GPU 1基あたりの予定時間：", L"GPU당 예상 시간:", L"Примерное время на один GPU:"},
-    {L"分钟", L"minutes", L"分", L"분", L"мин"},
-    {L"分钟。", L"minutes.", L"分。", L"분입니다.", L"мин."},
-    {L"测试分辨率：", L"Test resolutions:", L"テスト解像度：", L"테스트 해상도:", L"Тестируемые разрешения:"},
-    {L"640×480、960×540、1280×720、1600×900、1920×1080、2560×1440、3840×2160", L"640×480, 960×540, 1280×720, 1600×900, 1920×1080, 2560×1440, 3840×2160", L"640×480、960×540、1280×720、1600×900、1920×1080、2560×1440、3840×2160", L"640×480, 960×540, 1280×720, 1600×900, 1920×1080, 2560×1440, 3840×2160", L"640×480, 960×540, 1280×720, 1600×900, 1920×1080, 2560×1440, 3840×2160"},
-    {L"采集期间请勿运行游戏、渲染或其他高负载任务，否则结果会失真。", L"Do not run games, rendering, or other heavy workloads during capture because they will distort the results.", L"収集中はゲーム、レンダリング、その他の高負荷処理を実行しないでください。結果が不正確になります。", L"수집 중에는 게임, 렌더링 또는 기타 고부하 작업을 실행하지 마세요. 결과가 왜곡될 수 있습니다.", L"Во время сбора не запускайте игры, рендеринг и другие тяжёлые задачи: они исказят результат."},
-    {L"请保持 VTube Studio、Spout2 与插件 API 正常运行。", L"Keep VTube Studio, Spout2, and the plugin API running.", L"VTube Studio、Spout2、プラグイン API を実行したままにしてください。", L"VTube Studio, Spout2 및 플러그인 API를 계속 실행해 주세요.", L"Не закрывайте VTube Studio, Spout2 и API плагинов."},
-    {L"程序会自动调整分辨率，完成或停止后恢复窗口。", L"The app adjusts resolutions automatically and restores the windows after completion or cancellation.", L"解像度は自動調整され、完了または停止後にウィンドウが復元されます。", L"프로그램이 해상도를 자동 조정하고 완료 또는 중지 후 창을 복원합니다.", L"Программа автоматически меняет разрешения и восстанавливает окна после завершения или остановки."},
-    {L"测试当前 GPU", L"Test current GPU", L"現在の GPU をテスト", L"현재 GPU 테스트", L"Тестировать текущий GPU"},
-    {L"测试全部 GPU", L"Test all GPUs", L"すべての GPU をテスト", L"모든 GPU 테스트", L"Тестировать все GPU"},
-    {L"预计约", L"about", L"約", L"약", L"около"},
-    {L"无法自动切换到下一张 GPU，采集已停止并保留现有 CSV。", L"Could not switch automatically to the next GPU. Capture stopped and the existing CSV was kept.", L"次の GPU に自動切り替えできませんでした。収集を停止し、既存の CSV は保持しました。", L"다음 GPU로 자동 전환하지 못했습니다. 수집을 중지하고 기존 CSV를 보존했습니다.", L"Не удалось автоматически переключиться на следующий GPU. Сбор остановлен, существующий CSV сохранён."},
-    {L"写入下一张 GPU 的 Windows 显卡偏好失败，采集已停止并保留现有 CSV。", L"Could not save the Windows graphics preference for the next GPU. Capture stopped and the existing CSV was kept.", L"次の GPU の Windows グラフィックス設定を保存できませんでした。収集を停止し、既存の CSV は保持しました。", L"다음 GPU의 Windows 그래픽 기본 설정을 저장하지 못했습니다. 수집을 중지하고 기존 CSV를 보존했습니다.", L"Не удалось сохранить настройку графики Windows для следующего GPU. Сбор остановлен, существующий CSV сохранён."},
-    {L"无法正常关闭 VTube Studio，采集已停止并保留现有 CSV。", L"Could not close VTube Studio normally. Capture stopped and the existing CSV was kept.", L"VTube Studio を正常に終了できませんでした。収集を停止し、既存の CSV は保持しました。", L"VTube Studio를 정상적으로 종료하지 못했습니다. 수집을 중지하고 기존 CSV를 보존했습니다.", L"Не удалось корректно закрыть VTube Studio. Сбор остановлен, существующий CSV сохранён."},
-    {L"VTube Studio 未能在 15 秒内关闭，采集已停止并保留现有 CSV。", L"VTube Studio did not close within 15 seconds. Capture stopped and the existing CSV was kept.", L"VTube Studio が15秒以内に終了しませんでした。収集を停止し、既存の CSV は保持しました。", L"VTube Studio가 15초 안에 종료되지 않았습니다. 수집을 중지하고 기존 CSV를 보존했습니다.", L"VTube Studio не закрылся за 15 секунд. Сбор остановлен, существующий CSV сохранён."},
-    {L"无法启动 VTube Studio，采集已停止并保留现有 CSV。", L"Could not start VTube Studio. Capture stopped and the existing CSV was kept.", L"VTube Studio を起動できませんでした。収集を停止し、既存の CSV は保持しました。", L"VTube Studio를 시작하지 못했습니다. 수집을 중지하고 기존 CSV를 보존했습니다.", L"Не удалось запустить VTube Studio. Сбор остановлен, существующий CSV сохранён."},
-    {L"覆盖层自动重启失败，采集已停止并保留现有 CSV。", L"The overlay could not restart automatically. Capture stopped and the existing CSV was kept.", L"オーバーレイを自動再起動できませんでした。収集を停止し、既存の CSV は保持しました。", L"오버레이를 자동으로 다시 시작하지 못했습니다. 수집을 중지하고 기존 CSV를 보존했습니다.", L"Не удалось автоматически перезапустить оверлей. Сбор остановлен, существующий CSV сохранён."},
 };
 
 std::atomic<UiLanguage> gLanguage{UiLanguage::SimplifiedChinese};
@@ -289,6 +352,17 @@ void ReplaceAll(
 
 std::wstring ToTraditionalChinese(const wchar_t* simplified) {
     if (!simplified || !*simplified) return simplified ? simplified : L"";
+    constexpr std::pair<std::wstring_view, std::wstring_view> editorTerms[] = {
+        {L"内部阴影", L"內陰影"}, {L"外部阴影", L"陰影"}, {L"阴影扩展", L"陰影擴展"},
+        {L"参考背景像素", L"取樣背景色"}, {L"黑场", L"黑點"}, {L"白场", L"白點"},
+        {L"图像", L"影像"}, {L"正片叠底", L"色彩增值"}, {L"颜色加深", L"加深顏色"},
+        {L"颜色减淡", L"加亮顏色"}, {L"线性减淡（添加）", L"線性加亮（增加）"},
+        {L"深色", L"顏色變暗"}, {L"实色混合", L"實色疊印混合"},
+        {L"渐变网格", L"漸層網格"}, {L"边缘羽化", L"邊緣羽化"},
+    };
+    for (const auto& [source, translated] : editorTerms) {
+        if (source == simplified) return std::wstring(translated);
+    }
     const int required = LCMapStringEx(
         L"zh-Hant", LCMAP_TRADITIONAL_CHINESE, simplified, -1,
         nullptr, 0, nullptr, nullptr, 0);
@@ -316,6 +390,10 @@ std::wstring ToTraditionalChinese(const wchar_t* simplified) {
         {std::wstring_view(L"緩存"), std::wstring_view(L"快取")},
         {std::wstring_view(L"視頻"), std::wstring_view(L"影片")},
         {std::wstring_view(L"界面"), std::wstring_view(L"介面")},
+        {std::wstring_view(L"分辨率"), std::wstring_view(L"解析度")},
+        {std::wstring_view(L"裁剪"), std::wstring_view(L"裁切")},
+        {std::wstring_view(L"鎖定比例"), std::wstring_view(L"鎖定長寬比")},
+        {std::wstring_view(L"比例已鎖定"), std::wstring_view(L"長寬比已鎖定")},
     };
     for (const auto& [from, to] : terminology) ReplaceAll(result, from, to);
     return result;
@@ -387,16 +465,6 @@ std::wstring UnescapeIniValue(const std::wstring& value) {
         else result.push_back(escaped);
     }
     return result;
-}
-
-std::filesystem::path ExecutableDirectory() {
-    std::array<wchar_t, 32768> path{};
-    const DWORD length = GetModuleFileNameW(
-        nullptr, path.data(), static_cast<DWORD>(path.size()));
-    if (length == 0 || length >= path.size()) {
-        return std::filesystem::current_path();
-    }
-    return std::filesystem::path(std::wstring(path.data(), length)).parent_path();
 }
 
 std::string WideToUtf8(std::wstring_view value) {
@@ -570,48 +638,12 @@ std::filesystem::path ResolveCustomLanguagePath() {
         }
     }
 
-    const std::filesystem::path portable =
-        ExecutableDirectory() / L"VTSFloat_Meow.custom-language.ini";
-    std::array<wchar_t, 32768> localAppData{};
-    const DWORD length = GetEnvironmentVariableW(
-        L"LOCALAPPDATA", localAppData.data(),
-        static_cast<DWORD>(localAppData.size()));
-    const std::filesystem::path managed = length > 0 && length < localAppData.size()
-        ? std::filesystem::path(std::wstring(localAppData.data(), length)) /
-            L"VTSFloat_Meow.custom-language.ini"
-        : std::filesystem::path{};
+    const auto path = vtsfloat::CacheDirectory() / L"VTSFloat_Meow.custom-language.ini";
+    const auto legacy = path.parent_path().parent_path() / path.filename();
+    MoveFileExW(legacy.c_str(), path.c_str(), MOVEFILE_WRITE_THROUGH);
     std::error_code error;
-    if (!managed.empty()) {
-        // Copy an existing portable template once so completed translations
-        // are preserved. Keep the source file untouched: it may be a sample
-        // shipped with a source checkout. The managed copy is used from now on.
-        if (!std::filesystem::exists(managed, error) &&
-            std::filesystem::exists(portable, error)) {
-            error.clear();
-            std::filesystem::copy_file(
-                portable, managed, std::filesystem::copy_options::none, error);
-        }
-        error.clear();
-        if (std::filesystem::exists(managed, error) ||
-            WriteCustomLanguageTemplate(managed)) {
-            gCustomLanguagePath = managed;
-            return gCustomLanguagePath;
-        }
-    }
-
-    // LOCALAPPDATA is expected on supported Windows versions. If it is not
-    // available or writable, use the temporary directory instead of leaving
-    // a generated configuration file beside an EXE placed on the desktop.
-    error.clear();
-    const std::filesystem::path temporaryDirectory =
-        std::filesystem::temp_directory_path(error);
-    if (!error) {
-        const std::filesystem::path fallback = temporaryDirectory /
-            L"VTSFloat_Meow.custom-language.ini";
-        if (std::filesystem::exists(fallback, error) ||
-            WriteCustomLanguageTemplate(fallback)) {
-            gCustomLanguagePath = fallback;
-        }
+    if (std::filesystem::exists(path, error) || WriteCustomLanguageTemplate(path)) {
+        gCustomLanguagePath = path;
     }
     return gCustomLanguagePath;
 }
@@ -763,9 +795,16 @@ const wchar_t* Tr(const wchar_t* simplifiedChinese) {
         language == UiLanguage::SimplifiedChinese) {
         return simplifiedChinese;
     }
-    for (size_t index = 0; index < ARRAYSIZE(kTranslations); ++index) {
+    static const auto translationIndex = [] {
+        std::unordered_map<std::wstring_view, size_t> index;
+        index.reserve(ARRAYSIZE(kTranslations));
+        for (size_t i = 0; i < ARRAYSIZE(kTranslations); ++i) index.emplace(kTranslations[i].zh, i);
+        return index;
+    }();
+    const auto found = translationIndex.find(simplifiedChinese);
+    if (found != translationIndex.end()) {
+        const auto index = found->second;
         const auto& entry = kTranslations[index];
-        if (std::wcscmp(entry.zh, simplifiedChinese) != 0) continue;
         switch (language) {
         case UiLanguage::TraditionalChinese:
             std::call_once(

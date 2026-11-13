@@ -19,6 +19,7 @@
 #include <shlwapi.h>
 #include <iphlpapi.h>
 #include <objidl.h>
+#include <roapi.h>
 #include <gdiplus.h>
 #include <wrl/client.h>
 
@@ -32,6 +33,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
+#include <cwchar>
 #include <cwctype>
 #include <deque>
 #include <filesystem>
@@ -49,10 +51,17 @@
 #include <vector>
 
 #include "SpoutDX.h"
-#include "benchmark_capture.h"
+#include "cache_directory.h"
 #include "localization.h"
 #include "desktop_mode_policy.h"
 #include "resource.h"
+#include "update_version.h"
+#include "updater.h"
+#include "toolbar_text.h"
+#include "image_output.h"
+#include "image_backdrop.h"
+#include "image_shadow.h"
+#include "github_mark.h"
 
 using Microsoft::WRL::ComPtr;
 using Clock = std::chrono::steady_clock;
@@ -93,25 +102,63 @@ constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayResetCommand = 4101;
 constexpr UINT kTrayToggleVisibilityCommand = 4102;
 constexpr UINT kTrayExitCommand = 4103;
-constexpr UINT kStatusLaunchExeCommand = 5101;
-constexpr UINT kStatusLaunchBatchCommand = 5102;
-// 1280x773 VTube Studio output scaled to the user's established 640px width.
-// 387 is the correctly rounded height; 386 caused the old startup stretch.
-constexpr int kDefaultWidth = 640;
-constexpr int kDefaultHeight = 387;
-constexpr int kResetWidth = 1280;
-constexpr int kResetHeight = 720;
+constexpr UINT kCheckUpdateCommand = 4104;
+constexpr UINT kUpdateLaterCommand = 4105;
+constexpr UINT kUpdateInstallCommand = 4106;
+constexpr UINT kUpdateDismissCommand = 4107;
+constexpr UINT kGithubDebugCommand = 4108;
+constexpr UINT kUpdateStartupMessage = WM_APP + 7;
+constexpr UINT kActivateExistingMessage = WM_APP + 8;
+constexpr UINT_PTR kUpdateTimer = 68;
+constexpr UINT_PTR kUpdateNoticeDismissTimer = 71;
+constexpr UINT kUpdateNoticeTimeoutMs = 5000;
+constexpr wchar_t kUpdateBannerClass[] = L"VTSFloatMeowUpdateBanner";
+constexpr UINT_PTR kGithubDropdownTimer = 69;
+constexpr wchar_t kGithubDropdownClass[] = L"VTSFloatMeowGithubDropdown";
+constexpr wchar_t kToolbarHintClass[] = L"VTSFloatMeowToolbarHint";
+constexpr COLORREF kToolbarPopoverBackground = RGB(19, 29, 45);
+constexpr COLORREF kToolbarPopoverText = RGB(166, 198, 232);
+constexpr wchar_t kDebugReadoutClass[] = L"VTSFloatMeowDebugReadout";
+constexpr wchar_t kToolbarGuideClass[] = L"VTSFloatMeowToolbarGuide";
+constexpr UINT_PTR kToolbarGuideTimer = 70;
+constexpr UINT kGuideContinueCommand = 4110;
+constexpr UINT kGuideCloseCommand = 4111;
+constexpr wchar_t kCropReadoutClass[] = L"VTSFloatMeowCropReadout";
+constexpr int kCropReadoutGap = 4;
+constexpr int kCropReadoutRowHeight = 26;
+constexpr int kCropReadoutFontHeight = 11;
+constexpr UINT kCropWidthEdit = 4112;
+constexpr UINT kCropHeightEdit = 4113;
+constexpr UINT kFirstFeatherEdit = 4114;
+constexpr wchar_t kFeatherPanelClass[] = L"LilyVtsFeatherPanel";
+constexpr wchar_t kFeatherScrubClass[] = L"LilyVtsFeatherScrub";
+constexpr int kFeatherScrubStep = 10;
+constexpr int kFeatherScrubDragStep = 5;
+constexpr int kFeatherScrubWidth = 226;
+constexpr int kFeatherScrubHeight = 72;
+constexpr int kDefaultWidth = 1800;
+constexpr int kDefaultHeight = 860;
 constexpr int kResizeGrip = 10;
+constexpr LONG kCropExtent = 1000000;
+constexpr RECT kFullCrop{0, 0, kCropExtent, kCropExtent};
+constexpr int kMaximumFeatherPixels = 5000;
+constexpr int kFeatherPanelWidth = 440;
+constexpr int kFeatherPanelHeight = 463;
+constexpr UINT kCropAngleEdit = kFirstFeatherEdit + 4;
 constexpr int kCornerLength = 18;
 constexpr int kToolbarHeight = 42;
 constexpr int kToolbarDebugHeight = 68;
 constexpr int kToolbarDebugModeHeight = 86;
-constexpr int kToolbarCompactHeight = 122;
 constexpr int kToolbarLockedHeight = 32;
 constexpr int kLockedDebugLabelWidth = 180;
 constexpr int kToolbarGap = 5;
 constexpr int kMinimumWidth = 640;
-constexpr int kToolbarWideMinimumWidth = 1100;
+constexpr int kToolbarWideMinimumWidth = 990;
+constexpr int kPersonalBorderModeLeft = 118;
+constexpr int kToolbarAppTitleWidth = 128;
+constexpr int kToolbarAppTitleFontHeight = 13;
+constexpr wchar_t kToolbarAppName[] = L"VTSFloat_Meow";
+constexpr int kToolbarCompactWidthMaxScale = 140;
 constexpr int kMinimumFps = 1;
 constexpr int kMaximumFps = 240;
 constexpr int kScalingPerformance = 0;
@@ -133,7 +180,7 @@ constexpr double kHoverExpressionFadeOutSeconds = 1.0;
 constexpr UINT kExpressionStatePollIntervalMs = 600;
 constexpr UINT kHoverExpressionStatePollIntervalMs = 250;
 constexpr UINT kHoverExpressionRetriggerCooldownMs = 2000;
-constexpr int kApiNotificationHeight = 28;
+constexpr int kToolbarNotificationHeight = 28;
 constexpr int kBgNotificationHeight = 28;
 constexpr int kHoverFadeDurationMs = 350;
 constexpr int kBorderModeCustom = 0;
@@ -156,17 +203,114 @@ enum class ToolbarButton {
     FrameRate,
     GraphicsSettings,
     Aspect,
+    Crop,
     Border,
     WindowMode,
-    Monitor,
+    ViewSettings,
     Hotkey,
-    Debug,
     Language,
     Lock,
     Github,
     Hide,
     Close,
+    CropAspect,
+    ViewCrop,
+    ViewImage,
+    ViewBlend,
+    ViewShadow,
+    ConnectApi,
+    ViewDone,
+    CropUiScale,
+    CropRestore,
+    CropCancel,
+    CropSave,
     Unlock,
+    AppTitle,
+};
+
+struct ToolbarLayout {
+    std::array<RECT, static_cast<size_t>(ToolbarButton::AppTitle) + 1> buttons{};
+    int rows = 1;
+};
+
+struct CropToolbarLayout {
+    RECT appTitle{};
+    RECT title{};
+    RECT aspect{};
+    RECT crop{};
+    RECT image{};
+    RECT blend{};
+    RECT shadow{};
+    RECT done{};
+    RECT settings{};
+    RECT restore{};
+    RECT cancel{};
+    RECT save{};
+    int rows = 1;
+};
+
+struct CropReadoutLayout {
+    RECT source{};
+    RECT label{};
+    RECT widthEdit{};
+    RECT separator{};
+    RECT heightEdit{};
+    SIZE size{};
+};
+
+enum FeatherSide : size_t { FeatherLeft, FeatherTop, FeatherRight, FeatherBottom, FeatherSideCount };
+
+struct FeatherEdge {
+    int pixels = 0;
+    bool enabled = false;
+
+    bool operator==(const FeatherEdge& other) const {
+        return pixels == other.pixels && enabled == other.enabled;
+    }
+};
+
+using FeatherEdges = std::array<FeatherEdge, FeatherSideCount>;
+using FeatherRadii = std::array<int, FeatherSideCount>;
+
+enum FeatherPanelAction : int {
+    FeatherNoAction = -1,
+    FeatherRotateLeft = FeatherSideCount,
+    FeatherRotateRight,
+    FeatherRotateHalf,
+    FeatherFlipX,
+    FeatherFlipY,
+    FeatherResetRotation,
+    FeatherActionCount,
+    ViewClose = FeatherActionCount,
+};
+
+struct FeatherPanelLayout {
+    RECT header{};
+    RECT close{};
+    RECT hint{};
+    RECT canvas{};
+    RECT guide{};
+    RECT angle{};
+    RECT angleLabel{};
+    RECT angleUnit{};
+    RECT rotationTitle{};
+    std::array<RECT, FeatherActionCount - FeatherRotateLeft> buttons{};
+    std::array<std::array<POINT, 4>, FeatherSideCount> edges{};
+    std::array<RECT, FeatherSideCount> edits{};
+    std::array<RECT, FeatherSideCount> units{};
+};
+
+struct FeatherRamp {
+    int outputExtent = 0;
+    int sourceExtent = 0;
+    int radius = 0;
+    std::vector<std::uint16_t> opacity;
+};
+
+struct SubjectOutlinePixel {
+    int x;
+    int y;
+    std::uint8_t alpha;
 };
 
 enum class VtsStatusMode {
@@ -174,6 +318,19 @@ enum class VtsStatusMode {
     WaitingForVts,
     WaitingForSpout,
     LaunchChoices,
+};
+
+enum class UpdateNoticeStyle {
+    Standard,
+    Offer,
+    Checking,
+    Positive,
+};
+
+enum class UpdateNoticeDismissal {
+    Manual,
+    Timed,
+    None,
 };
 
 enum class FpsMode {
@@ -199,11 +356,7 @@ struct BilinearSample {
 };
 
 std::filesystem::path LogPath() {
-    wchar_t localAppData[MAX_PATH]{};
-    if (!GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, ARRAYSIZE(localAppData))) {
-        return L"vts_overlay_layered.log";
-    }
-    return std::filesystem::path(localAppData) / L"vts_overlay_layered.log";
+    return vtsfloat::CacheDirectory() / L"vts_overlay_layered.log";
 }
 
 std::filesystem::path DesktopLogPath() {
@@ -463,7 +616,7 @@ void CopyLogToDesktop(
 
 LONG WINAPI VectoredExceptionHandler(EXCEPTION_POINTERS* info) {
     // 0xE06D7363 is the normal MSVC C++ exception dispatch code.  It can be
-    // caught by the owning thread (including the VTS API worker) and must not
+    // caught by the owning thread (including the VTube Studio API worker) and must not
     // be treated as an application crash by the early vectored callback.
     if (info && info->ExceptionRecord &&
         info->ExceptionRecord->ExceptionCode == 0xE06D7363) {
@@ -499,27 +652,15 @@ void InvalidParamHandler(const wchar_t*, const wchar_t*, const wchar_t*, unsigne
 }
 
 std::filesystem::path ConfigPath() {
-    wchar_t localAppData[MAX_PATH]{};
-    if (!GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, ARRAYSIZE(localAppData))) {
-        return kConfigFileName;
-    }
-    return std::filesystem::path(localAppData) / kConfigFileName;
+    return vtsfloat::CacheDirectory() / kConfigFileName;
 }
 
-std::filesystem::path BenchmarkOutputDirectory() {
-    wchar_t documents[MAX_PATH]{};
-    std::filesystem::path base;
-    if (SHGetFolderPathW(
-            nullptr, CSIDL_PERSONAL, nullptr, SHGFP_TYPE_CURRENT,
-            documents) == S_OK) {
-        base = documents;
-    } else {
-        base = ConfigPath().parent_path();
-    }
-    const std::string timestamp = vtsfloat::benchmark::FolderTimestamp();
-    const std::wstring wideTimestamp(timestamp.begin(), timestamp.end());
-    return base / L"VTSFloat_Meow Benchmarks" /
-        (L"capture_" + wideTimestamp);
+bool MigrateLegacyConfig() {
+    const auto destination = ConfigPath();
+    const auto legacy = destination.parent_path().parent_path() / kConfigFileName;
+    // Do not overwrite current settings. Moving the old file also prevents
+    // a cache reset from importing the same settings again.
+    return MoveFileExW(legacy.c_str(), destination.c_str(), MOVEFILE_WRITE_THROUGH) != FALSE;
 }
 
 int ReadConfigInt(const wchar_t* section, const wchar_t* key, int fallback) {
@@ -536,10 +677,16 @@ int ReadConfigInt(const wchar_t* section, const wchar_t* key, int fallback) {
     }
 }
 
-void WriteConfigInt(const wchar_t* section, const wchar_t* key, int value) {
+// Normal settings writes retain their existing behavior. The update transaction
+// checks all writes made on the UI thread before it lets the app exit.
+thread_local bool* checkedConfigWrites = nullptr;
+
+bool WriteConfigInt(const wchar_t* section, const wchar_t* key, int value) {
     const std::wstring text = std::to_wstring(value);
     const std::wstring path = ConfigPath().wstring();
-    WritePrivateProfileStringW(section, key, text.c_str(), path.c_str());
+    const bool saved = WritePrivateProfileStringW(section, key, text.c_str(), path.c_str()) != FALSE;
+    if (checkedConfigWrites && !saved) *checkedConfigWrites = false;
+    return saved;
 }
 
 std::wstring ReadConfigString(
@@ -551,34 +698,12 @@ std::wstring ReadConfigString(
     return value;
 }
 
-void WriteConfigString(
+bool WriteConfigString(
     const wchar_t* section, const wchar_t* key, const std::wstring& value) {
     const std::wstring path = ConfigPath().wstring();
-    WritePrivateProfileStringW(section, key, value.c_str(), path.c_str());
-}
-
-std::wstring JoinGpuIndexes(const std::vector<int>& indexes) {
-    std::wostringstream text;
-    for (std::size_t index = 0; index < indexes.size(); ++index) {
-        if (index) text << L',';
-        text << indexes[index];
-    }
-    return text.str();
-}
-
-std::vector<int> ParseGpuIndexes(const std::wstring& text) {
-    std::vector<int> indexes;
-    std::wistringstream input(text);
-    std::wstring item;
-    while (std::getline(input, item, L',')) {
-        if (item.empty()) continue;
-        try {
-            indexes.push_back(std::stoi(item));
-        } catch (...) {
-            return {};
-        }
-    }
-    return indexes;
+    const bool saved = WritePrivateProfileStringW(section, key, value.c_str(), path.c_str()) != FALSE;
+    if (checkedConfigWrites && !saved) *checkedConfigWrites = false;
+    return saved;
 }
 
 bool IsHighFrequencyPerfLog(const std::string& line) {
@@ -593,28 +718,39 @@ bool IsHighFrequencyPerfLog(const std::string& line) {
         line.rfind("[perf]", 0) == 0;
 }
 
+struct LogSession {
+    std::mutex mutex;
+    std::optional<std::streamoff> start;
+};
+
+LogSession& CurrentLogSession() {
+    static LogSession session;
+    return session;
+}
+
 void Log(const std::string& line) {
     if (IsHighFrequencyPerfLog(line)) {
         return;
     }
-    static std::mutex logMutex;
-    static bool checkedExistingSize = false;
-    std::lock_guard<std::mutex> lock(logMutex);
-    const std::filesystem::path path = LogPath();
-    if (!checkedExistingSize) {
-        checkedExistingSize = true;
+    auto& session = CurrentLogSession();
+    std::lock_guard<std::mutex> lock(session.mutex);
+    const auto path = LogPath();
+    if (!session.start) {
         std::error_code error;
         constexpr std::uintmax_t kMaximumPersistentLogBytes = 4u * 1024u * 1024u;
-        if (std::filesystem::exists(path, error) && !error &&
-            std::filesystem::file_size(path, error) > kMaximumPersistentLogBytes &&
-            !error) {
-            // Keep one bounded log instead of creating accumulating rotated
-            // files. State-transition and error messages after this launch
-            // remain available for diagnosis.
+        const auto size = std::filesystem::file_size(path, error);
+        if (!error && size > kMaximumPersistentLogBytes) {
+            // Clear oversized history before appending this session.
             std::ofstream(path, std::ios::trunc).close();
         }
     }
-    std::ofstream output(path, std::ios::app);
+    std::ofstream output(path, std::ios::binary | std::ios::app | std::ios::ate);
+    if (!output) return;
+    if (!session.start) {
+        const auto start = output.tellp();
+        if (start < 0) return;
+        session.start = static_cast<std::streamoff>(start);
+    }
     SYSTEMTIME time{};
     GetLocalTime(&time);
     output << '['
@@ -625,7 +761,23 @@ void Log(const std::string& line) {
            << std::setw(2) << time.wMinute << ':'
            << std::setw(2) << time.wSecond << '.'
            << std::setw(3) << time.wMilliseconds << "] "
-           << line << std::endl;
+           << line << "\r\n";
+}
+
+bool CopyCurrentLogSession(const std::filesystem::path& destination, const std::string& header) {
+    auto& session = CurrentLogSession();
+    std::lock_guard<std::mutex> lock(session.mutex);
+    if (!session.start) return false;
+
+    std::ifstream source(LogPath(), std::ios::binary);
+    if (!source.seekg(*session.start)) return false;
+    if (source.peek() == std::char_traits<char>::eof()) return false;
+
+    std::ofstream output(destination, std::ios::binary | std::ios::trunc);
+    if (!output) return false;
+    output << header << "\r\n\r\n" << source.rdbuf();
+    output.close();
+    return output.good();
 }
 
 std::string HresultText(HRESULT result) {
@@ -774,7 +926,7 @@ std::optional<VtsFpsConfig> ReadVtsConfiguredFps(int monitorRefreshFps) {
 }
 
 constexpr wchar_t kVtsApiPluginName[] = L"VTSFloat_Meow";
-constexpr wchar_t kVtsApiPluginDeveloper[] = L"fushoufish";
+constexpr wchar_t kVtsApiPluginDeveloper[] = L"fushoufish——咕噜灵波";
 constexpr int kVtsApiPort = 8001;
 constexpr int kVtsApiPollIntervalMs = 2000;
 // Keep API recovery responsive after the initial probe. The silent retry path
@@ -1174,7 +1326,7 @@ struct VtsExpressionState {
     bool active = false;
 };
 
-// VTS API WebSocket client - runs in a background thread.
+// VTube Studio API WebSocket client - runs in a background thread.
 class VtsApiClient {
 public:
     struct ExpressionInfo {
@@ -1184,21 +1336,29 @@ public:
     };
 
     void Start(HINSTANCE instance) {
-        if (running_.exchange(true)) return;
+        if (running_.load()) return;
+        if (thread_.joinable()) thread_.join();
+        running_.store(true);
+        workerDone_.store(false);
         instance_ = instance;
         const int savedPort = ReadConfigInt(L"VtsApi", L"Port", 0);
         portConfigured_ = savedPort > 0 && savedPort <= 65535;
         port_ = portConfigured_ ? savedPort : kVtsApiPort;
         initialDiscoveryStarted_.store(false, std::memory_order_relaxed);
-        initialDiscoveryDone_.store(false, std::memory_order_relaxed);
         authPending_.store(false, std::memory_order_relaxed);
         authDenied_.store(false, std::memory_order_relaxed);
         authorizationRetryRequested_.store(false, std::memory_order_relaxed);
-        thread_ = std::thread([this]() { ThreadMain(); });
+        scanRequested_.store(false, std::memory_order_relaxed);
+        scanning_.store(false, std::memory_order_relaxed);
+        ClearScanResult();
+        thread_ = std::thread([this]() { ThreadMain(); workerDone_.store(true); });
     }
 
+    void RequestStop() { running_.store(false); }
+    bool IsStopped() const { return workerDone_.load(); }
+
     void Stop() {
-        running_.store(false);
+        RequestStop();
         if (thread_.joinable()) thread_.join();
     }
 
@@ -1318,7 +1478,6 @@ public:
         expressionCommandCondition_.notify_all();
         expressionStateRequested_.store(false, std::memory_order_relaxed);
         initialDiscoveryStarted_.store(false, std::memory_order_relaxed);
-        initialDiscoveryDone_.store(false, std::memory_order_relaxed);
         authPending_.store(false, std::memory_order_relaxed);
         authDenied_.store(false, std::memory_order_relaxed);
         authorizationRetryRequested_.store(false, std::memory_order_relaxed);
@@ -1326,10 +1485,6 @@ public:
 
     bool IsConnected() const {
         return connected_.load();
-    }
-
-    bool IsInitialDiscoveryDone() const {
-        return initialDiscoveryDone_.load(std::memory_order_relaxed);
     }
 
     bool IsAwaitingAuthorization() const {
@@ -1386,6 +1541,8 @@ private:
         }
     }
 
+    std::atomic<bool> workerDone_{true};
+
     void ThreadMainImpl() {
         LoadCachedToken();
         Log("[vts-api] thread started");
@@ -1417,7 +1574,6 @@ private:
             if (!initialDiscoveryStarted_.exchange(true, std::memory_order_relaxed)) {
                 Log("[vts-api] initial discovery started");
                 connectedToApi = ConnectInitial();
-                initialDiscoveryDone_.store(true, std::memory_order_relaxed);
             } else {
                 connectedToApi = ConnectSilent();
             }
@@ -1432,6 +1588,7 @@ private:
             // Remember a verified VTS endpoint before authorization. This is
             // required so the retry button can reconnect after a first-run
             // denial even when no API port existed in the INI beforehand.
+            if (!running_.load()) { Disconnect(); break; }
             if (activePort_ > 0) {
                 const bool portChanged =
                     !portConfigured_ || activePort_ != port_;
@@ -1557,7 +1714,7 @@ private:
 
     bool ProbeIsVtsApi() {
         // Send an APIStateRequest (no authentication needed).
-        // Verify the response is from VTS API.
+        // Verify the response is from VTube Studio API.
         if (!SendJson(BuildJsonRequest("APIStateRequest"))) {
             Log("[vts-api] probe send failed");
             return false;
@@ -1569,7 +1726,7 @@ private:
         }
         const std::string apiName = ExtractJsonString(response, "apiName");
         if (apiName != "VTubeStudioPublicAPI") {
-            Log("[vts-api] probe: not VTS API on port " + std::to_string(activePort_) +
+            Log("[vts-api] probe: not VTube Studio API on port " + std::to_string(activePort_) +
                 " (got apiName='" + apiName.substr(0, 50) + "')");
             return false;
         }
@@ -1741,11 +1898,18 @@ private:
 
     // VTS_API_CLASS_PLACEHOLDER_2
 
+    static const std::string& PluginIdentityJson() {
+        static const std::string identity =
+            R"("pluginName":")" + EscapeJsonString(WideToUtf8(kVtsApiPluginName)) +
+            R"(","pluginDeveloper":")" + EscapeJsonString(WideToUtf8(kVtsApiPluginDeveloper)) + '"';
+        return identity;
+    }
+
     bool Authenticate() {
         if (cachedToken_.empty()) {
             return RequestNewToken();
         }
-        std::string data = R"("pluginName":"VTSFloat_Meow","pluginDeveloper":"fushoufish","authenticationToken":")" + cachedToken_ + R"(")";
+        std::string data = PluginIdentityJson() + R"(,"authenticationToken":")" + EscapeJsonString(cachedToken_) + R"(")";
         std::string request = BuildJsonRequest("AuthenticationRequest", data);
         if (!SendJson(request)) return false;
         std::string response = ReceiveJson();
@@ -1775,7 +1939,7 @@ private:
             Log("[vts-api] plugin icon prepared bytes=" +
                 std::to_string(pluginIconBase64_.size()));
         }
-        std::string data = R"("pluginName":"VTSFloat_Meow","pluginDeveloper":"fushoufish","pluginIcon":")" + pluginIconBase64_ + R"(")";
+        std::string data = PluginIdentityJson() + R"(,"pluginIcon":")" + pluginIconBase64_ + R"(")";
         std::string request = BuildJsonRequest("AuthenticationTokenRequest", data);
         if (!SendJson(request)) {
             authPending_.store(false, std::memory_order_relaxed);
@@ -1794,7 +1958,7 @@ private:
             // Keep receiving the original request instead of sending another
             // token request every time the short socket timeout expires.
         } while (GetTickCount64() < authorizationDeadline);
-        if (response.empty()) {
+        if (!running_.load() || response.empty()) {
             authPending_.store(false, std::memory_order_relaxed);
             Log("[vts-api] authorization request timed out");
             return false;
@@ -1819,7 +1983,7 @@ private:
         SaveToken();
         Log("[vts-api] received new token");
 
-        std::string authData = R"("pluginName":"VTSFloat_Meow","pluginDeveloper":"fushoufish","authenticationToken":")" + cachedToken_ + R"(")";
+        std::string authData = PluginIdentityJson() + R"(,"authenticationToken":")" + EscapeJsonString(cachedToken_) + R"(")";
         std::string authReq = BuildJsonRequest("AuthenticationRequest", authData);
         if (!SendJson(authReq)) {
             authPending_.store(false, std::memory_order_relaxed);
@@ -2066,7 +2230,6 @@ private:
     std::atomic<int> scanResult_{ 0 };  // 0=none, 1=success, 2=fail
     std::atomic<bool> everAuthenticated_{ false };
     std::atomic<bool> initialDiscoveryStarted_{ false };
-    std::atomic<bool> initialDiscoveryDone_{ false };
     std::atomic<bool> authPending_{ false };
     std::atomic<bool> authDenied_{ false };
     std::atomic<bool> authorizationRetryRequested_{ false };
@@ -2104,8 +2267,9 @@ std::filesystem::path CurrentExecutablePath() {
     std::vector<wchar_t> buffer(32768);
     const DWORD length = GetModuleFileNameW(
         nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-    return length ? std::filesystem::path(std::wstring(buffer.data(), length))
-                  : std::filesystem::path{};
+    return length && length < buffer.size()
+        ? std::filesystem::path(std::wstring(buffer.data(), length))
+        : std::filesystem::path{};
 }
 
 std::optional<VtsProcessInfo> FindRunningVts() {
@@ -2163,44 +2327,6 @@ HWND FindMainWindowForProcess(DWORD processId) {
         },
         reinterpret_cast<LPARAM>(&search));
     return search.window;
-}
-
-bool SetWindowClientResolution(HWND window, int clientWidth, int clientHeight) {
-    if (!window || !IsWindow(window) || clientWidth <= 0 || clientHeight <= 0) {
-        return false;
-    }
-    if (IsIconic(window) || IsZoomed(window)) {
-        ShowWindow(window, SW_RESTORE);
-    }
-    RECT client{};
-    RECT outer{};
-    if (!GetClientRect(window, &client) || !GetWindowRect(window, &outer)) {
-        return false;
-    }
-    const int currentClientWidth = client.right - client.left;
-    const int currentClientHeight = client.bottom - client.top;
-    const int frameWidth = (outer.right - outer.left) - currentClientWidth;
-    const int frameHeight = (outer.bottom - outer.top) - currentClientHeight;
-    const int outerWidth = clientWidth + (std::max)(0, frameWidth);
-    const int outerHeight = clientHeight + (std::max)(0, frameHeight);
-
-    MONITORINFO monitor{};
-    monitor.cbSize = sizeof(monitor);
-    if (!GetMonitorInfoW(
-            MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor)) {
-        return false;
-    }
-    const int workWidth = monitor.rcWork.right - monitor.rcWork.left;
-    const int workHeight = monitor.rcWork.bottom - monitor.rcWork.top;
-    const int x = outerWidth <= workWidth
-        ? monitor.rcWork.left + (workWidth - outerWidth) / 2
-        : monitor.rcWork.left;
-    const int y = outerHeight <= workHeight
-        ? monitor.rcWork.top + (workHeight - outerHeight) / 2
-        : monitor.rcWork.top;
-    return SetWindowPos(
-        window, nullptr, x, y, outerWidth, outerHeight,
-        SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED) != FALSE;
 }
 
 bool IsVtsDirectory(const std::filesystem::path& directory) {
@@ -2543,20 +2669,42 @@ int StopRunningOverlay() {
     return 0;
 }
 
+void ActivateRunningOverlay() {
+    // The mutex can already exist while the first launch is creating its window.
+    for (int attempt = 0; attempt < 50; ++attempt) {
+        if (const HWND window = FindWindowW(kWindowClass, nullptr)) {
+            DWORD processId = 0;
+            GetWindowThreadProcessId(window, &processId);
+            if (processId) AllowSetForegroundWindow(processId);
+            // Keep the launching process alive while the existing UI uses its foreground grant.
+            if (!SendMessageTimeoutW(window, kActivateExistingMessage, 0, 0,
+                    SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, nullptr)) {
+                PostMessageW(window, kActivateExistingMessage, 0, 0);
+            }
+            return;
+        }
+        Sleep(20);
+    }
+}
+
 class LayeredOverlay {
 public:
-    int Run(HINSTANCE instance) {
+    int Run(HINSTANCE instance, std::filesystem::path updateTask = {},
+            std::wstring updateToken = {}) {
         instance_ = instance;
         uiThreadId_ = GetCurrentThreadId();
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
         INITCOMMONCONTROLSEX commonControls{};
         commonControls.dwSize = sizeof(commonControls);
-        commonControls.dwICC = ICC_BAR_CLASSES;
+        commonControls.dwICC = ICC_BAR_CLASSES | ICC_WIN95_CLASSES;
         InitCommonControlsEx(&commonControls);
 
         instanceMutex_ = CreateMutexW(nullptr, TRUE, kInstanceName);
-        if (!instanceMutex_ || GetLastError() == ERROR_ALREADY_EXISTS) {
+        if (!instanceMutex_) return 0;
+        if (GetLastError() == ERROR_ALREADY_EXISTS) {
+            CloseHandle(std::exchange(instanceMutex_, nullptr));
+            if (updateTask.empty()) ActivateRunningOverlay();
             return 0;
         }
 
@@ -2567,10 +2715,16 @@ public:
             instance_, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON,
             16, 16, LR_DEFAULTCOLOR));
         RegisterWindowClass();
+        const bool migrated = MigrateLegacyConfig();
         LoadUiSettings();
-        // Keep a complete editable English-reference template beside the
-        // portable executable even when the user currently uses a built-in
-        // language. Read-only locations fall back to LocalAppData.
+        if (migrated) {
+            SaveUiSettings();
+            SaveImageTone();
+            SaveFeatherEdges();
+            SaveShadowSettings();
+            Log("[settings] migrated legacy LocalAppData configuration");
+        }
+        // Generate the editable template even when using a built-in language.
         vtsfloat::i18n::CustomLanguageFilePath();
         cpuModel_ = ReadCpuModelName();
         CreateOverlayWindow();
@@ -2590,6 +2744,17 @@ public:
         AddTrayIcon();
         SetTimer(hwnd_, 67, 250, nullptr);
         UpdateDesktopPause();
+        updateStartupTask_ = std::move(updateTask);
+        updateStartupToken_ = std::move(updateToken);
+        try {
+            updater_ = std::make_unique<vtsfloat::update::Updater>(
+                instance_, ConfigPath(), CurrentExecutablePath(), VTSFLOAT_VERSION,
+                [](const std::string& message) { Log("[update] " + message); });
+            SetTimer(hwnd_, kUpdateTimer, 100, nullptr);
+            PostMessageW(hwnd_, kUpdateStartupMessage, 0, 0);
+        } catch (...) {
+            Log("[update] initialization failed");
+        }
 
         DWORD taskIndex = 0;
         HANDLE mmcss = AvSetMmThreadCharacteristicsW(L"Games", &taskIndex);
@@ -2609,6 +2774,10 @@ public:
                 if (message.message == WM_QUIT) {
                     running = false;
                     break;
+                }
+                if (updateBannerHwnd_ && IsWindowVisible(updateBannerHwnd_) &&
+                    IsDialogMessageW(updateBannerHwnd_, &message)) {
+                    continue;
                 }
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
@@ -2661,6 +2830,17 @@ public:
     }
 
     ~LayeredOverlay() {
+        CloseShadowPanel(false);
+        CloseImagePanel(false);
+        CloseUiScalePicker(uiScalePickerHwnd_);
+        cropEditing_ = false;
+        CloseFeatherPanel();
+        DestroyCropEdits();
+        updater_.reset();
+        if (updateBannerHwnd_ && IsWindow(updateBannerHwnd_)) {
+            DestroyWindow(updateBannerHwnd_);
+        }
+        if (updateBannerFont_) DeleteObject(updateBannerFont_);
         // WM_CLOSE normally performs this first. Keep a destructor fallback so
         // every orderly message-loop exit still restores temporary VTS state
         // before the API worker is stopped.
@@ -2688,9 +2868,9 @@ public:
             DestroyWindow(statusHwnd_);
             statusHwnd_ = nullptr;
         }
-        if (githubIcon_) {
-            DestroyIcon(githubIcon_);
-            githubIcon_ = nullptr;
+        if (githubGraphicsToken_) Gdiplus::GdiplusShutdown(githubGraphicsToken_);
+        for (const HICON icon : toolbarToggleIcons_) {
+            if (icon) DestroyIcon(icon);
         }
         if (appIconLarge_) {
             DestroyIcon(appIconLarge_);
@@ -2700,6 +2880,7 @@ public:
             DestroyIcon(appIconSmall_);
             appIconSmall_ = nullptr;
         }
+        if (exportDebugLogOnExit_) ExportDebugLogOnExit();
         DestroyDib();
         if (instanceMutex_) {
             ReleaseMutex(instanceMutex_);
@@ -2708,6 +2889,29 @@ public:
     }
 
 private:
+    void ExportDebugLogOnExit() const {
+        wchar_t desktop[MAX_PATH]{};
+        const HRESULT result = SHGetFolderPathW(nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, SHGFP_TYPE_CURRENT, desktop);
+        if (FAILED(result)) {
+            Log("[debug] desktop log export failed: cannot resolve Desktop (" + std::to_string(result) + ")");
+            return;
+        }
+        const auto destination = std::filesystem::path(desktop) / L"VTSFloat_Meow_debug.log";
+        const double seconds = std::chrono::duration<double>(lastModelPresentation_ - firstModelPresentation_).count();
+        std::ostringstream header;
+        header.imbue(std::locale::classic());
+        header << "VTSFloat_Meow exited in debug mode. This log was exported to your desktop. ";
+        if (modelPresentations_ > 1 && seconds > 0) {
+            header << "Average frame rate: " << std::fixed << std::setprecision(1)
+                   << (modelPresentations_ - 1) / seconds << " FPS.";
+        } else {
+            header << "Average frame rate: unavailable (not enough model frames).";
+        }
+        if (!CopyCurrentLogSession(destination, header.str())) {
+            Log("[debug] desktop log export failed: could not copy the current session");
+        }
+    }
+
     void RegisterWindowClass() {
         WNDCLASSEXW windowClass{};
         windowClass.cbSize = sizeof(windowClass);
@@ -2731,6 +2935,39 @@ private:
         toolbarClass.hIconSm = appIconSmall_;
         Check(RegisterClassExW(&toolbarClass) ? S_OK : HRESULT_FROM_WIN32(GetLastError()),
               "RegisterClassExW(toolbar)");
+
+        WNDCLASSEXW updateClass{};
+        updateClass.cbSize = sizeof(updateClass);
+        updateClass.hInstance = instance_;
+        updateClass.lpfnWndProc = &LayeredOverlay::UpdateBannerWindowProc;
+        updateClass.lpszClassName = kUpdateBannerClass;
+        updateClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        Check(RegisterClassExW(&updateClass) ? S_OK : HRESULT_FROM_WIN32(GetLastError()),
+              "RegisterClassExW(update banner)");
+
+        WNDCLASSEXW debugClass = updateClass;
+        debugClass.lpfnWndProc = DefWindowProcW;
+        debugClass.lpszClassName = kDebugReadoutClass;
+        Check(RegisterClassExW(&debugClass) ? S_OK : HRESULT_FROM_WIN32(GetLastError()),
+              "RegisterClassExW(debug readout)");
+
+        WNDCLASSEXW guideClass = updateClass;
+        guideClass.lpfnWndProc = &LayeredOverlay::ToolbarGuideProc;
+        guideClass.lpszClassName = kToolbarGuideClass;
+        Check(RegisterClassExW(&guideClass) ? S_OK : HRESULT_FROM_WIN32(GetLastError()),
+              "RegisterClassExW(toolbar guide)");
+
+        WNDCLASSEXW githubClass = updateClass;
+        githubClass.lpfnWndProc = &LayeredOverlay::GithubDropdownProc;
+        githubClass.lpszClassName = kGithubDropdownClass;
+        Check(RegisterClassExW(&githubClass) ? S_OK : HRESULT_FROM_WIN32(GetLastError()),
+              "RegisterClassExW(GitHub dropdown)");
+
+        WNDCLASSEXW hintClass = githubClass;
+        hintClass.lpfnWndProc = &LayeredOverlay::ToolbarHintProc;
+        hintClass.lpszClassName = kToolbarHintClass;
+        Check(RegisterClassExW(&hintClass) ? S_OK : HRESULT_FROM_WIN32(GetLastError()),
+              "RegisterClassExW(toolbar hint)");
 
         WNDCLASSEXW statusClass{};
         statusClass.cbSize = sizeof(statusClass);
@@ -2776,8 +3013,9 @@ private:
         int x = ReadConfigInt(
             L"window", L"x", (std::max)(20, (screenWidth - width) / 2));
         int y = ReadConfigInt(L"window", L"y", 100);
-        width = (std::max)(kMinimumWidth, width);
-        height = (std::max)(96, height);
+        const bool editedBounds = CropActive() || imageTransform_.active();
+        width = (std::max)(editedBounds ? 1 : kMinimumWidth, width);
+        height = (std::max)(editedBounds ? 1 : 96, height);
         RECT saved{ x, y, x + width, y + height };
         if (!MonitorFromRect(&saved, MONITOR_DEFAULTTONULL)) {
             width = kDefaultWidth;
@@ -2809,7 +3047,7 @@ private:
             desktopMode_ ? 0 : WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
             kToolbarClass,
             kToolbarTitle,
-            WS_POPUP,
+            WS_POPUP | WS_CLIPCHILDREN,
             0,
             0,
             locked_ ? 92 : kMinimumWidth,
@@ -2821,69 +3059,27 @@ private:
         if (!toolbarHwnd_) {
             throw std::runtime_error("CreateWindowExW(toolbar) failed");
         }
-        githubIcon_ = static_cast<HICON>(LoadImageW(
-            instance_, MAKEINTRESOURCEW(IDI_GITHUB), IMAGE_ICON,
-            32, 32, LR_DEFAULTCOLOR));
+        Gdiplus::GdiplusStartupInput graphicsStartup{};
+        if (Gdiplus::GdiplusStartup(&githubGraphicsToken_, &graphicsStartup, nullptr) != Gdiplus::Ok) {
+            githubGraphicsToken_ = 0;
+        }
         PositionToolbar();
-        ShowWindow(
-            toolbarHwnd_, (!locked_ || debugMode_) ? SW_SHOWNOACTIVATE : SW_HIDE);
     }
 
     void CreateVtsStatusWindow() {
         statusHwnd_ = CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-            kStatusClass,
-            L"VTSFloat_Meow - VTube Studio",
-            WS_POPUP | WS_CAPTION | WS_SYSMENU,
-            0, 0, 620, 270,
-            nullptr, nullptr, instance_, this);
-        if (!statusHwnd_) {
-            Log("[vts status] failed to create window");
-            return;
-        }
-        statusHeadline_ = CreateWindowExW(
-            0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT,
-            24, 20, 570, 28, statusHwnd_, nullptr, instance_, nullptr);
-        statusInstructions_ = CreateWindowExW(
-            0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT,
-            24, 56, 570, 62, statusHwnd_, nullptr, instance_, nullptr);
-        statusPath_ = CreateWindowExW(
-            0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT,
-            24, 178, 570, 34, statusHwnd_, nullptr, instance_, nullptr);
-        statusLaunchExe_ = CreateWindowExW(
-            0, L"BUTTON", Tr(L"从 Steam 启动 VTube Studio"),
-            WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
-            24, 130, 270, 32, statusHwnd_,
-            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStatusLaunchExeCommand)), instance_, nullptr);
-        statusLaunchBatch_ = CreateWindowExW(
-            0, L"BUTTON", Tr(L"从外部启动 VTS"),
-            WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
-            314, 130, 280, 32, statusHwnd_,
-            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStatusLaunchBatchCommand)), instance_, nullptr);
-        ShowWindow(statusHwnd_, SW_HIDE);
-    }
-
-    void PositionVtsStatusWindow() {
-        if (!statusHwnd_ || !IsWindow(statusHwnd_)) return;
-        MONITORINFO info{};
-        info.cbSize = sizeof(info);
-        const HMONITOR monitor = MonitorFromWindow(
-            hwnd_, MONITOR_DEFAULTTONEAREST);
-        if (!monitor || !GetMonitorInfoW(monitor, &info)) return;
-        RECT current{};
-        GetWindowRect(statusHwnd_, &current);
-        const int width = current.right - current.left;
-        const int height = current.bottom - current.top;
-        const int x = info.rcWork.left +
-            ((info.rcWork.right - info.rcWork.left) - width) / 2;
-        const int y = info.rcWork.top +
-            ((info.rcWork.bottom - info.rcWork.top) - height) / 2;
-        SetWindowPos(statusHwnd_, HWND_TOPMOST, x, y, width, height,
-                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+            kStatusClass, kWindowTitle, WS_POPUP,
+            0, 0, 1, 1, hwnd_, nullptr, instance_, this);
+        if (!statusHwnd_) Log("[vts status] failed to create window");
     }
 
     void SetVtsStatusMode(
         VtsStatusMode mode, const std::filesystem::path& directory = {}) {
+        if (mode != VtsStatusMode::Hidden) {
+            EndViewEdit();
+            StopImageBackdrop();
+        }
         const bool changed = mode != statusMode_ || directory != statusDirectory_;
         if (changed) {
             statusDismissed_ = false;
@@ -2909,9 +3105,6 @@ private:
             InvalidateRect(hwnd_, nullptr, FALSE);
             return;
         }
-        // The status page is rendered inside the layered overlay itself.  It
-        // is temporarily made interactive so the two launch buttons can be
-        // clicked without opening a separate dialog window.
         ApplyClickThrough();
         InvalidateRect(hwnd_, nullptr, FALSE);
     }
@@ -2954,9 +3147,12 @@ private:
     }
 
     void HideVtsStatus() {
+        if (statusMode_ == VtsStatusMode::Hidden && !statusDismissed_) return;
         statusMode_ = VtsStatusMode::Hidden;
         statusDismissed_ = false;
         statusFrameDirty_ = true;
+        statusPressedButton_ = 0;
+        if (statusHwnd_) ShowWindow(statusHwnd_, SW_HIDE);
         ApplyClickThrough();
         InvalidateRect(hwnd_, nullptr, FALSE);
     }
@@ -3017,7 +3213,7 @@ private:
         return path;
     }
 
-    std::optional<std::filesystem::path> PickVtsExecutable() const {
+    std::optional<std::filesystem::path> PickVtsExecutable(bool shortcut = false) const {
         HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         const bool mustUninitialize = SUCCEEDED(initialized);
         ComPtr<IFileOpenDialog> dialog;
@@ -3036,11 +3232,14 @@ private:
         dialog->GetOptions(&options);
         dialog->SetOptions(options | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST |
                            FOS_FILEMUSTEXIST | FOS_NOCHANGEDIR);
-        dialog->SetFileTypes(ARRAYSIZE(filters), filters);
-        dialog->SetFileTypeIndex(1);
-        dialog->SetTitle(Tr(L"选择 VTube Studio.exe"));
+        if (!shortcut) {
+            dialog->SetFileTypes(ARRAYSIZE(filters), filters);
+            dialog->SetFileTypeIndex(1);
+        }
+        dialog->SetTitle(shortcut ? Tr(L"选择快捷应用") : Tr(L"选择 VTube Studio.exe"));
         const HRESULT shown = dialog->Show(hwnd_);
         if (FAILED(shown)) {
+            dialog.Reset();
             if (mustUninitialize) CoUninitialize();
             return std::nullopt;
         }
@@ -3053,8 +3252,33 @@ private:
                 CoTaskMemFree(rawPath);
             }
         }
+        result.Reset();
+        dialog.Reset();
         if (mustUninitialize) CoUninitialize();
         return path;
+    }
+
+    void SaveShortcutApp(const std::filesystem::path& path) {
+        if (!WriteConfigString(L"launcher", L"path", path.wstring())) {
+            MessageBoxW(hwnd_, Tr(L"无法保存快捷应用设置"), kWindowTitle, MB_OK | MB_ICONWARNING);
+            return;
+        }
+        shortcutApp_ = path;
+        shortcutHoverAction_ = 0;
+        statusFrameDirty_ = true;
+    }
+
+    void ActivateShortcutApp() {
+        if (shortcutApp_.empty()) {
+            const auto path = PickVtsExecutable(true);
+            if (path) SaveShortcutApp(*path);
+            return;
+        }
+        const auto folder = shortcutApp_.parent_path();
+        if (reinterpret_cast<INT_PTR>(ShellExecuteW(hwnd_, L"open", shortcutApp_.c_str(), nullptr,
+                folder.c_str(), SW_SHOWNORMAL)) <= 32) {
+            MessageBoxW(hwnd_, Tr(L"无法启动快捷应用，请检查文件路径"), kWindowTitle, MB_OK | MB_ICONWARNING);
+        }
     }
 
     void ChooseVtsLaunchPath() {
@@ -3109,6 +3333,7 @@ private:
         if (!GetWindowRect(hwnd_, &rect)) {
             return;
         }
+        if (cropEditing_) rect = cropBeforeEditBounds_;
         WriteConfigInt(L"window", L"x", rect.left);
         WriteConfigInt(L"window", L"y", rect.top);
         WriteConfigInt(L"window", L"width", rect.right - rect.left);
@@ -3231,13 +3456,35 @@ private:
         subjectHoverMaskDirty_ = false;
     }
 
+    static int DefaultUiScalePercent(HMONITOR monitor) {
+        MONITORINFO info{sizeof(info)};
+        if (GetMonitorInfoW(monitor, &info) && info.rcMonitor.right - info.rcMonitor.left == 3840 &&
+            info.rcMonitor.bottom - info.rcMonitor.top == 2160) return 140;
+        return kDefaultUiScalePercent;
+    }
+
     void LoadUiSettings() {
+        shortcutApp_ = ReadConfigString(L"launcher", L"path");
+        LoadImageSettings();
+        LoadShadowSettings();
+        cropAspectLocked_ = ReadConfigInt(L"crop", L"lock_aspect", 0) != 0;
+        LoadFeatherEdges();
+        RECT crop{};
+        const std::wstring savedCrop = ReadConfigString(L"crop", L"rect");
+        if (swscanf_s(savedCrop.c_str(), L"%ld,%ld,%ld,%ld",
+                &crop.left, &crop.top, &crop.right, &crop.bottom) == 4 &&
+            crop.left >= 0 && crop.top >= 0 && crop.right <= kCropExtent &&
+            crop.bottom <= kCropExtent && !IsRectEmpty(&crop)) {
+            cropSelection_ = crop;
+        }
         const UiLanguage detectedLanguage = vtsfloat::i18n::DetectSystemLanguage();
         const std::wstring savedLanguage = ReadConfigString(L"ui", L"language");
         vtsfloat::i18n::SetLanguage(vtsfloat::i18n::LanguageFromCode(
             savedLanguage, detectedLanguage));
         const int savedUiScalePercent = (std::clamp)(
-            ReadConfigInt(L"ui", L"scale_percent", kDefaultUiScalePercent),
+            ReadConfigInt(L"ui", L"scale_percent", DefaultUiScalePercent(
+                MonitorFromPoint(POINT{ReadConfigInt(L"window", L"x", 0), ReadConfigInt(L"window", L"y", 0)},
+                    MONITOR_DEFAULTTOPRIMARY))),
             kMinimumUiScalePercent, kMaximumUiScalePercent);
         uiScalePercent_ = (std::clamp)(
             static_cast<int>(std::lround(
@@ -3247,10 +3494,13 @@ private:
         // Every normal launch restores the saved bounds in edit mode. Locking
         // is a runtime action only and never hides the GUI on the next launch.
         locked_ = false;
+        apiOptedOut_ = ReadConfigInt(L"VtsApi", L"disabled", 0) != 0;
+        toolbarGuideSeen_ = ReadConfigInt(L"ui", L"toolbar_guide_seen", 0) != 0;
         desktopMode_ = ReadConfigInt(L"window", L"desktop_mode", 0) != 0;
         pauseOnFullscreen_ = ReadConfigInt(L"render", L"pause_on_fullscreen", 1) != 0;
         debugMode_ = ReadConfigInt(L"debug", L"enabled", 0) != 0;
         bgWarningPermanentlyDismissed_ = ReadConfigInt(L"warnings", L"suppress_bg_opaque", 0) != 0;
+        viewSettingsWarningDismissed_ = ReadConfigInt(L"warnings", L"suppress_view_settings", 0) != 0;
         gpuWarningPermanentlyDismissed_ = ReadConfigInt(L"warnings", L"suppress_gpu_high_perf", 0) != 0;
         selectedGpuIndex_ = ReadConfigInt(L"gpu", L"adapter_index", -1);
         targetFps_ = (std::clamp)(
@@ -3269,6 +3519,7 @@ private:
         scalingQuality_ = (std::clamp)(
             ReadConfigInt(L"render", L"scaling_quality", kScalingBalanced),
             kScalingPerformance, kScalingQuality);
+        fadeShadowOnHover_ = ReadConfigInt(L"opacity", L"fade_shadow_on_hover", 0) != 0;
         hoverFadeEnabled_ = ReadConfigInt(L"opacity", L"locked_hover_fade", 1) != 0;
         hoverOpacityPercent_ = (std::clamp)(
             ReadConfigInt(
@@ -3346,6 +3597,11 @@ private:
         }
     }
 
+    bool SaveBorderMode() const {
+        return WriteConfigInt(L"border", L"schema", 2) &&
+            WriteConfigInt(L"border", L"mode", borderMode_);
+    }
+
     void SaveUiSettings() const {
         WriteConfigInt(L"window", L"desktop_mode", desktopMode_ ? 1 : 0);
         WriteConfigInt(L"render", L"pause_on_fullscreen", pauseOnFullscreen_ ? 1 : 0);
@@ -3354,6 +3610,7 @@ private:
             vtsfloat::i18n::LanguageCode(vtsfloat::i18n::GetLanguage()));
         WriteConfigInt(L"ui", L"scale_percent", uiScalePercent_);
         WriteConfigInt(L"debug", L"enabled", debugMode_ ? 1 : 0);
+        WriteConfigInt(L"VtsApi", L"disabled", apiOptedOut_);
         WriteConfigInt(L"gpu", L"adapter_index", selectedGpuIndex_);
         WriteConfigInt(L"render", L"fps", targetFps_);
         WriteConfigInt(L"render", L"fps_mode", static_cast<int>(fpsMode_));
@@ -3361,6 +3618,7 @@ private:
             L"render", L"follow_monitor",
             fpsMode_ == FpsMode::FollowMonitor ? 1 : 0);
         WriteConfigInt(L"render", L"scaling_quality", scalingQuality_);
+        WriteConfigInt(L"opacity", L"fade_shadow_on_hover", fadeShadowOnHover_);
         WriteConfigInt(L"opacity", L"locked_hover_fade", hoverFadeEnabled_ ? 1 : 0);
         WriteConfigInt(L"opacity", L"locked_hover_percent", hoverOpacityPercent_);
         WriteConfigString(
@@ -3394,8 +3652,7 @@ private:
             L"expression", L"hover_duration_seconds",
             FormatNonNegativeDecimal(hoverExpressionDurationSeconds_));
         WriteConfigInt(L"window", L"lock_aspect", aspectLocked_ ? 1 : 0);
-        WriteConfigInt(L"border", L"schema", 2);
-        WriteConfigInt(L"border", L"mode", borderMode_);
+        SaveBorderMode();
         WriteConfigInt(
             L"border", L"custom_color", static_cast<int>(customBorderColor_));
         WriteConfigInt(L"border", L"thickness", borderThickness_);
@@ -3403,10 +3660,21 @@ private:
     }
 
     void ResetSettingsToDefaults() {
+        EndViewEdit();
+        CloseFeatherPanel();
+        imageTransform_ = {};
+        imageTone_ = {};
+        imageEffects_ = {};
+        shadow_ = {};
+        RefreshImageTone();
+        cropSelection_ = kFullCrop;
+        cropAspectLocked_ = false;
+        cropFeather_ = {};
         // This is deliberately scoped to the application's own INI file. It
         // does not touch the VTS installation, Spout, logs, or any user files.
         CancelFpsCapture();
         CancelHotkeyCapture();
+        if (toolbarGuideHwnd_) DestroyWindow(toolbarGuideHwnd_);
         if (toolbarHwnd_) {
             KillTimer(toolbarHwnd_, 48);
         }
@@ -3432,12 +3700,13 @@ private:
         targetFps_ = 60;
         fpsMode_ = FpsMode::FollowVts;
         scalingQuality_ = kScalingBalanced;
+        fadeShadowOnHover_ = false;
         hoverFadeEnabled_ = true;
         hoverOpacityPercent_ = kDefaultHoverOpacityPercent;
         hoverOpacityRestoreDelaySeconds_ =
             kDefaultHoverOpacityRestoreDelaySeconds;
         modelOpacityPercent_ = 100;
-        uiScalePercent_ = kDefaultUiScalePercent;
+        uiScalePercent_ = DefaultUiScalePercent(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTOPRIMARY));
         hoverExpandPx_ = 0;
         excludeEffectsFromHover_ = false;
         subjectHoverRegionConfigured_ = false;
@@ -3460,12 +3729,16 @@ private:
         customBorderColor_ = kDefaultCustomBorderColor;
         borderThickness_ = kDefaultBorderThickness;
         bgWarningPermanentlyDismissed_ = false;
+        viewSettingsWarningDismissed_ = false;
         gpuWarningPermanentlyDismissed_ = false;
         gpuWarningShown_ = false;
         statusDismissed_ = false;
         hasReceivedModel_ = false;
         apiStartScheduled_ = false;
         apiStartedAfterModel_ = false;
+        apiOptedOut_ = false;
+        vtsApi_.RequestStop();
+        toolbarGuideSeen_ = false;
         lastApiNotificationVisible_ = false;
         vtsConfiguredFps_ = 0;
         vtsConfiguredMode_.clear();
@@ -3519,7 +3792,7 @@ private:
         resetFrameSchedule_ = true;
         RenderFrame();
 
-        // The VTS API token and port are in the same INI. Restarting this
+        // The VTube Studio API token and port are in the same INI. Restarting this
         // client drops the in-memory token as well as the on-disk cache.
         vtsApi_.ResetCache();
         Log(std::string("[settings] reset_to_defaults") +
@@ -3629,6 +3902,7 @@ private:
             (pauseOnFullscreen_ && ForegroundIsFullscreen()));
         if (desktopOutputPaused_.exchange(paused) != paused) {
             resetFrameSchedule_ = true;
+            RefreshDebugReadout(false);
             Log(paused ? "[desktop] output paused: fullscreen or minimized" : "[desktop] output resumed");
         }
     }
@@ -3643,32 +3917,100 @@ private:
         Log(desktopMode_ ? "[window] desktop mode" : "[window] floating mode");
     }
 
+    int PreferredWideToolbarWidth(int modelWidth) const {
+        const int singleRowWidth = UiScaled(kToolbarWideMinimumWidth);
+        return uiScalePercent_ <= kToolbarCompactWidthMaxScale
+            ? singleRowWidth : (std::max)(singleRowWidth, modelWidth);
+    }
+
     void PositionToolbar() {
         if (!toolbarHwnd_ || !hwnd_ || !IsWindow(hwnd_)) {
             return;
         }
         RECT overlay{};
-        GetWindowRect(hwnd_, &overlay);
+        if (!GetWindowRect(hwnd_, &overlay)) return;
         MONITORINFO monitorInfo{};
         monitorInfo.cbSize = sizeof(monitorInfo);
-        GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &monitorInfo);
-        const int width = locked_
+        if (!GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &monitorInfo)) {
+            return;
+        }
+        const RECT work = monitorInfo.rcWork;
+        const bool narrowLocked = locked_ && updateBannerText_.empty();
+        const int modelWidth = overlay.right - overlay.left;
+        const bool modelVisible = hasReceivedModel_ && statusMode_ == VtsStatusMode::Hidden;
+        const int minimumToolbarWidth = viewEditing_ ? UiScaled(680)
+            : (!locked_ && (CropActive() || imageTransform_.active()) ? UiScaled(560) : 0);
+        const int preferredWidth = narrowLocked
             ? UiScaled(92 + (debugMode_ ? kLockedDebugLabelWidth : 0))
-            : (std::max)(UiScaled(kMinimumWidth),
-                static_cast<int>(overlay.right - overlay.left));
+            : (modelVisible ? (std::max)(modelWidth, minimumToolbarWidth)
+                : PreferredWideToolbarWidth(modelWidth));
+        const int width = (std::min)(preferredWidth, static_cast<int>(work.right - work.left));
+        if (width <= 0) return;
+        if (viewEditing_) {
+            cropToolbarLayout_ = BuildCropToolbarLayout(width);
+        } else if (!locked_) {
+            toolbarLayout_ = BuildToolbarLayout(width * 100 / uiScalePercent_);
+        }
         const int height = ToolbarCurrentHeight();
         const int desiredY = overlay.top - height - UiScaled(kToolbarGap);
-        const int y = (std::max)(static_cast<int>(monitorInfo.rcWork.top), desiredY);
-        int x = overlay.left;
-        const int workWidth = monitorInfo.rcWork.right - monitorInfo.rcWork.left;
-        if (width <= workWidth) {
-            x = (std::max)(static_cast<int>(monitorInfo.rcWork.left),
-                (std::min)(x, static_cast<int>(monitorInfo.rcWork.right) - width));
+        const int y = (std::max)(static_cast<int>(work.top), desiredY);
+        const int x = (std::clamp)(static_cast<int>(overlay.left),
+            static_cast<int>(work.left), static_cast<int>(work.right) - width);
+        const bool show = overlayVisible_ && (!locked_ || debugMode_ || UpdateNotificationHeight() > 0);
+        const bool visible = (GetWindowLongPtrW(toolbarHwnd_, GWL_STYLE) & WS_VISIBLE) != 0;
+        const UINT visibility = show == visible ? 0 : (show ? SWP_SHOWWINDOW : SWP_HIDEWINDOW);
+        const UINT toolbarFlags = SWP_NOACTIVATE | visibility;
+        RECT statusBounds{};
+        RECT currentStatus{};
+        if (overlayVisible_ && statusMode_ != VtsStatusMode::Hidden && !statusDismissed_ &&
+            statusHwnd_ && IsWindowVisible(statusHwnd_) && GetWindowRect(statusHwnd_, &currentStatus)) {
+            const bool docked = !locked_ && show;
+            const RECT anchor = docked ? RECT{x, y, x + width, y + height} : overlay;
+            statusBounds = VtsStatusBounds(overlay, anchor, work, docked);
         }
-        SetWindowPos(
-            toolbarHwnd_, WindowZOrder(), x, y, width, height,
-            SWP_NOACTIVATE);
+        const bool moveStatus = !IsRectEmpty(&statusBounds) &&
+            (statusBounds.left != currentStatus.left || statusBounds.top != currentStatus.top);
+        const RECT toolbarBounds{x, y, x + width, y + height};
+        const UINT moveFlags = SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE;
+        struct AttachedWindow { HWND hwnd; std::optional<POINT> position; };
+        const AttachedWindow attached[]{
+            {statusHwnd_, moveStatus ? std::optional<POINT>{{statusBounds.left, statusBounds.top}} : std::nullopt},
+            {borderPanelHwnd_, DockedPersonalPanelPosition(overlay, work, show ? &toolbarBounds : nullptr)},
+            {featherPanelHwnd_, show ? DockedPanelPosition(featherPanelHwnd_, featherPanelDetached_, toolbarBounds, work) : std::nullopt},
+            {imagePanelHwnd_, show ? DockedPanelPosition(imagePanelHwnd_, imagePanelDetached_, toolbarBounds, work) : std::nullopt},
+            {shadowPanelHwnd_, show ? DockedPanelPosition(shadowPanelHwnd_, shadowPanelDetached_, toolbarBounds, work) : std::nullopt},
+        };
+        int moves = 0;
+        for (const auto& window : attached) if (window.position) ++moves;
+        bool positionedTogether = false;
+        if (moves) {
+            HDWP batch = BeginDeferWindowPos(1 + moves);
+            if (batch) batch = DeferWindowPos(batch, toolbarHwnd_, WindowZOrder(),
+                x, y, width, height, toolbarFlags);
+            for (const auto& window : attached) {
+                if (batch && window.position) batch = DeferWindowPos(batch, window.hwnd, nullptr,
+                    window.position->x, window.position->y, 0, 0, moveFlags);
+            }
+            positionedTogether = batch && EndDeferWindowPos(batch);
+        }
+        if (!positionedTogether) {
+            SetWindowPos(toolbarHwnd_, WindowZOrder(), x, y, width, height, toolbarFlags);
+            for (const auto& window : attached) {
+                if (window.position) SetWindowPos(window.hwnd, nullptr,
+                    window.position->x, window.position->y, 0, 0, moveFlags);
+            }
+        }
+        if (!IsRectEmpty(&statusBounds) &&
+            (statusBounds.right - statusBounds.left != currentStatus.right - currentStatus.left ||
+             statusBounds.bottom - statusBounds.top != currentStatus.bottom - currentStatus.top)) {
+            PresentVtsStatus();
+        }
+        if (cropEditing_) PositionCropReadout(overlay, work);
+        PositionToolbarHint();
         InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+        PositionUpdateBanner();
+        RefreshDebugReadout(false);
+        PositionToolbarGuide();
     }
 
     void CenterOnMonitor(HMONITOR monitor) {
@@ -3686,8 +4028,7 @@ private:
         const int height = rect.bottom - rect.top;
         const int x = info.rcWork.left + (info.rcWork.right - info.rcWork.left - width) / 2;
         const int y = info.rcWork.top + (info.rcWork.bottom - info.rcWork.top - height) / 2;
-        SetWindowPos(
-            hwnd_, WindowZOrder(), x, y, width, height,
+        SetWindowPos(hwnd_, WindowZOrder(), x, y, width, height,
             SWP_NOACTIVATE | SWP_SHOWWINDOW);
         PositionToolbar();
         SaveWindowPlacement();
@@ -3702,24 +4043,29 @@ private:
             return;
         }
 
+        EndViewEdit();
         SetOverlayVisible(true);
         SetLocked(false);
-        const int width = kResetWidth;
-        // "主屏居中" is also a resize operation.  Do not force its legacy
-        // 1280x720 box when aspect lock is enabled: VTS' transparent Spout
-        // canvas is commonly 1280x773, and 720 would visibly squash it.
-        const int height = aspectLocked_ && sourceWidth_ && sourceHeight_
+        const int width = kDefaultWidth;
+        // Keep the sender's aspect when recentering a live, aspect-locked model.
+        const RECT source = DisplayImageBounds();
+        const LONG sourceWidth = source.right - source.left;
+        const LONG sourceHeight = source.bottom - source.top;
+        const int height = aspectLocked_ && sourceWidth && sourceHeight
             ? (std::max)(1, static_cast<int>(
-                (static_cast<std::uint64_t>(width) * sourceHeight_ +
-                    sourceWidth_ / 2) / sourceWidth_))
-            : kResetHeight;
+                (static_cast<std::uint64_t>(width) * sourceHeight +
+                    sourceWidth / 2) / sourceWidth))
+            : kDefaultHeight;
         const int x = info.rcWork.left +
             (info.rcWork.right - info.rcWork.left - width) / 2;
         const int y = info.rcWork.top +
             (info.rcWork.bottom - info.rcWork.top - height) / 2;
-        SetWindowPos(
-            hwnd_, WindowZOrder(), x, y, width, height,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        if ((CropActive() || imageTransform_.active()) && aspectLocked_ && !IsRectEmpty(&source)) {
+            FitCropViewport(RECT{x, y, x + width, y + height}, source, monitor);
+        } else {
+            SetWindowPos(hwnd_, WindowZOrder(), x, y, width, height,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
         SaveUiSettings();
         initialAspectApplied_ = true;
         PositionToolbar();
@@ -3760,8 +4106,18 @@ private:
     }
 
     void SetOverlayVisible(bool visible) {
+        if (!visible) {
+            HideToolbarHint();
+            CloseImagePanel(false);
+            StopImageBackdrop();
+            CloseFeatherPanel();
+        }
+        if (!visible) EndViewEdit();
         overlayVisible_ = visible;
         if (!visible) {
+            if (toolbarGuideHwnd_) FinishToolbarGuide(false);
+            if (debugReadoutHwnd_) ShowWindow(debugReadoutHwnd_, SW_HIDE);
+            if (statusHwnd_) ShowWindow(statusHwnd_, SW_HIDE);
             if (toolbarHwnd_ && IsWindow(toolbarHwnd_)) {
                 ShowWindow(toolbarHwnd_, SW_HIDE);
             }
@@ -3777,18 +4133,9 @@ private:
             hwnd_, WindowZOrder(), 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         PositionToolbar();
-        if (toolbarHwnd_ && IsWindow(toolbarHwnd_)) {
-            if (!locked_ || debugMode_) {
-                ShowWindow(toolbarHwnd_, SW_SHOWNOACTIVATE);
-                SetWindowPos(
-                    toolbarHwnd_, WindowZOrder(), 0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-                RedrawWindow(
-                    toolbarHwnd_, nullptr, nullptr,
-                    RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-            } else {
-                ShowWindow(toolbarHwnd_, SW_HIDE);
-            }
+        if (toolbarHwnd_ && IsWindowVisible(toolbarHwnd_)) {
+            RedrawWindow(toolbarHwnd_, nullptr, nullptr,
+                RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
         }
         ++requested_;
         RenderFrame();
@@ -3798,6 +4145,844 @@ private:
 
     void ToggleOverlayVisibility() {
         SetOverlayVisible(!overlayVisible_);
+    }
+
+    enum class ToolbarGuideStep { Done, Shortcut, Scale };
+
+    ToolbarButton ToolbarGuideTarget() const {
+        switch (toolbarGuideStep_) {
+        case ToolbarGuideStep::Shortcut: return ToolbarButton::Hotkey;
+        case ToolbarGuideStep::Scale: return ToolbarButton::CropUiScale;
+        case ToolbarGuideStep::Done: return ToolbarButton::Lock;
+        }
+        return ToolbarButton::Lock;
+    }
+
+    const wchar_t* ToolbarGuideNextLabel() const {
+        return toolbarGuideStep_ == ToolbarGuideStep::Scale ? Tr(L"知道了") : Tr(L"下一步");
+    }
+
+    bool BeginToolbarGuide() {
+        toolbarGuideHwnd_ = CreateWindowExW(
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kToolbarGuideClass, kWindowTitle,
+            WS_POPUP | WS_CLIPCHILDREN, 0, 0, 1, 1, toolbarHwnd_,
+            nullptr, instance_, this);
+        if (!toolbarGuideHwnd_) return false;
+        const auto control = [this](const wchar_t* type, DWORD style, UINT command = 0) {
+            return CreateWindowExW(0, type, L"", WS_CHILD | WS_VISIBLE | style,
+                0, 0, 0, 0, toolbarGuideHwnd_,
+                reinterpret_cast<HMENU>(static_cast<UINT_PTR>(command)), instance_, nullptr);
+        };
+        toolbarGuideTitle_ = control(L"STATIC", SS_CENTERIMAGE | SS_NOPREFIX);
+        toolbarGuideText_ = control(L"STATIC", SS_NOPREFIX | SS_EDITCONTROL);
+        toolbarGuideNext_ = control(L"BUTTON", BS_OWNERDRAW, kGuideContinueCommand);
+        toolbarGuideClose_ = control(L"BUTTON", BS_OWNERDRAW, kGuideCloseCommand);
+        if (!toolbarGuideTitle_ || !toolbarGuideText_ || !toolbarGuideNext_ || !toolbarGuideClose_) {
+            DestroyWindow(toolbarGuideHwnd_);
+            return false;
+        }
+        toolbarGuideStep_ = ToolbarGuideStep::Done;
+        toolbarGuideAnimationStarted_ = {};
+        LayoutToolbarGuide();
+        return true;
+    }
+
+    void LayoutToolbarGuide() {
+        if (!toolbarGuideHwnd_) return;
+        const int padding = UiScaled(14);
+        const int header = UiScaled(35);
+        const int footer = UiScaled(34);
+        const int closeSize = UiScaled(26);
+        MONITORINFO monitor{sizeof(MONITORINFO)};
+        GetMonitorInfoW(MonitorFromWindow(toolbarHwnd_, MONITOR_DEFAULTTONEAREST), &monitor);
+        toolbarGuideWidth_ = (std::min)(UiScaled(376),
+            static_cast<int>(monitor.rcWork.right - monitor.rcWork.left));
+        if (toolbarGuideWidth_ <= padding * 2) toolbarGuideWidth_ = UiScaled(376);
+        const auto font = [this](int size, int weight) {
+            return CreateFontW(-UiScaled(size), 0, 0, 0, weight, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, UiFontFace());
+        };
+        HFONT titleFont = font(16, FW_SEMIBOLD);
+        HFONT bodyFont = font(14, FW_NORMAL);
+        SendMessageW(toolbarGuideTitle_, WM_SETFONT, reinterpret_cast<WPARAM>(titleFont), FALSE);
+        SendMessageW(toolbarGuideText_, WM_SETFONT, reinterpret_cast<WPARAM>(bodyFont), FALSE);
+        if (toolbarGuideTitleFont_) DeleteObject(toolbarGuideTitleFont_);
+        if (toolbarGuideBodyFont_) DeleteObject(toolbarGuideBodyFont_);
+        toolbarGuideTitleFont_ = titleFont;
+        toolbarGuideBodyFont_ = bodyFont;
+
+        const wchar_t* title = Tr(L"完成");
+        std::wstring body;
+        switch (toolbarGuideStep_) {
+        case ToolbarGuideStep::Done:
+            body = std::wstring(Tr(L"点击「完成」会锁定悬浮窗口并隐藏工具栏。")) + L"\r\n" +
+                Tr(L"如果担心找不到界面，你可以在系统托盘中进行重置恢复。");
+            break;
+        case ToolbarGuideStep::Shortcut:
+            title = Tr(L"快捷键");
+            body = std::wstring(Tr(L"重新打开工具栏的快捷键：")) + HotkeyText() + L"\r\n" +
+                Tr(L"点击「快捷键」可以自定义组合键。");
+            break;
+        case ToolbarGuideStep::Scale:
+            title = Tr(L"界面缩放");
+            body = Tr(L"如果觉得界面太大或者太小，可以点击此处自行设置缩放。");
+            break;
+        }
+        const wchar_t* next = ToolbarGuideNextLabel();
+        SetWindowTextW(toolbarGuideTitle_, title);
+        SetWindowTextW(toolbarGuideText_, body.c_str());
+        SetWindowTextW(toolbarGuideNext_, next);
+        SetWindowTextW(toolbarGuideClose_, L"×");
+        HDC dc = GetDC(toolbarGuideHwnd_);
+        HGDIOBJ previous = bodyFont ? SelectObject(dc, bodyFont) : nullptr;
+        RECT measured{0, 0, toolbarGuideWidth_ - 2 * padding, 0};
+        DrawTextW(dc, body.c_str(), -1, &measured, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+        SIZE nextSize{};
+        GetTextExtentPoint32W(dc, next, static_cast<int>(wcslen(next)), &nextSize);
+        if (previous) SelectObject(dc, previous);
+        ReleaseDC(toolbarGuideHwnd_, dc);
+        const int textHeight = (std::max)(UiScaled(20), static_cast<int>(measured.bottom));
+        const int footerTop = header + textHeight + UiScaled(12);
+        toolbarGuideHeight_ = footerTop + footer + UiScaled(10);
+        const int buttonWidth = (std::min)(toolbarGuideWidth_ - 2 * padding,
+            (std::max)(UiScaled(90), static_cast<int>(nextSize.cx) + 2 * padding));
+        MoveWindow(toolbarGuideTitle_, padding, 0,
+            toolbarGuideWidth_ - padding * 2 - closeSize, header, TRUE);
+        MoveWindow(toolbarGuideClose_, toolbarGuideWidth_ - closeSize - UiScaled(5),
+            UiScaled(4), closeSize, closeSize, TRUE);
+        MoveWindow(toolbarGuideText_, padding, header,
+            toolbarGuideWidth_ - padding * 2, textHeight, TRUE);
+        MoveWindow(toolbarGuideNext_, toolbarGuideWidth_ - padding - buttonWidth, footerTop,
+            buttonWidth, footer, TRUE);
+        PositionToolbarGuide();
+        InvalidateRect(toolbarGuideHwnd_, nullptr, FALSE);
+        InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+    }
+
+    void PositionToolbarGuide() {
+        if (!toolbarGuideHwnd_ || !overlayVisible_ || locked_ || !IsWindowVisible(toolbarHwnd_)) return;
+        RECT anchor = ToolbarButtonRect(ToolbarGuideTarget());
+        MapWindowPoints(toolbarHwnd_, nullptr, reinterpret_cast<POINT*>(&anchor), 2);
+        RECT toolbar{};
+        GetWindowRect(toolbarHwnd_, &toolbar);
+        MONITORINFO monitor{sizeof(MONITORINFO)};
+        if (!GetMonitorInfoW(MonitorFromRect(&anchor, MONITOR_DEFAULTTONEAREST), &monitor)) return;
+        const RECT work = monitor.rcWork;
+        const int maxX = (std::max)(work.left, work.right - toolbarGuideWidth_);
+        const int gap = UiScaled(8);
+        int x = (std::clamp)(static_cast<int>((anchor.left + anchor.right - toolbarGuideWidth_) / 2),
+            static_cast<int>(work.left), maxX);
+        int y = toolbar.bottom + gap + toolbarGuideHeight_ <= work.bottom
+            ? toolbar.bottom + gap
+            : (std::max)(work.top, toolbar.top - gap - toolbarGuideHeight_);
+        if (toolbarGuideAnimationStarted_ != Clock::time_point{}) {
+            const double progress = (std::min)(1.0,
+                std::chrono::duration<double, std::milli>(
+                    Clock::now() - toolbarGuideAnimationStarted_).count() / 220.0);
+            const double remaining = 1.0 - progress;
+            x += static_cast<int>(std::lround((toolbarGuideFrom_.x - x) * remaining * remaining));
+            y += static_cast<int>(std::lround((toolbarGuideFrom_.y - y) * remaining * remaining));
+            if (progress >= 1.0) {
+                toolbarGuideAnimationStarted_ = {};
+                KillTimer(toolbarHwnd_, kToolbarGuideTimer);
+            }
+        }
+        RECT current{};
+        GetWindowRect(toolbarGuideHwnd_, &current);
+        if (!IsWindowVisible(toolbarGuideHwnd_) || current.left != x || current.top != y ||
+            current.right - current.left != toolbarGuideWidth_ ||
+            current.bottom - current.top != toolbarGuideHeight_) {
+            SetWindowPos(toolbarGuideHwnd_, WindowZOrder(), x, y,
+                toolbarGuideWidth_, toolbarGuideHeight_, SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+        }
+    }
+
+    void ContinueToolbarGuide() {
+        if (toolbarGuideStep_ == ToolbarGuideStep::Scale) {
+            FinishToolbarGuide(true);
+            return;
+        }
+        RECT current{};
+        GetWindowRect(toolbarGuideHwnd_, &current);
+        toolbarGuideFrom_ = POINT{current.left, current.top};
+        toolbarGuideStep_ = toolbarGuideStep_ == ToolbarGuideStep::Done
+            ? ToolbarGuideStep::Shortcut : ToolbarGuideStep::Scale;
+        toolbarGuideAnimationStarted_ = Clock::now();
+        SetTimer(toolbarHwnd_, kToolbarGuideTimer, 25, nullptr);
+        LayoutToolbarGuide();
+    }
+
+    void FinishToolbarGuide(bool lockOverlay) {
+        toolbarGuideSeen_ = true;
+        WriteConfigInt(L"ui", L"toolbar_guide_seen", 1);
+        DestroyWindow(toolbarGuideHwnd_);
+        InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+        if (lockOverlay) ActivateToolbarButton(ToolbarButton::Lock);
+    }
+
+    static LRESULT CALLBACK ToolbarGuideProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+        auto* overlay = reinterpret_cast<LayeredOverlay*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            overlay = static_cast<LayeredOverlay*>(create->lpCreateParams);
+            SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(overlay));
+        }
+        if (!overlay) return DefWindowProcW(window, message, wParam, lParam);
+        constexpr COLORREF background = RGB(19, 29, 45);
+        switch (message) {
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
+        case WM_COMMAND:
+            if (LOWORD(wParam) == kGuideContinueCommand) overlay->ContinueToolbarGuide();
+            else if (LOWORD(wParam) == kGuideCloseCommand) overlay->FinishToolbarGuide(false);
+            return 0;
+        case WM_CLOSE:
+            overlay->FinishToolbarGuide(false);
+            return 0;
+        case WM_CTLCOLORSTATIC: {
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            SetTextColor(dc, RGB(230, 239, 252));
+            SetBkColor(dc, background);
+            SetDCBrushColor(dc, background);
+            return reinterpret_cast<LRESULT>(GetStockObject(DC_BRUSH));
+        }
+        case WM_DRAWITEM: {
+            const auto& item = *reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
+            const bool close = item.CtlID == kGuideCloseCommand;
+            PanelFill(item.hDC, item.rcItem, close ? background :
+                ((item.itemState & ODS_SELECTED) ? RGB(29, 72, 123) : RGB(43, 105, 169)));
+            const wchar_t* label = close ? L"×" :
+                overlay->ToolbarGuideNextLabel();
+            PanelText(item.hDC, label, item.rcItem, RGB(240, 246, 255),
+                overlay->UiScaled(14), false, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            return TRUE;
+        }
+        case WM_PAINT: {
+            PAINTSTRUCT paint{};
+            HDC dc = BeginPaint(window, &paint);
+            RECT rect{};
+            GetClientRect(window, &rect);
+            PanelFill(dc, rect, background);
+            HBRUSH border = CreateSolidBrush(RGB(71, 153, 231));
+            FrameRect(dc, &rect, border);
+            DeleteObject(border);
+            EndPaint(window, &paint);
+            return 0;
+        }
+        case WM_NCDESTROY:
+            if (overlay->toolbarGuideTitleFont_) DeleteObject(overlay->toolbarGuideTitleFont_);
+            if (overlay->toolbarGuideBodyFont_) DeleteObject(overlay->toolbarGuideBodyFont_);
+            overlay->toolbarGuideTitleFont_ = overlay->toolbarGuideBodyFont_ = nullptr;
+            overlay->toolbarGuideHwnd_ = nullptr;
+            KillTimer(overlay->toolbarHwnd_, kToolbarGuideTimer);
+            break;
+        }
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+
+    static void PaintToolbarPopoverBackground(HDC dc, const RECT& bounds) {
+        PanelFill(dc, bounds, kToolbarPopoverBackground);
+        const HBRUSH border = CreateSolidBrush(RGB(53, 81, 117));
+        FrameRect(dc, &bounds, border);
+        DeleteObject(border);
+    }
+
+    std::optional<RECT> ToolbarPopoverBounds(const RECT& anchor, int preferredWidth, int height) const {
+        if (IsRectEmpty(&anchor)) return std::nullopt;
+        MONITORINFO monitor{sizeof(MONITORINFO)};
+        if (!GetMonitorInfoW(MonitorFromRect(&anchor, MONITOR_DEFAULTTONEAREST), &monitor)) return std::nullopt;
+        const RECT work = monitor.rcWork;
+        const int width = (std::min)(preferredWidth, static_cast<int>(work.right - work.left));
+        const int gap = UiScaled(4);
+        const LONG centeredX = anchor.left + (anchor.right - anchor.left - width) / 2;
+        const LONG x = (std::clamp)(centeredX, work.left, work.right - width);
+        const LONG above = anchor.top - gap - height;
+        const LONG desiredY = above >= work.top ? above : anchor.bottom + gap;
+        const LONG y = (std::clamp)(desiredY, work.top, (std::max)(work.top, work.bottom - height));
+        return RECT{x, y, x + width, y + height};
+    }
+
+    void HideGithubDropdown() {
+        KillTimer(toolbarHwnd_, kGithubDropdownTimer);
+        if (githubDropdownHwnd_) ShowWindow(githubDropdownHwnd_, SW_HIDE);
+    }
+
+    void ShowGithubDropdown() {
+        if (locked_ || !overlayVisible_ || updateClosing_ ||
+            (githubDropdownHwnd_ && IsWindowVisible(githubDropdownHwnd_))) return;
+        if (!githubDropdownHwnd_) {
+            githubDropdownHwnd_ = CreateWindowExW(
+                WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, kGithubDropdownClass, L"GitHub",
+                WS_POPUP | WS_CLIPCHILDREN, 0, 0, 1, 1, toolbarHwnd_,
+                nullptr, instance_, this);
+            if (!githubDropdownHwnd_) return;
+            githubVersionLabel_ = CreateWindowExW(0, L"STATIC", L"",
+                WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE | SS_ENDELLIPSIS | SS_NOPREFIX,
+                0, 0, 0, 0, githubDropdownHwnd_, nullptr, instance_, nullptr);
+            const auto createButton = [this](UINT command) {
+                return CreateWindowExW(0, L"BUTTON", L"",
+                    WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 0, 0, githubDropdownHwnd_,
+                    reinterpret_cast<HMENU>(static_cast<UINT_PTR>(command)), instance_, nullptr);
+            };
+            githubUpdateButton_ = createButton(kCheckUpdateCommand);
+            githubDebugButton_ = createButton(kGithubDebugCommand);
+            if (!githubVersionLabel_ || !githubUpdateButton_ || !githubDebugButton_) {
+                DestroyWindow(githubDropdownHwnd_);
+                return;
+            }
+        }
+
+        const std::wstring version = std::wstring(Tr(L"当前版本：")) + L"v" + VTSFLOAT_VERSION;
+        const wchar_t* update = Tr(L"检查更新");
+        const wchar_t* debug = Tr(L"调试");
+        SetWindowTextW(githubVersionLabel_, version.c_str());
+        SetWindowTextW(githubUpdateButton_, update);
+        SetWindowTextW(githubDebugButton_, debug);
+        HFONT font = CreateFontW(-UiScaled(14), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, UiFontFace());
+        if (font) {
+            for (HWND control : {githubVersionLabel_, githubUpdateButton_, githubDebugButton_}) {
+                SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), FALSE);
+            }
+            if (githubDropdownFont_) DeleteObject(githubDropdownFont_);
+            githubDropdownFont_ = font;
+        }
+        HDC dc = GetDC(githubDropdownHwnd_);
+        HGDIOBJ previous = githubDropdownFont_ ? SelectObject(dc, githubDropdownFont_) : nullptr;
+        const auto measure = [dc](std::wstring_view label) {
+            SIZE size{};
+            GetTextExtentPoint32W(dc, label.data(), static_cast<int>(label.size()), &size);
+            return static_cast<int>(size.cx);
+        };
+        const int labelWidth = (std::max)({measure(version), measure(update), measure(debug)});
+        if (previous) SelectObject(dc, previous);
+        ReleaseDC(githubDropdownHwnd_, dc);
+        githubDropdownWidth_ = (std::max)(UiScaled(176), labelWidth + UiScaled(24));
+        githubDropdownLastHover_ = Clock::now();
+        githubHoveredButton_ = nullptr;
+        SetTimer(toolbarHwnd_, kGithubDropdownTimer, 25, nullptr);
+        UpdateGithubDropdown();
+    }
+
+    void UpdateGithubDropdown() {
+        if (!githubDropdownHwnd_ || locked_ || !overlayVisible_ ||
+            !IsWindowVisible(toolbarHwnd_)) {
+            HideGithubDropdown();
+            return;
+        }
+        RECT anchor = ToolbarButtonRect(ToolbarButton::Github);
+        MapWindowPoints(toolbarHwnd_, nullptr, reinterpret_cast<POINT*>(&anchor), 2);
+        const int rowHeight = UiScaled(32);
+        const int height = rowHeight * 3;
+        const auto popup = ToolbarPopoverBounds(anchor, githubDropdownWidth_, height);
+        if (!popup) {
+            HideGithubDropdown();
+            return;
+        }
+        const RECT fullMenu = *popup;
+        const int x = fullMenu.left, y = fullMenu.top, width = fullMenu.right - fullMenu.left;
+        const auto now = Clock::now();
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        const HWND capture = GetCapture();
+        if (PtInRect(&anchor, cursor) || PtInRect(&fullMenu, cursor) ||
+            capture == githubUpdateButton_ || capture == githubDebugButton_) {
+            githubDropdownLastHover_ = now;
+        } else if (now - githubDropdownLastHover_ > std::chrono::milliseconds(180)) {
+            HideGithubDropdown();
+            return;
+        }
+        RECT current{};
+        GetWindowRect(githubDropdownHwnd_, &current);
+        if (!IsWindowVisible(githubDropdownHwnd_) || current.left != x || current.top != y ||
+            current.right - current.left != width || current.bottom - current.top != height) {
+            const int padding = UiScaled(4);
+            MoveWindow(githubVersionLabel_, UiScaled(12), 1, width - UiScaled(24), rowHeight - 1, TRUE);
+            MoveWindow(githubUpdateButton_, padding, rowHeight,
+                width - 2 * padding, rowHeight, TRUE);
+            MoveWindow(githubDebugButton_, padding, rowHeight * 2,
+                width - 2 * padding, rowHeight - padding, TRUE);
+            SetWindowPos(githubDropdownHwnd_, WindowZOrder(), x, y, width, height,
+                SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+        }
+        HWND hovered = nullptr;
+        if (PtInRect(&fullMenu, cursor)) {
+            for (HWND button : {githubUpdateButton_, githubDebugButton_}) {
+                RECT action{};
+                if (GetWindowRect(button, &action) && PtInRect(&action, cursor)) hovered = button;
+            }
+        }
+        if (hovered != githubHoveredButton_) {
+            if (githubHoveredButton_) InvalidateRect(githubHoveredButton_, nullptr, FALSE);
+            githubHoveredButton_ = hovered;
+            if (hovered) InvalidateRect(hovered, nullptr, FALSE);
+        }
+    }
+
+    static LRESULT CALLBACK GithubDropdownProc(HWND window, UINT message,
+                                               WPARAM wParam, LPARAM lParam) {
+        auto* overlay = reinterpret_cast<LayeredOverlay*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            overlay = static_cast<LayeredOverlay*>(create->lpCreateParams);
+            SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(overlay));
+        }
+        if (!overlay) return DefWindowProcW(window, message, wParam, lParam);
+        switch (message) {
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
+        case WM_COMMAND:
+            if (HIWORD(wParam) != BN_CLICKED) break;
+            if (LOWORD(wParam) == kCheckUpdateCommand) {
+                overlay->HideGithubDropdown();
+                overlay->BeginUpdateCheck();
+                return 0;
+            }
+            if (LOWORD(wParam) == kGithubDebugCommand) {
+                RECT item{};
+                if (GetWindowRect(overlay->githubDebugButton_, &item)) {
+                    overlay->HideGithubDropdown();
+                    overlay->CancelFpsCapture();
+                    Log("[toolbar] action=debug_menu");
+                    overlay->ShowDebugMenu(POINT{item.left, item.bottom});
+                }
+                return 0;
+            }
+            break;
+        case WM_SETCURSOR:
+            if (reinterpret_cast<HWND>(wParam) == overlay->githubUpdateButton_ ||
+                reinterpret_cast<HWND>(wParam) == overlay->githubDebugButton_) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
+            break;
+        case WM_CTLCOLORSTATIC: {
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            SetTextColor(dc, kToolbarPopoverText);
+            SetBkColor(dc, kToolbarPopoverBackground);
+            SetDCBrushColor(dc, kToolbarPopoverBackground);
+            return reinterpret_cast<LRESULT>(GetStockObject(DC_BRUSH));
+        }
+        case WM_DRAWITEM: {
+            const auto& item = *reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
+            const COLORREF color = (item.itemState & ODS_SELECTED) ? RGB(18, 50, 88) :
+                (item.hwndItem == overlay->githubHoveredButton_ ? RGB(26, 70, 116) : RGB(24, 42, 65));
+            PanelFill(item.hDC, item.rcItem, color);
+            RECT text = item.rcItem;
+            text.left += overlay->UiScaled(8);
+            wchar_t label[256]{};
+            GetWindowTextW(item.hwndItem, label, ARRAYSIZE(label));
+            PanelText(item.hDC, label, text, RGB(240, 246, 255),
+                overlay->UiScaled(14), false, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            return TRUE;
+        }
+        case WM_PAINT: {
+            PAINTSTRUCT paint{};
+            HDC dc = BeginPaint(window, &paint);
+            RECT bounds{};
+            GetClientRect(window, &bounds);
+            PaintToolbarPopoverBackground(dc, bounds);
+            EndPaint(window, &paint);
+            return 0;
+        }
+        case WM_NCDESTROY:
+            if (overlay->githubDropdownFont_) DeleteObject(overlay->githubDropdownFont_);
+            overlay->githubDropdownFont_ = nullptr;
+            overlay->githubDropdownHwnd_ = nullptr;
+            break;
+        }
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+
+    int UpdateNotificationHeight() const {
+        return viewEditing_ || updateBannerText_.empty() ? 0 : UiScaled(kToolbarNotificationHeight);
+    }
+
+    bool CreateUpdateBanner() {
+        if (updateBannerHwnd_) return true;
+        updateBannerHwnd_ = CreateWindowExW(
+            WS_EX_CONTROLPARENT, kUpdateBannerClass, L"",
+            WS_CHILD | WS_CLIPCHILDREN, 0, 0, 1, 1,
+            toolbarHwnd_, nullptr, instance_, this);
+        if (!updateBannerHwnd_) return false;
+        updateBannerLabel_ = CreateWindowExW(0, L"STATIC", L"",
+            WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE | SS_ENDELLIPSIS | SS_NOPREFIX,
+            0, 0, 0, 0, updateBannerHwnd_, nullptr, instance_, nullptr);
+        const auto button = [this](UINT command) {
+            return CreateWindowExW(0, L"BUTTON", L"", WS_CHILD | WS_TABSTOP | BS_OWNERDRAW,
+                0, 0, 0, 0, updateBannerHwnd_,
+                reinterpret_cast<HMENU>(static_cast<UINT_PTR>(command)), instance_, nullptr);
+        };
+        updateLaterButton_ = button(kUpdateLaterCommand);
+        updateInstallButton_ = button(kUpdateInstallCommand);
+        updateDismissButton_ = button(kUpdateDismissCommand);
+        if (updateBannerLabel_ && updateLaterButton_ && updateInstallButton_ &&
+            updateDismissButton_) return true;
+        DestroyWindow(updateBannerHwnd_);
+        updateBannerHwnd_ = nullptr;
+        return false;
+    }
+
+    void PositionUpdateBanner() {
+        if (!updateBannerHwnd_ || updateBannerText_.empty()) return;
+        if (viewEditing_) {
+            ShowWindow(updateBannerHwnd_, SW_HIDE);
+            return;
+        }
+        RECT toolbar{};
+        GetClientRect(toolbarHwnd_, &toolbar);
+        const int inset = UiScaled(1);
+        const int width = toolbar.right - 2 * inset;
+        const int height = UpdateNotificationHeight();
+        if (width <= 0) return;
+
+        const int fontHeight = UiScaled(15);
+        const std::wstring fontFace(UiFontFace());
+        if (!updateBannerFont_ || fontHeight != updateBannerFontHeight_ ||
+            fontFace != updateBannerFontFace_) {
+            HFONT font = CreateFontW(-fontHeight, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, DEFAULT_PITCH, fontFace.c_str());
+            if (font) {
+                SendMessageW(updateBannerLabel_, WM_SETFONT, reinterpret_cast<WPARAM>(font), FALSE);
+                if (updateBannerFont_) DeleteObject(updateBannerFont_);
+                updateBannerFont_ = font;
+                updateBannerFontHeight_ = fontHeight;
+                updateBannerFontFace_ = fontFace;
+            }
+        }
+
+        const int padding = UiScaled(7);
+        const int closeWidth = updateNoticeDismissal_ == UpdateNoticeDismissal::Manual ? UiScaled(25) : 0;
+        int laterWidth = 0;
+        int installWidth = 0;
+        if (updateNoticeStyle_ == UpdateNoticeStyle::Offer) {
+            HDC dc = GetDC(updateBannerHwnd_);
+            HGDIOBJ oldFont = updateBannerFont_ ? SelectObject(dc, updateBannerFont_) : nullptr;
+            const auto measure = [dc, padding](HWND control) {
+                wchar_t label[256]{};
+                const int length = GetWindowTextW(control, label, ARRAYSIZE(label));
+                SIZE size{};
+                GetTextExtentPoint32W(dc, label, length, &size);
+                return static_cast<int>(size.cx) + 2 * padding;
+            };
+            laterWidth = measure(updateLaterButton_);
+            installWidth = measure(updateInstallButton_);
+            if (oldFont) SelectObject(dc, oldFont);
+            ReleaseDC(updateBannerHwnd_, dc);
+            const int budget = (std::max)(0, width - closeWidth - UiScaled(120));
+            if (laterWidth + installWidth > budget) {
+                laterWidth = laterWidth * budget / (laterWidth + installWidth);
+                installWidth = budget - laterWidth;
+            }
+        }
+
+        SetWindowPos(updateBannerHwnd_, nullptr, inset, inset, width, height,
+            SWP_NOACTIVATE | SWP_NOZORDER);
+        int right = width - inset;
+        const auto place = [&right, height](HWND control, int controlWidth) {
+            right -= controlWidth;
+            MoveWindow(control, right, 0, controlWidth, height, TRUE);
+        };
+        if (closeWidth > 0) place(updateDismissButton_, closeWidth);
+        if (updateNoticeStyle_ == UpdateNoticeStyle::Offer) {
+            place(updateInstallButton_, installWidth);
+            place(updateLaterButton_, laterWidth);
+        }
+        MoveWindow(updateBannerLabel_, padding, 0,
+            (std::max)(0, right - 2 * padding), height, TRUE);
+        if (!(GetWindowLongPtrW(updateBannerHwnd_, GWL_STYLE) & WS_VISIBLE)) {
+            ShowWindow(updateBannerHwnd_, SW_SHOWNA);
+        }
+    }
+
+    bool ShowUpdateBanner(
+        std::wstring text, UpdateNoticeStyle style = UpdateNoticeStyle::Standard,
+        UpdateNoticeDismissal dismissal = UpdateNoticeDismissal::Manual) {
+        if (updateNoticeDismissAt_ != Clock::time_point{}) {
+            KillTimer(hwnd_, kUpdateNoticeDismissTimer);
+            updateNoticeDismissAt_ = {};
+        }
+        if (text.empty()) {
+            updateBannerText_.clear();
+            updateNoticeStyle_ = UpdateNoticeStyle::Standard;
+            updateNoticeDismissal_ = UpdateNoticeDismissal::None;
+            if (updateBannerHwnd_) ShowWindow(updateBannerHwnd_, SW_HIDE);
+            PositionToolbar();
+            return false;
+        }
+        if (!CreateUpdateBanner()) return false;
+        updateBannerText_ = std::move(text);
+        updateNoticeStyle_ = style;
+        updateNoticeDismissal_ = dismissal;
+        const bool offer = style == UpdateNoticeStyle::Offer;
+        SetWindowTextW(updateBannerLabel_, updateBannerText_.c_str());
+        if (offer) {
+            const auto later = L"[" + std::wstring(Tr(L"暂不更新")) + L"]";
+            const auto install = L"[" + std::wstring(Tr(L"更新并重启")) + L"]";
+            SetWindowTextW(updateLaterButton_, later.c_str());
+            SetWindowTextW(updateInstallButton_, install.c_str());
+        }
+        SetWindowTextW(updateDismissButton_, L"×");
+        ShowWindow(updateLaterButton_, offer ? SW_SHOWNA : SW_HIDE);
+        ShowWindow(updateInstallButton_, offer ? SW_SHOWNA : SW_HIDE);
+        ShowWindow(updateDismissButton_, dismissal == UpdateNoticeDismissal::Manual ? SW_SHOWNA : SW_HIDE);
+        PositionToolbar();
+        RedrawWindow(toolbarHwnd_, nullptr, nullptr,
+            RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+        if (dismissal == UpdateNoticeDismissal::Timed) {
+            updateNoticeDismissAt_ = Clock::now() + std::chrono::milliseconds(kUpdateNoticeTimeoutMs);
+            SetTimer(hwnd_, kUpdateNoticeDismissTimer, kUpdateNoticeTimeoutMs, nullptr);
+        }
+        // The notice stays queued if the user hid the overlay during startup.
+        return true;
+    }
+
+    void BeginUpdateCheck() {
+        if (updateClosing_) return;
+        if (!updater_) {
+            ShowUpdateBanner(Tr(L"检查失败"), UpdateNoticeStyle::Standard, UpdateNoticeDismissal::Timed);
+            return;
+        }
+        if (!updater_->Check(CurrentExecutablePath())) return;
+        updateDismissed_ = false;
+        SetTimer(hwnd_, kUpdateTimer, 100, nullptr);
+        PollUpdate();
+    }
+
+    bool SaveSettingsForUpdate() {
+        bool saved = true;
+        struct RestoreWriteTracking {
+            bool* previous;
+            ~RestoreWriteTracking() { checkedConfigWrites = previous; }
+        } restore{std::exchange(checkedConfigWrites, &saved)};
+        if (borderPanelHwnd_ && IsWindow(borderPanelHwnd_)) {
+            auto* state = reinterpret_cast<BorderDialogState*>(
+                GetWindowLongPtrW(borderPanelHwnd_, GWLP_USERDATA));
+            if (state && state->editingHoverOpacityRestoreDelay) {
+                ApplyHoverOpacityRestoreDelayInput(borderPanelHwnd_, state);
+            }
+            if (state && state->editingHoverExpressionDuration) {
+                ApplyHoverExpressionDurationInput(borderPanelHwnd_, state);
+            }
+            EndHoverOpacityPreview();
+        }
+        SaveUiSettings();
+        SaveHotkeySettings();
+        SaveWindowPlacement();
+        if (!saved) return false;
+        const auto config = ConfigPath();
+        WritePrivateProfileStringW(nullptr, nullptr, nullptr, config.c_str());
+        HANDLE file = CreateFileW(config.c_str(), GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE) return false;
+        saved = FlushFileBuffers(file) != FALSE;
+        CloseHandle(file);
+        return saved;
+    }
+
+    void PollUpdate() {
+        using vtsfloat::update::Phase;
+        if (!updater_ || updateClosing_) return;
+        const auto status = updater_->Poll();
+        if (status.revision == updateRevision_) return;
+        updateRevision_ = status.revision;
+        switch (status.phase) {
+        case Phase::Checking:
+        case Phase::Downloading:
+        case Phase::Preparing:
+        case Phase::ReadyToExit:
+        case Phase::WaitingForSuccess:
+        case Phase::ShowSuccess:
+            break;
+        default:
+            KillTimer(hwnd_, kUpdateTimer);
+            break;
+        }
+        if (!status.diagnostic.empty() && status.diagnostic != updateLastDiagnostic_) {
+            Log("[update] " + status.diagnostic);
+        }
+        updateLastDiagnostic_ = status.diagnostic;
+        if (updateDismissed_ && status.phase != Phase::ReadyToExit &&
+            status.phase != Phase::ShowSuccess) return;
+        switch (status.phase) {
+        case Phase::Idle:
+            ShowUpdateBanner({});
+            break;
+        case Phase::Checking:
+            ShowUpdateBanner(status.proxy ? Tr(L"尝试其他线路") : Tr(L"正在检查更新…"),
+                UpdateNoticeStyle::Checking, UpdateNoticeDismissal::None);
+            break;
+        case Phase::Available:
+            ShowUpdateBanner(std::wstring(Tr(L"存在新版本：")) + status.tag + Tr(L"，是否更新？"),
+                UpdateNoticeStyle::Offer);
+            break;
+        case Phase::Current:
+            ShowUpdateBanner(Tr(L"当前已是最新版本"),
+                UpdateNoticeStyle::Positive, UpdateNoticeDismissal::Timed);
+            break;
+        case Phase::CheckFailed:
+            ShowUpdateBanner(Tr(L"检查失败"), UpdateNoticeStyle::Standard, UpdateNoticeDismissal::Timed);
+            break;
+        case Phase::Downloading:
+            ShowUpdateBanner(std::wstring(status.proxy ? Tr(L"尝试其他线路") :
+                Tr(L"正在下载更新…")) + L" " + std::to_wstring(status.percent) + L"%",
+                UpdateNoticeStyle::Positive);
+            break;
+        case Phase::DownloadFailed:
+            ShowUpdateBanner(Tr(L"下载更新失败"));
+            break;
+        case Phase::Preparing:
+            ShowUpdateBanner(Tr(L"正在准备更新…"), UpdateNoticeStyle::Positive);
+            break;
+        case Phase::ReadyToExit: {
+            bool saved = false;
+            try { saved = SaveSettingsForUpdate(); } catch (...) {}
+            if (!saved) {
+                updater_->Cancel();
+                updateRevision_ = updater_->Poll().revision;
+                ShowUpdateBanner(Tr(L"保存设置失败，更新已取消"));
+            } else if (updater_->Commit()) {
+                updateClosing_ = true;
+                EnableWindow(hwnd_, FALSE);
+                if (toolbarHwnd_) EnableWindow(toolbarHwnd_, FALSE);
+                if (borderPanelHwnd_) EnableWindow(borderPanelHwnd_, FALSE);
+                if (updateBannerHwnd_) EnableWindow(updateBannerHwnd_, FALSE);
+                PostMessageW(hwnd_, WM_CLOSE, 0, 0);
+            }
+            break;
+        }
+        case Phase::WaitingForSuccess:
+            break;
+        case Phase::ShowSuccess:
+            if (ShowUpdateBanner(std::wstring(Tr(L"更新成功，当前版本号为 ")) + status.tag,
+                    UpdateNoticeStyle::Positive)) {
+                updater_->AcknowledgeSuccess();
+            }
+            break;
+        case Phase::Success:
+            ShowUpdateBanner(std::wstring(Tr(L"更新成功，当前版本号为 ")) + status.tag,
+                UpdateNoticeStyle::Positive);
+            break;
+        case Phase::ApplyFailed:
+            ShowUpdateBanner(Tr(L"更新失败"));
+            break;
+        case Phase::RolledBack:
+            ShowUpdateBanner(Tr(L"更新失败，已恢复旧版本"));
+            break;
+        case Phase::RecoveryNeeded:
+            ShowUpdateBanner(Tr(L"更新未完成，已保留旧版本备份"));
+            break;
+        }
+    }
+
+    void ActivateUpdateCommand(UINT command) {
+        if (updateClosing_) return;
+        if (command == kUpdateDismissCommand) {
+            if (updateNoticeDismissal_ != UpdateNoticeDismissal::Manual) return;
+            updateDismissed_ = true;
+            if (updater_) updater_->Dismiss();
+            ShowUpdateBanner({});
+            return;
+        }
+        if (!updater_ || updateNoticeStyle_ != UpdateNoticeStyle::Offer) return;
+        switch (command) {
+        case kUpdateLaterCommand:
+            ShowUpdateBanner({});
+            updateDismissed_ = true;
+            updater_->Dismiss();
+            break;
+        case kUpdateInstallCommand:
+            if (updater_->Download()) {
+                SetTimer(hwnd_, kUpdateTimer, 100, nullptr);
+                PollUpdate();
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
+    static LRESULT CALLBACK UpdateBannerWindowProc(HWND window, UINT message,
+                                                    WPARAM wParam, LPARAM lParam) {
+        auto* overlay = reinterpret_cast<LayeredOverlay*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            overlay = static_cast<LayeredOverlay*>(create->lpCreateParams);
+            SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(overlay));
+        }
+        if (!overlay) return DefWindowProcW(window, message, wParam, lParam);
+        COLORREF background = RGB(50, 30, 10);
+        COLORREF text = RGB(255, 200, 100);
+        if (overlay->updateNoticeStyle_ == UpdateNoticeStyle::Checking) {
+            background = RGB(14, 37, 63);
+            text = RGB(157, 210, 255);
+        } else if (overlay->updateNoticeStyle_ == UpdateNoticeStyle::Positive) {
+            background = RGB(15, 50, 22);
+            text = RGB(130, 255, 150);
+        }
+        switch (message) {
+        case WM_COMMAND:
+            overlay->ActivateUpdateCommand(LOWORD(wParam));
+            return 0;
+        case WM_CLOSE:
+            overlay->ActivateUpdateCommand(kUpdateDismissCommand);
+            return 0;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_SETCURSOR:
+            if (LOWORD(lParam) == HTCLIENT && GetDlgCtrlID(reinterpret_cast<HWND>(wParam)) > 0) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
+            break;
+        case DM_GETDEFID:
+            if (overlay->updateNoticeDismissal_ != UpdateNoticeDismissal::Manual) return 0;
+            return MAKELRESULT(overlay->updateNoticeStyle_ == UpdateNoticeStyle::Offer ? kUpdateLaterCommand :
+                kUpdateDismissCommand, DC_HASDEFID);
+        case WM_CTLCOLORSTATIC: {
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            SetTextColor(dc, text);
+            SetBkColor(dc, background);
+            SetDCBrushColor(dc, background);
+            return reinterpret_cast<LRESULT>(GetStockObject(DC_BRUSH));
+        }
+        case WM_DRAWITEM: {
+            const auto& item = *reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
+            const bool pressed = (item.itemState & ODS_SELECTED) != 0;
+            PanelFill(item.hDC, item.rcItem, background);
+            wchar_t label[256]{};
+            GetWindowTextW(item.hwndItem, label, ARRAYSIZE(label));
+            RECT bounds = item.rcItem;
+            HGDIOBJ previous = overlay->updateBannerFont_
+                ? SelectObject(item.hDC, overlay->updateBannerFont_) : nullptr;
+            SetTextColor(item.hDC, pressed ? RGB(170, 217, 255) : RGB(100, 180, 255));
+            SetBkMode(item.hDC, TRANSPARENT);
+            DrawTextW(item.hDC, label, -1, &bounds,
+                DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+            if (item.itemState & ODS_FOCUS) {
+                InflateRect(&bounds, -2, -2);
+                DrawFocusRect(item.hDC, &bounds);
+            }
+            if (previous) SelectObject(item.hDC, previous);
+            return TRUE;
+        }
+        case WM_PAINT: {
+            PAINTSTRUCT paint{};
+            HDC dc = BeginPaint(window, &paint);
+            RECT bounds{};
+            GetClientRect(window, &bounds);
+            PanelFill(dc, bounds, background);
+            EndPaint(window, &paint);
+            return 0;
+        }
+        default:
+            break;
+        }
+        return DefWindowProcW(window, message, wParam, lParam);
     }
 
     void ActivateTrayCommand(UINT command) {
@@ -3848,27 +5033,6 @@ private:
         ActivateTrayCommand(command);
     }
 
-    void MoveToNextMonitor() {
-        std::vector<HMONITOR> monitors;
-        EnumDisplayMonitors(
-            nullptr,
-            nullptr,
-            [](HMONITOR monitor, HDC, LPRECT, LPARAM data) -> BOOL {
-                reinterpret_cast<std::vector<HMONITOR>*>(data)->push_back(monitor);
-                return TRUE;
-            },
-            reinterpret_cast<LPARAM>(&monitors));
-        if (monitors.empty()) {
-            return;
-        }
-        const HMONITOR current = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
-        auto iterator = std::find(monitors.begin(), monitors.end(), current);
-        size_t index = iterator == monitors.end()
-            ? 0
-            : (static_cast<size_t>(iterator - monitors.begin()) + 1) % monitors.size();
-        CenterOnMonitor(monitors[index]);
-    }
-
     std::wstring GpuName(int adapterIndex) const {
         const auto iterator = std::find_if(
             gpuAdapters_.begin(), gpuAdapters_.end(),
@@ -3891,23 +5055,19 @@ private:
         return std::wstring(L"GPU") + Tr(L"：") + GpuName(activeGpuIndex_);
     }
 
-    std::wstring DebugStatusText(bool compact = false) const {
+    std::wstring DebugStatusText(bool wrapped) const {
         std::wostringstream text;
         text << std::fixed << std::setprecision(1)
              << L"FPS " << lastUpdateFps_;
         if (vtsApiFps_ > 0) {
             text << L"  VTS " << vtsApiFps_;
         }
-        if (!compact) {
-            text << L"  " << GpuTelemetryText();
-        }
+        if (!wrapped) text << L"  " << GpuTelemetryText();
         text << std::setprecision(2)
              << Tr(L"  接收 ") << lastReceiveMs_ << L"ms"
              << Tr(L"  缩放 ") << lastMapScaleMs_ << L"ms"
              << Tr(L"  上屏 ") << lastUpdateMs_ << L"ms";
-        if (compact) {
-            text << L"\n" << GpuTelemetryText();
-        }
+        if (wrapped) text << L"\n" << GpuTelemetryText();
         if (debugMode_) {
             text << L"\n";
             if (sourceWidth_ > 0 && dibWidth_ > 0) {
@@ -3926,9 +5086,6 @@ private:
                      << Tr(L"  面数 ") << extra.artmeshCount
                      << Tr(L"  道具 ") << extra.itemCount;
             }
-        }
-        if (benchmarkActive_) {
-            text << L"\n" << BenchmarkProgressText();
         }
         return text.str();
     }
@@ -4179,666 +5336,27 @@ private:
         }
     }
 
-    std::wstring BenchmarkProgressText() const {
-        if (!benchmarkActive_) return {};
-        const auto& plan = vtsfloat::benchmark::ResolutionPlan();
-        std::wostringstream text;
-        text << Tr(L"采集") << L" " << benchmarkPairIndex_ + 1
-             << L"/" << plan.size() << L"  "
-             << benchmarkSamples_.size() << L"/"
-             << vtsfloat::benchmark::kSamplesPerPair;
-        if (!benchmarkPairMatched_) {
-            text << L"  " << Tr(L"等待 VTS 分辨率");
-        } else if (Clock::now() < benchmarkWarmupUntil_) {
-            text << L"  " << Tr(L"预热中");
-        }
-        return text.str();
-    }
-
-    void SetBenchmarkRenderResolution(
-        const vtsfloat::benchmark::Resolution& resolution) {
-        if (!hwnd_ || !IsWindow(hwnd_)) return;
-        MONITORINFO monitor{};
-        monitor.cbSize = sizeof(monitor);
-        GetMonitorInfoW(
-            MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &monitor);
-        const int workWidth = monitor.rcWork.right - monitor.rcWork.left;
-        const int workHeight = monitor.rcWork.bottom - monitor.rcWork.top;
-        const int x = resolution.width <= workWidth
-            ? monitor.rcWork.left + (workWidth - resolution.width) / 2
-            : monitor.rcWork.left;
-        const int y = resolution.height <= workHeight
-            ? monitor.rcWork.top + (workHeight - resolution.height) / 2
-            : monitor.rcWork.top;
-        SetWindowPos(
-            hwnd_, WindowZOrder(), x, y,
-            resolution.width, resolution.height,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        PositionToolbar();
-        resetFrameSchedule_ = true;
-    }
-
-    bool PromptForBenchmarkPair() {
-        const auto& plan = vtsfloat::benchmark::ResolutionPlan();
-        if (!benchmarkActive_ || benchmarkPairIndex_ >= plan.size()) return false;
-        const auto& pair = plan[benchmarkPairIndex_];
-        ShowWindow(hwnd_, SW_HIDE);
-        ShowWindow(toolbarHwnd_, SW_HIDE);
-        std::wostringstream message;
-        message << Tr(L"采集组") << L" " << benchmarkPairIndex_ + 1
-                << L"/" << plan.size() << L"\n\n"
-                << Tr(L"请在 VTube Studio 中手动设置输出分辨率：")
-                << pair.vts.width << L"x" << pair.vts.height << L"\n"
-                << Tr(L"程序缩放分辨率将自动设置为：")
-                << pair.render.width << L"x" << pair.render.height << L"\n\n"
-                << Tr(L"设置完成后点击“确定”。程序检测到分辨率匹配后会先预热，再开始采集。")
-                << L"\n"
-                << Tr(L"取消将结束采集并保留已经写入的原始数据。");
-        const int result = MessageBoxW(
-            nullptr, message.str().c_str(), Tr(L"分辨率性能采集"),
-            MB_OKCANCEL | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND);
-        if (result != IDOK) return false;
-
-        aspectLocked_ = false;
-        SetBenchmarkRenderResolution(pair.render);
-        if (overlayVisible_) ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
-        if (!locked_ || debugMode_) ShowWindow(toolbarHwnd_, SW_SHOWNOACTIVATE);
-        PositionToolbar();
-        InvalidateRect(toolbarHwnd_, nullptr, FALSE);
-        return true;
-    }
-
-    bool PrepareBenchmarkPair() {
-        const auto& plan = vtsfloat::benchmark::ResolutionPlan();
-        if (!benchmarkActive_ || benchmarkPairIndex_ >= plan.size()) return false;
-        const auto& pair = plan[benchmarkPairIndex_];
-        benchmarkSamples_.clear();
-        benchmarkPairMatched_ = false;
-        benchmarkManualFallbackShown_ = false;
-        aspectLocked_ = false;
-        SetBenchmarkRenderResolution(pair.render);
-
-        if (benchmarkVtsWindow_ && IsWindow(benchmarkVtsWindow_) &&
-            SetWindowClientResolution(
-                benchmarkVtsWindow_, pair.vts.width, pair.vts.height)) {
-            benchmarkResolutionDeadline_ = Clock::now() + std::chrono::seconds(8);
-            InvalidateRect(toolbarHwnd_, nullptr, FALSE);
-            return true;
-        }
-        benchmarkManualFallbackShown_ = true;
-        return PromptForBenchmarkPair();
-    }
-
-    std::vector<int> BenchmarkGpuQueue() const {
-        std::vector<int> result;
-        const int current = activeGpuIndex_ >= 0
-            ? activeGpuIndex_ : senderGpuIndex_;
-        if (current >= 0) result.push_back(current);
-        for (const GpuAdapterInfo& adapter : gpuAdapters_) {
-            const int index = static_cast<int>(adapter.index);
-            if (index == current || WindowsGpuPreference(index) == 0) continue;
-            result.push_back(index);
-        }
-        return result;
-    }
-
-    bool ConfirmResolutionBenchmarkUse() {
-        constexpr int kContinueButton = 4201;
-        const std::wstring continueText = Tr(L"继续");
-        const TASKDIALOG_BUTTON button{
-            kContinueButton, continueText.c_str() };
-        TASKDIALOGCONFIG config{};
-        config.cbSize = sizeof(config);
-        config.hwndParent = toolbarHwnd_;
-        config.dwFlags =
-            TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
-        config.pszWindowTitle = kWindowTitle;
-        config.pszMainIcon = TD_WARNING_ICON;
-        config.pszMainInstruction =
-            Tr(L"你确定要进行该功能的使用吗？");
-        config.pszContent = Tr(
-            L"该功能设计在多组分辨率测试时获取性能数据，一般你是用不到该功能的！\n\n是否继续？");
-        config.pButtons = &button;
-        config.cButtons = 1;
-        config.dwCommonButtons = TDCBF_CANCEL_BUTTON;
-        config.nDefaultButton = IDCANCEL;
-        int selected = 0;
-        const HRESULT result = RunModalWhileRendering([&]() {
-            return TaskDialogIndirect(&config, &selected, nullptr, nullptr);
-        });
-        return SUCCEEDED(result) && selected == kContinueButton;
-    }
-
-    int ShowBenchmarkStartDialog(const std::vector<int>& gpuQueue) {
-        constexpr int kCurrentGpuButton = 4211;
-        constexpr int kAllGpusButton = 4212;
-        const int minutesPerGpu = static_cast<int>(std::ceil(
-            vtsfloat::benchmark::ResolutionPlan().size() *
-            (4.0 + vtsfloat::benchmark::kSamplesPerPair * 2.0) / 60.0));
-        std::wostringstream content;
-        content << Tr(L"将测试 7×7 共 49 组分辨率组合，每组采集 24 条数据。")
-                << L"\n" << Tr(L"每张 GPU 预计用时约") << L" "
-                << minutesPerGpu << L" " << Tr(L"分钟。")
-                << L"\n\n" << Tr(L"测试分辨率：")
-                << L"\n" << Tr(L"640×480、960×540、1280×720、1600×900、1920×1080、2560×1440、3840×2160")
-                << L"\n\n"
-                << Tr(L"采集期间请勿运行游戏、渲染或其他高负载任务，否则结果会失真。")
-                << L"\n"
-                << Tr(L"请保持 VTube Studio、Spout2 与插件 API 正常运行。")
-                << L"\n"
-                << Tr(L"程序会自动调整分辨率，完成或停止后恢复窗口。");
-
-        std::wstring currentButton = Tr(L"测试当前 GPU");
-        std::wstring allButton;
-        TASKDIALOG_BUTTON buttons[2] = {
-            { kCurrentGpuButton, currentButton.c_str() },
-            { kAllGpusButton, nullptr },
-        };
-        UINT buttonCount = 1;
-        if (gpuQueue.size() > 1) {
-            std::wostringstream label;
-            label << Tr(L"测试全部 GPU") << L" (" << gpuQueue.size()
-                  << L" GPU, " << Tr(L"预计约") << L" "
-                  << minutesPerGpu * static_cast<int>(gpuQueue.size())
-                  << L" " << Tr(L"分钟") << L")";
-            allButton = label.str();
-            buttons[1].pszButtonText = allButton.c_str();
-            buttonCount = 2;
-        }
-        TASKDIALOGCONFIG config{};
-        config.cbSize = sizeof(config);
-        config.hwndParent = toolbarHwnd_;
-        config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
-        config.pszWindowTitle = kWindowTitle;
-        config.pszMainIcon = TD_INFORMATION_ICON;
-        config.pszMainInstruction = Tr(L"开始分辨率基准采集");
-        const std::wstring contentText = content.str();
-        config.pszContent = contentText.c_str();
-        config.pButtons = buttons;
-        config.cButtons = buttonCount;
-        config.nDefaultButton = kCurrentGpuButton;
-        config.dwCommonButtons = TDCBF_CANCEL_BUTTON;
-        int selected = 0;
-        const HRESULT result = RunModalWhileRendering([&]() {
-            return TaskDialogIndirect(&config, &selected, nullptr, nullptr);
-        });
-        if (FAILED(result)) return 0;
-        if (selected == kCurrentGpuButton) return 1;
-        if (selected == kAllGpusButton) return 2;
-        // IDCANCEL (including the title-bar close button) and every unknown
-        // result are a real cancellation and must never begin a capture.
-        return 0;
-    }
-
-    void ResetBenchmarkFpsSummary() {
-        benchmarkTotalSampleCount_ = 0;
-        benchmarkVtsFpsSum_ = 0.0;
-        benchmarkVtsFpsMin_ = (std::numeric_limits<double>::max)();
-        benchmarkVtsFpsMax_ = 0.0;
-        benchmarkVtsmFpsSum_ = 0.0;
-        benchmarkVtsmFpsMin_ = (std::numeric_limits<double>::max)();
-        benchmarkVtsmFpsMax_ = 0.0;
-        benchmarkGpuSummaryWritten_ = false;
-        benchmarkGpuStartTime_ =
-            vtsfloat::benchmark::LocalTimestampMilliseconds();
-    }
-
-    double TotalRamGb() const {
-        MEMORYSTATUSEX memory{};
-        memory.dwLength = sizeof(memory);
-        return GlobalMemoryStatusEx(&memory)
-            ? static_cast<double>(memory.ullTotalPhys) /
-                (1024.0 * 1024.0 * 1024.0)
-            : 0.0;
-    }
-
-    double ActiveGpuRamGb() const {
-        const auto adapter = std::find_if(
-            gpuAdapters_.begin(), gpuAdapters_.end(),
-            [this](const GpuAdapterInfo& value) {
-                return static_cast<int>(value.index) == activeGpuIndex_;
-            });
-        return adapter == gpuAdapters_.end()
-            ? 0.0
-            : static_cast<double>(adapter->dedicatedVideoMemory) /
-                (1024.0 * 1024.0 * 1024.0);
-    }
-
-    vtsfloat::benchmark::CaptureSummary CurrentBenchmarkSummary(
-        bool includeStopTime) const {
-        vtsfloat::benchmark::CaptureSummary row;
-        row.cpu = WideToUtf8(cpuModel_.c_str());
-        row.gpu = WideToUtf8(GpuName(activeGpuIndex_).c_str());
-        row.ramGb = TotalRamGb();
-        row.gpuRamGb = ActiveGpuRamGb();
-        row.startTime = benchmarkGpuStartTime_;
-        if (includeStopTime) {
-            row.stopTime = vtsfloat::benchmark::LocalTimestampMilliseconds();
-        }
-        if (benchmarkTotalSampleCount_ > 0) {
-            const double count = static_cast<double>(benchmarkTotalSampleCount_);
-            row.avgVtsFps = benchmarkVtsFpsSum_ / count;
-            row.minVtsFps = benchmarkVtsFpsMin_;
-            row.maxVtsFps = benchmarkVtsFpsMax_;
-            row.avgVtsmFps = benchmarkVtsmFpsSum_ / count;
-            row.minVtsmFps = benchmarkVtsmFpsMin_;
-            row.maxVtsmFps = benchmarkVtsmFpsMax_;
-        }
-        return row;
-    }
-
-    bool FinalizeBenchmarkCsvSummary() {
-        if (benchmarkGpuSummaryWritten_ || !benchmarkWriter_) {
-            return true;
-        }
-        std::wstring error;
-        if (!benchmarkWriter_->FinalizeSummary(
-                CurrentBenchmarkSummary(true), error)) {
-            Log("[benchmark] CSV summary write failed: " +
-                WideToUtf8(error.c_str()));
-            return false;
-        }
-        benchmarkGpuSummaryWritten_ = true;
-        return true;
-    }
-
-    void SaveBenchmarkResumeState(
-        const std::filesystem::path& directory,
-        const std::filesystem::path& rawFileName) const {
-        WriteConfigString(
-            L"benchmark_resume", L"directory", directory.wstring());
-        WriteConfigString(
-            L"benchmark_resume", L"gpu_queue",
-            JoinGpuIndexes(benchmarkGpuQueue_));
-        WriteConfigInt(
-            L"benchmark_resume", L"gpu_cursor",
-            static_cast<int>(benchmarkGpuCursor_));
-        WriteConfigString(
-            L"benchmark_resume", L"raw_file", rawFileName.wstring());
-        WriteConfigInt(L"benchmark_resume", L"active", 1);
-    }
-
-    void ClearBenchmarkResumeState() const {
-        WriteConfigInt(L"benchmark_resume", L"active", 0);
-        WriteConfigString(L"benchmark_resume", L"directory", L"");
-        WriteConfigString(L"benchmark_resume", L"gpu_queue", L"");
-        WriteConfigString(L"benchmark_resume", L"raw_file", L"");
-        WriteConfigInt(L"benchmark_resume", L"gpu_cursor", 0);
-    }
-
-    void CaptureBenchmarkWindowState() {
-        benchmarkOriginalRectValid_ =
-            GetWindowRect(hwnd_, &benchmarkOriginalRect_) != FALSE;
-        benchmarkOriginalAspectLocked_ = aspectLocked_;
-        benchmarkOriginalDebugMode_ = debugMode_;
-        benchmarkVtsWindow_ = nullptr;
-        benchmarkVtsProcessId_ = 0;
-        benchmarkOriginalVtsPlacementValid_ = false;
-        if (const auto vts = FindRunningVts()) {
-            benchmarkVtsProcessId_ = vts->processId;
-            benchmarkVtsWindow_ = FindMainWindowForProcess(vts->processId);
-            if (benchmarkVtsWindow_) {
-                benchmarkOriginalVtsPlacement_ = {};
-                benchmarkOriginalVtsPlacement_.length = sizeof(WINDOWPLACEMENT);
-                benchmarkOriginalVtsPlacementValid_ = GetWindowPlacement(
-                    benchmarkVtsWindow_, &benchmarkOriginalVtsPlacement_) != FALSE;
-            }
-        }
-    }
-
-    void RestoreBenchmarkWindowState() {
-        if (benchmarkOriginalVtsPlacementValid_ && benchmarkVtsWindow_ &&
-            IsWindow(benchmarkVtsWindow_)) {
-            DWORD owner = 0;
-            GetWindowThreadProcessId(benchmarkVtsWindow_, &owner);
-            if (owner == benchmarkVtsProcessId_) {
-                SetWindowPlacement(
-                    benchmarkVtsWindow_, &benchmarkOriginalVtsPlacement_);
-            }
-        }
-        benchmarkVtsWindow_ = nullptr;
-        benchmarkVtsProcessId_ = 0;
-        benchmarkOriginalVtsPlacementValid_ = false;
-
-        aspectLocked_ = benchmarkOriginalAspectLocked_;
-        debugMode_ = benchmarkOriginalDebugMode_;
-        if (benchmarkOriginalRectValid_ && hwnd_ && IsWindow(hwnd_)) {
-            SetWindowPos(
-                hwnd_, WindowZOrder(),
-                benchmarkOriginalRect_.left, benchmarkOriginalRect_.top,
-                benchmarkOriginalRect_.right - benchmarkOriginalRect_.left,
-                benchmarkOriginalRect_.bottom - benchmarkOriginalRect_.top,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW);
-            SaveWindowPlacement();
-        }
-        benchmarkOriginalRectValid_ = false;
-    }
-
-    bool InitializeBenchmarkGpuTask(
-        const std::filesystem::path& directory,
-        const std::filesystem::path& rawFileName,
-        bool append) {
-        ResetBenchmarkFpsSummary();
-        benchmarkCurrentRawFileName_ = rawFileName;
-        benchmarkWriter_.emplace();
-        std::wstring error;
-        if (!benchmarkWriter_->Open(
-                directory, error, rawFileName,
-                CurrentBenchmarkSummary(false), append)) {
-            benchmarkWriter_.reset();
-            MessageBoxW(
-                toolbarHwnd_, error.c_str(), Tr(L"无法创建采集文件。"),
-                MB_OK | MB_ICONERROR);
-            return false;
-        }
-        CaptureBenchmarkWindowState();
-        benchmarkPairIndex_ = 0;
-        benchmarkActive_ = true;
-        debugMode_ = true;
-        PositionToolbar();
-        if (!PrepareBenchmarkPair()) {
-            FinishResolutionBenchmark(false);
-            return false;
-        }
-        return true;
-    }
-
-    void MaybeResumeResolutionBenchmark() {
-        if (benchmarkActive_ || benchmarkResumeChecked_) return;
-        if (ReadConfigInt(L"benchmark_resume", L"active", 0) == 0) {
-            benchmarkResumeChecked_ = true;
-            return;
-        }
-        const std::filesystem::path directory = ReadConfigString(
-            L"benchmark_resume", L"directory");
-        const std::filesystem::path rawFileName = ReadConfigString(
-            L"benchmark_resume", L"raw_file");
-        const std::vector<int> queue = ParseGpuIndexes(ReadConfigString(
-            L"benchmark_resume", L"gpu_queue"));
-        const int cursor = ReadConfigInt(
-            L"benchmark_resume", L"gpu_cursor", -1);
-        if (directory.empty() || rawFileName.empty() || queue.empty() ||
-            cursor < 0 || static_cast<std::size_t>(cursor) >= queue.size()) {
-            ClearBenchmarkResumeState();
-            benchmarkResumeChecked_ = true;
-            return;
-        }
-        const int targetGpu = queue[static_cast<std::size_t>(cursor)];
-        if (!hasReceivedModel_ || sourceWidth_ == 0 || sourceHeight_ == 0 ||
-            !vtsApi_.IsConnected() || vtsApiFps_ <= 0 ||
-            senderGpuIndex_ != targetGpu || activeGpuIndex_ != targetGpu) {
-            return;
-        }
-
-        benchmarkGpuQueue_ = queue;
-        benchmarkGpuCursor_ = static_cast<std::size_t>(cursor);
-        benchmarkTestAllGpus_ = queue.size() > 1;
-        benchmarkResumeChecked_ = true;
-        if (!InitializeBenchmarkGpuTask(directory, rawFileName, true)) {
-            ClearBenchmarkResumeState();
-            return;
-        }
-        Log("[benchmark] resumed GPU task " +
-            std::to_string(benchmarkGpuCursor_ + 1) + "/" +
-            std::to_string(benchmarkGpuQueue_.size()));
-    }
-
-    bool ContinueBenchmarkOnNextGpu() {
-        if (!benchmarkTestAllGpus_ ||
-            benchmarkGpuCursor_ + 1 >= benchmarkGpuQueue_.size()) {
-            return false;
-        }
-        if (!FinalizeBenchmarkCsvSummary()) return false;
-
-        const std::filesystem::path directory = benchmarkWriter_->Directory();
-        ++benchmarkGpuCursor_;
-        benchmarkCurrentRawFileName_ = std::filesystem::path(
-            Utf8ToWide(vtsfloat::benchmark::FolderTimestamp()) + L".csv");
-        SaveBenchmarkResumeState(directory, benchmarkCurrentRawFileName_);
-        RestoreBenchmarkWindowState();
-        if (!RestartVtsOnGpuForBenchmark(
-                benchmarkGpuQueue_[benchmarkGpuCursor_])) {
-            ClearBenchmarkResumeState();
-            return false;
-        }
-
-        benchmarkActive_ = false;
-        benchmarkPairMatched_ = false;
-        benchmarkSamples_.clear();
-        benchmarkWriter_.reset();
-        PostMessageW(hwnd_, WM_CLOSE, 0, 0);
-        return true;
-    }
-
-    void FinishResolutionBenchmark(bool completed, bool notify = true) {
-        if (!benchmarkActive_) return;
-        const std::filesystem::path directory = benchmarkWriter_
-            ? benchmarkWriter_->Directory() : std::filesystem::path{};
-        FinalizeBenchmarkCsvSummary();
-        ClearBenchmarkResumeState();
-        benchmarkActive_ = false;
-        benchmarkPairMatched_ = false;
-        benchmarkSamples_.clear();
-        benchmarkWriter_.reset();
-
-        RestoreBenchmarkWindowState();
-        if (overlayVisible_) ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
-        if (!locked_ || debugMode_) ShowWindow(toolbarHwnd_, SW_SHOWNOACTIVATE);
-        PositionToolbar();
-        InvalidateRect(toolbarHwnd_, nullptr, FALSE);
-
-        if (!notify) return;
-        std::wstring message = completed
-            ? Tr(L"采集已完成。") : Tr(L"采集已停止，已保留现有数据。");
-        if (!directory.empty()) {
-            message += L"\n\n";
-            message += Tr(L"采集数据已保存到：");
-            message += L"\n" + directory.wstring();
-        }
-        MessageBoxW(
-            toolbarHwnd_, message.c_str(), Tr(L"分辨率性能采集"),
-            MB_OK | MB_ICONINFORMATION);
-        if (!directory.empty()) {
-            ShellExecuteW(
-                nullptr, L"open", directory.c_str(), nullptr, nullptr,
-                SW_SHOWNORMAL);
-        }
-    }
-
-    void StartResolutionBenchmark() {
-        if (benchmarkActive_) return;
-        if (!hasReceivedModel_ || sourceWidth_ == 0 || sourceHeight_ == 0) {
-            MessageBoxW(
-                toolbarHwnd_,
-                Tr(L"尚未接收到 VTube Studio 的 Spout2 画面。"),
-                Tr(L"分辨率性能采集"), MB_OK | MB_ICONWARNING);
-            return;
-        }
-        if (!vtsApi_.IsConnected() || vtsApiFps_ <= 0) {
-            MessageBoxW(
-                toolbarHwnd_,
-                Tr(L"请先连接 VTS API，以采集 VTS 实时帧数。"),
-                Tr(L"分辨率性能采集"), MB_OK | MB_ICONWARNING);
-            return;
-        }
-
-        if (!ConfirmResolutionBenchmarkUse()) {
-            Log("[benchmark] user cancelled usage confirmation");
-            return;
-        }
-
-        benchmarkGpuQueue_ = BenchmarkGpuQueue();
-        const int startChoice = ShowBenchmarkStartDialog(benchmarkGpuQueue_);
-        if (startChoice == 0) return;
-        benchmarkTestAllGpus_ = startChoice == 2 && benchmarkGpuQueue_.size() > 1;
-        if (!benchmarkTestAllGpus_ && !benchmarkGpuQueue_.empty()) {
-            benchmarkGpuQueue_.resize(1);
-        }
-        benchmarkGpuCursor_ = 0;
-
-        const std::filesystem::path directory = BenchmarkOutputDirectory();
-        benchmarkCurrentRawFileName_ = std::filesystem::path(
-            Utf8ToWide(vtsfloat::benchmark::FolderTimestamp()) + L".csv");
-        if (!InitializeBenchmarkGpuTask(
-                directory, benchmarkCurrentRawFileName_, false)) {
-            return;
-        }
-        if (benchmarkTestAllGpus_) {
-            SaveBenchmarkResumeState(directory, benchmarkCurrentRawFileName_);
-        }
-    }
-
-    void OpenBenchmarkDirectory() const {
-        std::filesystem::path directory;
-        if (benchmarkWriter_) {
-            directory = benchmarkWriter_->Directory();
-        } else {
-            wchar_t documents[MAX_PATH]{};
-            if (SHGetFolderPathW(
-                    nullptr, CSIDL_PERSONAL, nullptr, SHGFP_TYPE_CURRENT,
-                    documents) == S_OK) {
-                directory = std::filesystem::path(documents) /
-                    L"VTSFloat_Meow Benchmarks";
-            }
-        }
-        if (!directory.empty()) {
-            std::error_code error;
-            std::filesystem::create_directories(directory, error);
-            ShellExecuteW(
-                nullptr, L"open", directory.c_str(), nullptr, nullptr,
-                SW_SHOWNORMAL);
-        }
-    }
-
-    void UpdateResolutionBenchmark() {
-        if (!benchmarkActive_ || !benchmarkWriter_) return;
-        const auto& plan = vtsfloat::benchmark::ResolutionPlan();
-        if (benchmarkPairIndex_ >= plan.size()) return;
-        const auto& pair = plan[benchmarkPairIndex_];
-
-        RECT window{};
-        GetWindowRect(hwnd_, &window);
-        const int renderWidth = window.right - window.left;
-        const int renderHeight = window.bottom - window.top;
-        const bool resolutionMatches =
-            sourceWidth_ == static_cast<UINT>(pair.vts.width) &&
-            sourceHeight_ == static_cast<UINT>(pair.vts.height) &&
-            renderWidth == pair.render.width &&
-            renderHeight == pair.render.height;
-        if (!resolutionMatches) {
-            benchmarkPairMatched_ = false;
-            if (!benchmarkManualFallbackShown_ &&
-                Clock::now() >= benchmarkResolutionDeadline_) {
-                benchmarkManualFallbackShown_ = true;
-                if (!PromptForBenchmarkPair()) {
-                    FinishResolutionBenchmark(false);
-                }
-            }
-            return;
-        }
-        const auto now = Clock::now();
-        if (!benchmarkPairMatched_) {
-            benchmarkPairMatched_ = true;
-            benchmarkWarmupUntil_ = now + std::chrono::seconds(4);
-            return;
-        }
-        if (now < benchmarkWarmupUntil_) return;
-        if (vtsApiFps_ <= 0) {
-            return;
-        }
-
-        constexpr double kMegabyte = 1024.0 * 1024.0;
-        const double missing = std::numeric_limits<double>::quiet_NaN();
-        vtsfloat::benchmark::Sample sample;
-        sample.recordedAt = vtsfloat::benchmark::LocalTimestampMilliseconds();
-        sample.alignmentPercent = vtsfloat::benchmark::AlignmentPercent(pair);
-        sample.receiveMs = lastReceiveMs_;
-        sample.scaleMs = lastMapScaleMs_;
-        sample.presentMs = lastUpdateMs_;
-        sample.cpuPercent = cpuUsagePercent_.value_or(missing);
-        sample.gpuPercent = gpuUsagePercent_.value_or(missing);
-        sample.vramMb = static_cast<double>(
-            processGpuMemoryBytes_ > 0
-                ? processGpuMemoryBytes_ : gpuMemoryCurrentBytes_) / kMegabyte;
-        sample.memoryMb = processMemoryBytes_ > 0
-            ? static_cast<double>(processMemoryBytes_) / kMegabyte : missing;
-        sample.vtsFps = static_cast<double>(vtsApiFps_);
-        sample.programFps = lastUpdateFps_;
-        if (!benchmarkWriter_->AppendSample(
-                benchmarkPairIndex_, benchmarkSamples_.size(), pair,
-                WideToUtf8(GpuName(activeGpuIndex_).c_str()), sample)) {
-            FinishResolutionBenchmark(false);
-            return;
-        }
-        benchmarkSamples_.push_back(sample);
-        ++benchmarkTotalSampleCount_;
-        benchmarkVtsFpsSum_ += sample.vtsFps;
-        benchmarkVtsFpsMin_ = (std::min)(benchmarkVtsFpsMin_, sample.vtsFps);
-        benchmarkVtsFpsMax_ = (std::max)(benchmarkVtsFpsMax_, sample.vtsFps);
-        benchmarkVtsmFpsSum_ += sample.programFps;
-        benchmarkVtsmFpsMin_ = (std::min)(benchmarkVtsmFpsMin_, sample.programFps);
-        benchmarkVtsmFpsMax_ = (std::max)(benchmarkVtsmFpsMax_, sample.programFps);
-        InvalidateRect(toolbarHwnd_, nullptr, FALSE);
-
-        if (benchmarkSamples_.size() < vtsfloat::benchmark::kSamplesPerPair) return;
-        ++benchmarkPairIndex_;
-        if (benchmarkPairIndex_ >= plan.size()) {
-            if (benchmarkTestAllGpus_ &&
-                benchmarkGpuCursor_ + 1 < benchmarkGpuQueue_.size()) {
-                if (!ContinueBenchmarkOnNextGpu()) {
-                    FinishResolutionBenchmark(false);
-                }
-                return;
-            }
-            FinishResolutionBenchmark(true);
-            return;
-        }
-        if (!PrepareBenchmarkPair()) {
-            FinishResolutionBenchmark(false);
-        }
-    }
-
-    void ShowDebugMenu() {
+    void ShowDebugMenu(POINT popup) {
         HMENU menu = CreatePopupMenu();
         if (!menu) return;
 
         constexpr UINT kDebugToggleCommand = 3401;
         constexpr UINT kResetSettingsCommand = 3402;
-        constexpr UINT kStartBenchmarkCommand = 3403;
-        constexpr UINT kStopBenchmarkCommand = 3404;
-        constexpr UINT kOpenBenchmarkDirectoryCommand = 3405;
-        std::wostringstream startBenchmarkLabel;
-        startBenchmarkLabel << Tr(L"分辨率基准采集") << L" ("
-                            << vtsfloat::benchmark::ResolutionPlan().size()
-                            << L" " << Tr(L"组") << L" × "
-                            << vtsfloat::benchmark::kSamplesPerPair
-                            << L" " << Tr(L"条") << L")";
-        const std::wstring startBenchmarkText = startBenchmarkLabel.str();
+        constexpr UINT kOpenCacheCommand = 3403;
         AppendMenuW(
             menu,
             MF_STRING | (debugMode_ ? MF_CHECKED : 0),
             kDebugToggleCommand,
             Tr(L"调试"));
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(
-            menu, MF_STRING,
-            benchmarkActive_ ? kStopBenchmarkCommand : kStartBenchmarkCommand,
-            benchmarkActive_
-                ? Tr(L"停止并保存当前采集")
-                : startBenchmarkText.c_str());
-        AppendMenuW(
-            menu, MF_STRING, kOpenBenchmarkDirectoryCommand,
-            Tr(L"打开采集目录"));
-        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING, kOpenCacheCommand, Tr(L"打开缓存文件夹"));
         AppendMenuW(
             menu,
             MF_STRING,
             kResetSettingsCommand,
             Tr(L"清除缓存并重置脚本"));
 
-        const RECT debugRect = ToolbarButtonRect(ToolbarButton::Debug);
-        POINT popup{ debugRect.left, debugRect.bottom };
-        ClientToScreen(toolbarHwnd_, &popup);
+        SetForegroundWindow(toolbarHwnd_);
         const UINT command = RunModalWhileRendering([this, menu, popup]() {
             return TrackPopupMenu(
                 menu,
@@ -4854,15 +5372,14 @@ private:
             PositionToolbar();
             InvalidateRect(toolbarHwnd_, nullptr, FALSE);
             Log(std::string("[toolbar] debug=") + (debugMode_ ? "1" : "0"));
+        } else if (command == kOpenCacheCommand) {
+            const auto& folder = vtsfloat::CacheDirectory();
+            std::error_code error;
+            std::filesystem::create_directories(folder, error);
+            ShellExecuteW(toolbarHwnd_, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         } else if (command == kResetSettingsCommand) {
             Log("[toolbar] action=reset_settings");
             ResetSettingsToDefaults();
-        } else if (command == kStartBenchmarkCommand) {
-            StartResolutionBenchmark();
-        } else if (command == kStopBenchmarkCommand) {
-            FinishResolutionBenchmark(false);
-        } else if (command == kOpenBenchmarkDirectoryCommand) {
-            OpenBenchmarkDirectory();
         }
     }
 
@@ -4895,12 +5412,12 @@ private:
             Tr(L"编辑自定义语言配置…"));
 
         const RECT languageRect = ToolbarButtonRect(ToolbarButton::Language);
-        POINT popup{ languageRect.left, languageRect.bottom };
+        POINT popup{ languageRect.right, languageRect.bottom };
         ClientToScreen(toolbarHwnd_, &popup);
         const UINT command = RunModalWhileRendering([this, menu, popup]() {
             return TrackPopupMenu(
                 menu,
-                TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN,
+                TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTALIGN | TPM_TOPALIGN,
                 popup.x, popup.y, 0, toolbarHwnd_, nullptr);
         });
         DestroyMenu(menu);
@@ -4929,20 +5446,21 @@ private:
         vtsfloat::i18n::SetLanguage(languages[command - kLanguageCommandBase]);
         SaveUiSettings();
         PositionToolbar();
+        LayoutToolbarGuide();
+        RefreshDebugReadout(true);
+        if (!updateBannerText_.empty() && !updateDismissed_) {
+            updateRevision_ = (std::numeric_limits<std::uint64_t>::max)();
+            PollUpdate();
+        }
         // The VTS waiting/launch page is drawn into the layered-window DIB and
         // cached between frames. Invalidating the HWND alone only re-presents
         // those old pixels, so a language switch used to leave this page in
         // Chinese until its status changed. Rebuild the cached page now.
         statusFrameDirty_ = true;
-        if (statusHwnd_) {
-            SetWindowTextW(statusLaunchExe_, Tr(L"从 Steam 启动 VTube Studio"));
-            SetWindowTextW(statusLaunchBatch_, Tr(L"从外部启动 VTS"));
-        }
         if (toolbarHwnd_) RedrawWindow(toolbarHwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
         if (borderPanelHwnd_) InvalidateRect(borderPanelHwnd_, nullptr, FALSE);
         if (expressionPickerHwnd_) InvalidateRect(expressionPickerHwnd_, nullptr, FALSE);
         if (subjectSelectionToolbarHwnd_) InvalidateRect(subjectSelectionToolbarHwnd_, nullptr, FALSE);
-        if (statusHwnd_) InvalidateRect(statusHwnd_, nullptr, FALSE);
         if (hwnd_) {
             RenderFrame();
             InvalidateRect(hwnd_, nullptr, FALSE);
@@ -4952,6 +5470,7 @@ private:
     }
 
     void ShowGraphicsSettingsMenu() {
+        const auto senders = receiver_.GetSenderList();
         HMENU menu = CreatePopupMenu();
         if (!menu) return;
 
@@ -5017,6 +5536,18 @@ private:
 
 
         constexpr UINT kPauseFullscreenCmd = 3300;
+        constexpr UINT kSpoutAutomaticCmd = 20000;
+        if (const HMENU sources = CreatePopupMenu()) {
+            AppendMenuW(sources, MF_STRING | (manualSpoutSender_.empty() ? MF_CHECKED : 0),
+                kSpoutAutomaticCmd, Tr(L"自动选择"));
+            for (size_t i = 0; i < senders.size(); ++i) {
+                auto label = Utf8ToWide(senders[i]);
+                for (size_t at = 0; (at = label.find(L'&', at)) != std::wstring::npos; at += 2) label.insert(at, 1, L'&');
+                AppendMenuW(sources, MF_STRING | (senders[i] == spoutSender_ ? MF_CHECKED : 0),
+                    kSpoutAutomaticCmd + 1 + static_cast<UINT>(i), label.c_str());
+            }
+            AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(sources), Tr(L"Spout2 发送源"));
+        }
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_STRING | (pauseOnFullscreen_ ? MF_CHECKED : 0),
             kPauseFullscreenCmd, Tr(L"桌面模式：其他程序全屏时暂停输出"));
@@ -5032,6 +5563,12 @@ private:
         });
         DestroyMenu(menu);
         if (!command) return;
+        if (command >= kSpoutAutomaticCmd && command <= kSpoutAutomaticCmd + senders.size()) {
+            manualSpoutSender_ = command == kSpoutAutomaticCmd ? std::string{} : senders[command - kSpoutAutomaticCmd - 1];
+            nextSpoutScan_ = {};
+            resetFrameSchedule_ = true;
+            return;
+        }
         Log("[toolbar] graphics_menu_command=" + std::to_string(command));
 
         if (command == kPauseFullscreenCmd) {
@@ -5176,7 +5713,7 @@ private:
                 return MessageBoxW(
                     toolbarHwnd_,
                     Tr(L"1. 打开 VTube Studio 设置。\n2. 在“常规设置”中启用“允许插件 API 访问”。\n3. 返回 VTSFloat_Meow，点击“扫描端口”。\n4. VTube Studio 弹出授权请求时，选择允许。"),
-                    Tr(L"如何开启 VTubeStudio Plugins API"),
+                    Tr(L"如何开启 VTube Studio Plugins API"),
                     MB_OK | MB_ICONINFORMATION);
             });
             return;
@@ -5233,7 +5770,7 @@ private:
         HWND guideHwnd = CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_DLGMODALFRAME,
             L"VTSFloatApiGuide",
-            Tr(L"如何开启 VTubeStudio Plugins API"),
+            Tr(L"如何开启 VTube Studio Plugins API"),
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
             CW_USEDEFAULT, CW_USEDEFAULT, winW, winH,
             toolbarHwnd_, nullptr, instance_, nullptr);
@@ -5322,6 +5859,9 @@ private:
             SetDlgItemTextW(dialog, IDOK, Tr(L"确定"));
             SetDlgItemTextW(dialog, IDCANCEL, Tr(L"取消"));
             SetDlgItemInt(dialog, IDC_FPS_EDIT, overlay->targetFps_, FALSE);
+            const HWND edit = GetDlgItem(dialog, IDC_FPS_EDIT);
+            SetWindowSubclass(edit, &LayeredOverlay::ImageFieldProc, 1, reinterpret_cast<DWORD_PTR>(overlay));
+            overlay->RegisterNumericHint(edit);
             SendDlgItemMessageW(dialog, IDC_FPS_EDIT, EM_SETSEL, 0, -1);
 
             RECT owner{};
@@ -5686,7 +6226,6 @@ private:
 
     struct BorderDialogState {
         LayeredOverlay* overlay = nullptr;
-        int originalUiScalePercent = kDefaultUiScalePercent;
         int originalMode = kBorderModeNormal;
         COLORREF originalColor = kDefaultCustomBorderColor;
         int originalThickness = kDefaultBorderThickness;
@@ -5716,6 +6255,11 @@ private:
             kDefaultHoverExpressionDurationSeconds;
         bool editingHoverOpacityRestoreDelay = false;
         bool replaceHoverOpacityRestoreDelayOnNextInput = false;
+        HWND numericHint = nullptr;
+        int numericHintHit = 0;
+        POINT numericPress{};
+        double numericBase = 0;
+        bool numericDragged = false;
         std::wstring hoverOpacityRestoreDelayInput;
         bool editingHoverExpressionDuration = false;
         bool replaceHoverExpressionDurationOnNextInput = false;
@@ -5749,9 +6293,10 @@ private:
 
     struct UiScalePickerState {
         LayeredOverlay* overlay = nullptr;
-        HWND ownerPanel = nullptr;
         int hoveredIndex = -1;
+        HHOOK mouseHook = nullptr;
     };
+    inline static thread_local HWND uiScaleClickWatcher_ = nullptr;
 
     static RainbowColor HsvWheelColor(
         double hue, double saturation, double value = 1.0) {
@@ -5966,20 +6511,20 @@ private:
         state->wheelBitmapWidth = width;
         state->wheelBitmapHeight = height;
         state->wheelBitmapValuePercent = state->colorValuePercent;
-        // Keep the square around the circular wheel consistent with the
-        // panel instead of using the system's white 3-D face color.
-        constexpr std::uint32_t kPanelBackgroundBgra =
-            39u | (24u << 8) | (14u << 16); // RGB(14, 24, 39)
-        state->wheelPixels.assign(
-            static_cast<size_t>(width) * height,
-            kPanelBackgroundBgra);
+        BuildColorWheelPixels(state->wheelPixels, width, height, state->colorValuePercent / 100.0,
+            39u | (24u << 8) | (14u << 16));
+    }
+
+    static void BuildColorWheelPixels(std::vector<std::uint32_t>& pixels, int width, int height,
+                                     double value, std::uint32_t background) {
+        pixels.assign(static_cast<size_t>(width) * height, background);
         const double centerX = width / 2.0;
         const double centerY = height / 2.0;
         const double radius = (std::max)(
             1.0, (std::min)(centerX, centerY) - 5.0);
         constexpr double kPi = 3.14159265358979323846;
         for (int y = 0; y < height; ++y) {
-            auto* row = state->wheelPixels.data() + static_cast<size_t>(y) * width;
+            auto* row = pixels.data() + static_cast<size_t>(y) * width;
             for (int x = 0; x < width; ++x) {
                 const double dx = x + 0.5 - centerX;
                 const double dy = y + 0.5 - centerY;
@@ -5990,7 +6535,7 @@ private:
                 double hue = std::atan2(dy, dx) / (2.0 * kPi);
                 if (hue < 0.0) hue += 1.0;
                 const RainbowColor color = HsvWheelColor(
-                    hue, distance / radius, state->colorValuePercent / 100.0);
+                    hue, distance / radius, value);
                 row[x] = static_cast<std::uint32_t>(color.blue) |
                     (static_cast<std::uint32_t>(color.green) << 8) |
                     (static_cast<std::uint32_t>(color.red) << 16);
@@ -6069,10 +6614,26 @@ private:
         RenderBorderDialogChange(dialog, state);
     }
 
+    static constexpr int kShadowFadeRowHeight = 32;
+
+    bool ShowPersonalShadowFade() const {
+        const auto& shadows = ActiveShadows();
+        return hoverFadeEnabled_ && (shadows[0].enabled || shadows[1].enabled);
+    }
+
+    void ToggleShadowHoverFade() {
+        const bool enabled = !fadeShadowOnHover_;
+        if (!WriteConfigInt(L"opacity", L"fade_shadow_on_hover", enabled)) return;
+        fadeShadowOnHover_ = enabled;
+        if (borderPanelHwnd_) InvalidateRect(borderPanelHwnd_, nullptr, FALSE);
+        if (shadowPanelHwnd_) InvalidateRect(shadowPanelHwnd_, nullptr, FALSE);
+        resetFrameSchedule_ = true;
+    }
+
     static int PersonalPanelHeight(const LayeredOverlay* overlay) {
         if (!overlay) return 560;
         const int baseHeight = overlay->borderMode_ == kBorderModeCustom
-            ? 780 : 560;
+            ? 738 : 518;
         // The opacity restore-delay editor is always visible directly above
         // the hover-range slider.
         constexpr int opacityRestoreDelayRowHeight = 42;
@@ -6080,6 +6641,7 @@ private:
         // real row for it instead of pushing the expression selector into the
         // footer buttons.
         return baseHeight + opacityRestoreDelayRowHeight +
+            (overlay->ShowPersonalShadowFade() ? kShadowFadeRowHeight : 0) +
             (overlay->hoverExpressionEnabled_ ? 38 : 0);
     }
 
@@ -6221,9 +6783,9 @@ private:
         PanelText(dc, L"×", RECT{ client.right - 44, 0, client.right - 8, 44 },
             RGB(240, 246, 255), 25, false, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
-        PanelText(dc, Tr(L"边框模式"), RECT{ 18, 53, 100, 83 }, RGB(166, 198, 232), 14, true,
+        PanelText(dc, Tr(L"边框样式"), RECT{ 18, 53, kPersonalBorderModeLeft - 5, 83 }, RGB(166, 198, 232), 14, true,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        const int modeLeft = 105;
+        const int modeLeft = kPersonalBorderModeLeft;
         const int modeWidth = (client.right - modeLeft - 16) / 3;
         const wchar_t* modeLabels[] = {
             Tr(L"自定义"), Tr(L"跑马灯渐变"), Tr(L"普通渐变") };
@@ -6308,15 +6870,6 @@ private:
             RGB(240, 246, 255), 13, true, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
         y += 42;
-        PanelText(dc, Tr(L"界面缩放"), RECT{ 20, y, 125, y + 28 }, RGB(166, 198, 232), 13, true,
-            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        const RECT uiScaleButton{ 130, y + 1, 405, y + 29 };
-        PanelFill(dc, uiScaleButton, RGB(26, 46, 71));
-        PanelText(dc, std::to_wstring(overlay->uiScalePercent_) + L"%  ▾",
-            uiScaleButton, RGB(240, 246, 255), 13, true,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-        y += 42;
         RECT check{ 20, y + 3, 38, y + 21 };
         PanelFill(dc, check, overlay->hoverFadeEnabled_ ? RGB(55, 139, 221) : RGB(41, 58, 80));
         if (overlay->hoverFadeEnabled_) {
@@ -6325,6 +6878,17 @@ private:
         PanelText(dc, Tr(L"鼠标经过模型时将模型透明化"), RECT{ 48, y, 405, y + 28 },
             RGB(220, 232, 248), 13, false,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+        if (overlay->ShowPersonalShadowFade()) {
+            const RECT shadowCheck{20, y + 31, 38, y + 49};
+            PanelFill(dc, shadowCheck, overlay->fadeShadowOnHover_ ? RGB(55, 139, 221) : RGB(41, 58, 80));
+            if (overlay->fadeShadowOnHover_) {
+                PanelText(dc, L"✓", shadowCheck, RGB(255, 255, 255), 14, true, DT_CENTER | DT_VCENTER);
+            }
+            PanelText(dc, Tr(L"悬停时同时淡化阴影"), RECT{48, y + 27, 405, y + 55}, RGB(220, 232, 248),
+                13, false, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += kShadowFadeRowHeight;
+        }
 
         // Keep the fade toggle and its opacity slider on separate rows.  These
         // controls used to share the same y coordinate, which made the labels
@@ -6496,16 +7060,20 @@ private:
         x = logical.x;
         y = logical.y;
         if (x >= 370 && x < 420 && y < 44) return 1; // close
-        const int modeLeft = 105;
+        const int modeLeft = kPersonalBorderModeLeft;
         const int modeWidth = (420 - modeLeft - 16) / 3;
-        if (y >= 52 && y < 84 && x >= modeLeft && x < 420 - 16) {
+        if (y >= 52 && y < 84 && x >= modeLeft && x < modeLeft + 3 * modeWidth) {
             return 10 + (x - modeLeft) / modeWidth;
         }
         int base = overlay->borderMode_ == kBorderModeCustom ? 330 : 105;
         if (y >= base && y < base + 30) return 5;
         if (y >= base + 45 && y < base + 75) return 6;
-        if (y >= base + 87 && y < base + 120 && x >= 130 && x < 405) return 18;
-        if (y >= base + 129 && y < base + 162 && x < 350) return 9;
+        base -= 42;
+        if (y >= base + 129 && y < base + (overlay->ShowPersonalShadowFade() ? 156 : 162) && x < 350) return 9;
+        if (overlay->ShowPersonalShadowFade()) {
+            if (y >= base + 156 && y < base + 185 && x < 405) return 23;
+            base += kShadowFadeRowHeight;
+        }
         if (y >= base + 171 && y < base + 204) return 7;
         if (y >= base + 215 && y < base + 241 && x >= 284 && x < 390) return 19;
         if (y >= base + 255 && y < base + 288) return 8;
@@ -6614,10 +7182,19 @@ private:
         RefreshPersonalPanel(panel);
     }
 
+    static void SavePersonalPanelAppearance(BorderDialogState& state) {
+        auto& overlay = *state.overlay;
+        // These preferences take effect immediately. Keep the panel's cancel
+        // baseline in sync with each successful write.
+        if (overlay.borderMode_ != state.originalMode && overlay.SaveBorderMode()) {
+            state.originalMode = overlay.borderMode_;
+        }
+    }
+
     static void ResetPersonalPanel(HWND panel, BorderDialogState* state) {
         if (!state || !state->overlay) return;
         LayeredOverlay* overlay = state->overlay;
-        CloseUiScalePicker(overlay->uiScalePickerHwnd_);
+
         CloseExpressionPicker(overlay->expressionPickerHwnd_, false);
         overlay->borderMode_ = kBorderModeNormal;
         overlay->customBorderColor_ = kDefaultCustomBorderColor;
@@ -6629,7 +7206,7 @@ private:
         overlay->hoverOpacityRestoreDelaySeconds_ =
             kDefaultHoverOpacityRestoreDelaySeconds;
         overlay->modelOpacityPercent_ = 100;
-        overlay->uiScalePercent_ = kDefaultUiScalePercent;
+        SavePersonalPanelAppearance(*state);
         overlay->hoverExpandPx_ = 0;
         overlay->excludeEffectsFromHover_ = false;
         overlay->subjectHoverRegionConfigured_ = false;
@@ -6674,7 +7251,7 @@ private:
     static void RestorePersonalPanel(HWND panel, BorderDialogState* state) {
         if (!state || !state->overlay) return;
         LayeredOverlay* overlay = state->overlay;
-        CloseUiScalePicker(overlay->uiScalePickerHwnd_);
+
         CloseExpressionPicker(overlay->expressionPickerHwnd_, false);
         overlay->borderMode_ = state->originalMode;
         overlay->customBorderColor_ = state->originalColor;
@@ -6684,7 +7261,6 @@ private:
         overlay->hoverOpacityRestoreDelaySeconds_ =
             state->originalHoverOpacityRestoreDelaySeconds;
         overlay->modelOpacityPercent_ = state->originalModelOpacityPercent;
-        overlay->uiScalePercent_ = state->originalUiScalePercent;
         overlay->hoverExpandPx_ = state->originalHoverExpandPx;
         overlay->excludeEffectsFromHover_ = state->originalExcludeEffectsFromHover;
         overlay->subjectHoverRegionConfigured_ = state->originalSubjectHoverRegionConfigured;
@@ -6831,6 +7407,17 @@ private:
         if (picker && IsWindow(picker)) DestroyWindow(picker);
     }
 
+    static LRESULT CALLBACK UiScaleOutsideClick(int code, WPARAM message, LPARAM data) {
+        if (code == HC_ACTION && uiScaleClickWatcher_ &&
+            (message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN ||
+             message == WM_NCLBUTTONDOWN || message == WM_NCRBUTTONDOWN || message == WM_NCMBUTTONDOWN)) {
+            const auto* mouse = reinterpret_cast<const MOUSEHOOKSTRUCT*>(data);
+            const HWND picker = uiScaleClickWatcher_;
+            if (mouse->hwnd != picker && !IsChild(picker, mouse->hwnd)) CloseUiScalePicker(picker);
+        }
+        return CallNextHookEx(nullptr, code, message, data);
+    }
+
     static LRESULT CALLBACK UiScalePickerProc(
         HWND picker, UINT message, WPARAM wParam, LPARAM lParam) {
         auto* state = reinterpret_cast<UiScalePickerState*>(
@@ -6877,17 +7464,8 @@ private:
             if (index < 0) return 0;
             const int selected = kMinimumUiScalePercent +
                 index * kUiScaleStepPercent;
-            HWND ownerPanel = state->ownerPanel;
-            overlay->uiScalePercent_ = selected;
-            overlay->personalPanelManuallyPositioned_ = false;
-            overlay->statusFrameDirty_ = true;
             CloseUiScalePicker(picker);
-            overlay->PositionToolbar();
-            overlay->PositionBorderPanel();
-            InvalidateRect(overlay->hwnd_, nullptr, FALSE);
-            if (ownerPanel && IsWindow(ownerPanel)) {
-                RefreshPersonalPanel(ownerPanel);
-            }
+            overlay->ApplyUiScale(selected);
             return 0;
         }
         case WM_KEYDOWN:
@@ -6903,6 +7481,8 @@ private:
             }
             break;
         case WM_DESTROY:
+            if (state->mouseHook) UnhookWindowsHookEx(state->mouseHook);
+            if (uiScaleClickWatcher_ == picker) uiScaleClickWatcher_ = nullptr;
             overlay->uiScalePickerHwnd_ = nullptr;
             return 0;
         case WM_NCDESTROY:
@@ -6915,9 +7495,8 @@ private:
         return DefWindowProcW(picker, message, wParam, lParam);
     }
 
-    static void ShowUiScalePicker(HWND panel, BorderDialogState* state) {
-        if (!state || !state->overlay) return;
-        LayeredOverlay* overlay = state->overlay;
+    void ShowUiScalePicker(HWND panel, const RECT& anchor) {
+        auto* overlay = this;
         if (overlay->uiScalePickerHwnd_ &&
             IsWindow(overlay->uiScalePickerHwnd_)) {
             SetForegroundWindow(overlay->uiScalePickerHwnd_);
@@ -6927,7 +7506,6 @@ private:
         CloseExpressionPicker(overlay->expressionPickerHwnd_, true);
         auto* pickerState = new UiScalePickerState{};
         pickerState->overlay = overlay;
-        pickerState->ownerPanel = panel;
 
         static const wchar_t kUiScalePickerClass[] = L"LilyVtsUiScalePicker";
         static bool registered = false;
@@ -6946,30 +7524,20 @@ private:
             return;
         }
 
-        const int base = overlay->borderMode_ == kBorderModeCustom ? 330 : 105;
-        const double panelScale = PersonalPanelScale(overlay);
-        POINT popup{
-            static_cast<LONG>(std::lround(130 * panelScale)),
-            static_cast<LONG>(std::lround((base + 116) * panelScale)) };
+        POINT popup{anchor.left, anchor.bottom + UiScaled(3)};
         ClientToScreen(panel, &popup);
-        const int pickerWidth = static_cast<int>(std::lround(
-            kUiScalePickerWidth * panelScale));
-        const int pickerHeight = static_cast<int>(std::lround(
-            kUiScalePickerHeight * panelScale));
-        MONITORINFO monitor{};
-        monitor.cbSize = sizeof(monitor);
-        if (GetMonitorInfoW(MonitorFromPoint(popup, MONITOR_DEFAULTTONEAREST),
-                &monitor)) {
-            popup.x = static_cast<LONG>((std::clamp)(
-                static_cast<int>(popup.x),
-                static_cast<int>(monitor.rcWork.left),
-                static_cast<int>(monitor.rcWork.right) - pickerWidth));
-            if (popup.y + pickerHeight > monitor.rcWork.bottom) {
-                POINT above{
-                    static_cast<LONG>(std::lround(130 * panelScale)),
-                    static_cast<LONG>(std::lround((base + 87) * panelScale)) };
+        int pickerWidth = UiScaled(kUiScalePickerWidth);
+        int pickerHeight = UiScaled(kUiScalePickerHeight);
+        MONITORINFO monitor{sizeof(MONITORINFO)};
+        if (GetMonitorInfoW(MonitorFromWindow(panel, MONITOR_DEFAULTTONEAREST), &monitor)) {
+            const RECT work = monitor.rcWork;
+            pickerWidth = (std::min)(pickerWidth, static_cast<int>(work.right - work.left));
+            pickerHeight = (std::min)(pickerHeight, static_cast<int>(work.bottom - work.top));
+            popup.x = (std::clamp)(popup.x, work.left, work.right - pickerWidth);
+            if (popup.y + pickerHeight > work.bottom) {
+                POINT above{anchor.left, anchor.top - UiScaled(3)};
                 ClientToScreen(panel, &above);
-                popup.y = above.y - pickerHeight;
+                popup.y = (std::clamp)(above.y - pickerHeight, work.top, work.bottom - pickerHeight);
             }
         }
         overlay->uiScalePickerHwnd_ = CreateWindowExW(
@@ -6982,6 +7550,8 @@ private:
             delete pickerState;
             return;
         }
+        pickerState->mouseHook = SetWindowsHookExW(WH_MOUSE, UiScaleOutsideClick, nullptr, GetCurrentThreadId());
+        if (pickerState->mouseHook) uiScaleClickWatcher_ = overlay->uiScalePickerHwnd_;
         ShowWindow(overlay->uiScalePickerHwnd_, SW_SHOW);
         SetForegroundWindow(overlay->uiScalePickerHwnd_);
         SetFocus(overlay->uiScalePickerHwnd_);
@@ -7095,7 +7665,7 @@ private:
 
         const int visibleRows = ExpressionPickerVisibleRows(state);
         if (state->expressions.empty()) {
-            PanelText(dc, Tr(L"暂无可用表情，请确认 VTS API 已连接"),
+            PanelText(dc, Tr(L"暂无可用表情，请确认 VTube Studio API 已连接"),
                 RECT{ 12, 10, client.right - 12, 10 + kExpressionPickerRowHeight },
                 RGB(166, 198, 232), 13, false,
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -7347,7 +7917,7 @@ private:
     static void ShowExpressionMenu(HWND panel, BorderDialogState* state) {
         if (!state || !state->overlay) return;
         LayeredOverlay* overlay = state->overlay;
-        CloseUiScalePicker(overlay->uiScalePickerHwnd_);
+
         if (overlay->expressionPickerHwnd_ &&
             IsWindow(overlay->expressionPickerHwnd_)) {
             SetForegroundWindow(overlay->expressionPickerHwnd_);
@@ -7358,7 +7928,6 @@ private:
         overlay->CapturePanelExpressionState();
         auto* pickerState = new ExpressionPickerState{};
         pickerState->overlay = overlay;
-        pickerState->ownerPanel = panel;
         pickerState->expressions = overlay->vtsApi_.GetExpressions();
         if (pickerState->expressions.empty()) {
             overlay->vtsApi_.RequestExpressionState();
@@ -7384,7 +7953,7 @@ private:
 
         const int base = overlay->borderMode_ == kBorderModeCustom ? 330 : 105;
         const int buttonTop = base +
-            (overlay->hoverExpressionEnabled_ ? 411 : 373);
+            (overlay->hoverExpressionEnabled_ ? 411 : 373) - 42;
         const double panelScale = PersonalPanelScale(overlay);
         POINT popup{
             static_cast<LONG>(std::lround(20 * panelScale)),
@@ -7469,6 +8038,21 @@ private:
         input.push_back(character);
     }
 
+    static void UpdatePersonalNumericDrag(HWND panel, BorderDialogState* state, int x) {
+        auto* overlay = state->overlay;
+        const int delta = x - state->numericPress.x;
+        if (!state->numericDragged && std::abs(delta) < overlay->UiScaled(3)) return;
+        state->numericDragged = true;
+        const double value = (std::max)(0.0, state->numericBase + delta * .1);
+        if (state->activeHit == 15) {
+            state->hoverExpressionDurationInput = FormatNonNegativeDecimal(value);
+            ApplyHoverExpressionDurationInput(panel, state);
+        } else {
+            state->hoverOpacityRestoreDelayInput = FormatNonNegativeDecimal(value);
+            ApplyHoverOpacityRestoreDelayInput(panel, state);
+        }
+    }
+
     static LRESULT CALLBACK PersonalPanelProc(
         HWND panel, UINT message, WPARAM wParam, LPARAM lParam) {
         auto* state = reinterpret_cast<BorderDialogState*>(GetWindowLongPtrW(panel, GWLP_USERDATA));
@@ -7499,7 +8083,7 @@ private:
                 const int hit = PersonalPanelHitTest(
                     panel, overlay, point.x, point.y);
                 if (hit == 15 || hit == 19) {
-                    SetCursor(LoadCursorW(nullptr, IDC_IBEAM));
+                    SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
                     return TRUE;
                 }
                 const POINT logical = PersonalPanelLogicalPoint(
@@ -7628,6 +8212,7 @@ private:
             }
             if (hit >= 10 && hit <= 12) {
                 overlay->borderMode_ = hit - 10;
+                SavePersonalPanelAppearance(*state);
                 state->activeHit = 0;
                 overlay->PositionBorderPanel();
                 ++overlay->requested_;
@@ -7652,12 +8237,13 @@ private:
                 UpdatePersonalSlider(panel, state, hit, x);
                 return 0;
             }
-            if (hit == 18) {
-                ShowUiScalePicker(panel, state);
+            if (hit == 23) {
+                overlay->ToggleShadowHoverFade();
                 return 0;
             }
             if (hit == 9) {
                 overlay->hoverFadeEnabled_ = !overlay->hoverFadeEnabled_;
+                overlay->PositionBorderPanel();
                 // Toggling this option must clear any previous hover target.
                 // When disabled, restore the configured model opacity
                 // immediately instead of leaving the old faded alpha active.
@@ -7718,6 +8304,11 @@ private:
                 return 0;
             }
             if (hit == 15) {
+                state->activeHit = hit;
+                state->numericPress = POINT{x, y};
+                state->numericBase = overlay->hoverExpressionDurationSeconds_;
+                state->numericDragged = false;
+                SetCapture(panel);
                 state->editingHoverExpressionDuration = true;
                 state->replaceHoverExpressionDurationOnNextInput = true;
                 state->hoverExpressionDurationInput = FormatNonNegativeDecimal(
@@ -7728,6 +8319,11 @@ private:
                 return 0;
             }
             if (hit == 19) {
+                state->activeHit = hit;
+                state->numericPress = POINT{x, y};
+                state->numericBase = overlay->hoverOpacityRestoreDelaySeconds_;
+                state->numericDragged = false;
+                SetCapture(panel);
                 state->editingHoverOpacityRestoreDelay = true;
                 state->replaceHoverOpacityRestoreDelayOnNextInput = true;
                 state->hoverOpacityRestoreDelayInput = FormatNonNegativeDecimal(
@@ -7752,7 +8348,7 @@ private:
             if (hit == 22) {
                 overlay->EndHoverOpacityPreview();
                 KillTimer(panel, 94);
-                CloseUiScalePicker(overlay->uiScalePickerHwnd_);
+
                 CloseExpressionPicker(overlay->expressionPickerHwnd_, false);
                 overlay->EndPanelExpressionSession();
                 overlay->SaveUiSettings();
@@ -7786,6 +8382,20 @@ private:
                 const POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
                 const int hoverHit = PersonalPanelHitTest(
                     panel, overlay, point.x, point.y);
+                if (hoverHit != state->numericHintHit) {
+                    state->numericHintHit = hoverHit;
+                    if (state->numericHint) DestroyWindow(std::exchange(state->numericHint, nullptr));
+                    if (hoverHit == 15 || hoverHit == 19) {
+                        const int base = (overlay->borderMode_ == kBorderModeCustom ? 288 : 63) +
+                            (overlay->ShowPersonalShadowFade() ? kShadowFadeRowHeight : 0);
+                        RECT client{};
+                        GetClientRect(panel, &client);
+                        const int y = base + (hoverHit == 15 ? 375 : 215);
+                        const auto px = [&](int value) { return MulDiv(value, client.right, 420); };
+                        const RECT bounds{px(284), px(y), px(390), px(y + 26)};
+                        state->numericHint = overlay->RegisterNumericHint(panel, &bounds);
+                    }
+                }
                 const bool showSubjectPreview =
                     state->activeHit == 0 && overlay->subjectHoverRegionConfigured_ &&
                     (hoverHit == 16 || hoverHit == 17);
@@ -7794,6 +8404,10 @@ private:
                     ++overlay->requested_;
                     overlay->RenderFrame();
                 }
+            }
+            if ((state->activeHit == 15 || state->activeHit == 19) && GetCapture() == panel) {
+                UpdatePersonalNumericDrag(panel, state, GET_X_LPARAM(lParam));
+                return 0;
             }
             if (state->activeHit == 3 && GetCapture() == panel) {
                 POINT cursor{};
@@ -7813,6 +8427,8 @@ private:
             break;
         case WM_MOUSELEAVE:
             state->trackingMouseLeave = false;
+            state->numericHintHit = 0;
+            if (state->numericHint) DestroyWindow(std::exchange(state->numericHint, nullptr));
             if (overlay->showSubjectRegionPreview_) {
                 overlay->showSubjectRegionPreview_ = false;
                 ++overlay->requested_;
@@ -7831,7 +8447,10 @@ private:
                 ScreenToClient(panel, &cursor);
                 const int x = cursor.x;
                 const int y = cursor.y;
-                if (state->activeHit == 3) {
+                if (state->activeHit == 15 || state->activeHit == 19) {
+                    UpdatePersonalNumericDrag(panel, state, x);
+                    if (state->numericDragged) overlay->SaveUiSettings();
+                } else if (state->activeHit == 3) {
                     UpdatePersonalWheel(panel, state, x, y);
                 } else if (state->activeHit >= 4 && state->activeHit <= 8) {
                     UpdatePersonalSlider(panel, state, state->activeHit, x);
@@ -7866,7 +8485,7 @@ private:
             // in-app panel commits and closes without reopening a modal dialog.
             if (LOWORD(wParam) == IDOK) {
                 overlay->EndHoverOpacityPreview();
-                CloseUiScalePicker(overlay->uiScalePickerHwnd_);
+
                 CloseExpressionPicker(overlay->expressionPickerHwnd_, false);
                 overlay->SaveUiSettings();
                 Log("[toolbar] border_settings_saved mode=" + std::to_string(overlay->borderMode_) +
@@ -7879,7 +8498,7 @@ private:
             RestorePersonalPanel(panel, state);
             return 0;
         case WM_DESTROY:
-            CloseUiScalePicker(overlay->uiScalePickerHwnd_);
+
             CloseExpressionPicker(overlay->expressionPickerHwnd_, false);
             KillTimer(panel, 1);
             KillTimer(panel, 91);
@@ -7915,7 +8534,6 @@ private:
         }
         auto* state = new BorderDialogState{};
         state->overlay = this;
-        state->originalUiScalePercent = uiScalePercent_;
         state->originalMode = borderMode_;
         state->originalColor = customBorderColor_;
         state->originalThickness = borderThickness_;
@@ -8591,12 +9209,12 @@ private:
             (static_cast<size_t>(gridWidth) * gridHeight + 7) / 8, 0);
         size_t occupiedCells = 0;
         for (int gy = 0; gy < gridHeight; ++gy) {
-            const double y = (static_cast<double>(gy) + 0.5) * dibHeight_ / gridHeight;
             for (int gx = 0; gx < gridWidth; ++gx) {
-                const double x = (static_cast<double>(gx) + 0.5) * dibWidth_ / gridWidth;
+                const auto output = vtsfloat::ImageOutputPoint(subjectImageMapping_,
+                    (gx + 0.5) / gridWidth, (gy + 0.5) / gridHeight);
                 bool inside = false;
                 for (const auto& polygon : localPolygons) {
-                    if (PointInPolygon(polygon, x, y)) {
+                    if (PointInPolygon(polygon, output[0] * dibWidth_, output[1] * dibHeight_)) {
                         inside = true;
                         break;
                     }
@@ -8723,6 +9341,7 @@ private:
                 std::to_string(GetLastError()));
             return;
         }
+        RefreshDebugReadout(false);
         SetLayeredWindowAttributes(subjectSelectionHwnd_, 0, 128, LWA_ALPHA);
         SetWindowPos(subjectSelectionHwnd_, HWND_TOPMOST,
             subjectSelectionVirtualLeft_, subjectSelectionVirtualTop_, width, height,
@@ -8949,8 +9568,42 @@ private:
         return DefWindowProcW(window, message, wParam, lParam);
     }
 
+    static POINT SidePanelPosition(const RECT& anchor, const RECT& work, const RECT* toolbar,
+                                   SIZE panel, int gap, LONG desiredY) {
+        const LONG leftEdge = toolbar ? (std::min)(anchor.left, toolbar->left) : anchor.left;
+        const LONG rightEdge = toolbar ? (std::max)(anchor.right, toolbar->right) : anchor.right;
+        const LONG leftX = leftEdge - panel.cx - gap;
+        const LONG rightX = rightEdge + gap;
+        const bool leftFits = leftX >= work.left;
+        const bool rightFits = rightX + panel.cx <= work.right;
+        const bool preferRight = anchor.left + anchor.right < work.left + work.right;
+        LONG x = rightFits && (preferRight || !leftFits) ? rightX : leftX;
+        LONG y = desiredY;
+        const LONG maxY = (std::max)(work.top, work.bottom - panel.cy);
+        if (!leftFits && !rightFits) {
+            x = preferRight ? work.right - panel.cx : work.left;
+            if (toolbar && toolbar->bottom + gap <= maxY) y = (std::max)(y, toolbar->bottom + gap);
+        }
+        return POINT{(std::clamp)(x, work.left, (std::max)(work.left, work.right - panel.cx)),
+            (std::clamp)(y, work.top, maxY)};
+    }
+
+    static POINT PersonalPanelPosition(const RECT& model, const RECT& work, const RECT* toolbar, SIZE size) {
+        return SidePanelPosition(model, work, toolbar, size, 8, model.bottom - size.cy);
+    }
+
+    std::optional<POINT> DockedPersonalPanelPosition(const RECT& model, const RECT& work, const RECT* toolbar) const {
+        if (cropEditing_ || personalPanelManuallyPositioned_ || !borderPanelHwnd_) return std::nullopt;
+        RECT current{};
+        if (!GetWindowRect(borderPanelHwnd_, &current) || !IsWindowVisible(borderPanelHwnd_)) return std::nullopt;
+        const POINT position = PersonalPanelPosition(model, work, toolbar,
+            SIZE{current.right - current.left, current.bottom - current.top});
+        if (position.x == current.left && position.y == current.top) return std::nullopt;
+        return position;
+    }
+
     void PositionBorderPanel() {
-        if (!borderPanelHwnd_ || !IsWindow(borderPanelHwnd_) || !hwnd_) return;
+        if (cropEditing_ || !borderPanelHwnd_ || !IsWindow(borderPanelHwnd_) || !hwnd_) return;
         const int panelW = PersonalPanelPixelWidth(this);
         const int panelH = PersonalPanelPixelHeight(this);
         RECT currentPanel{};
@@ -8959,12 +9612,6 @@ private:
             currentPanel.right - currentPanel.left != panelW ||
             currentPanel.bottom - currentPanel.top != panelH;
         const UINT resizeFlags = sizeChanged ? SWP_NOCOPYBITS : 0;
-        // Once the user drags the personalization panel during this session,
-        // or starts moving/resizing the model window, keep the two windows
-        // independent.  Only touch the panel again when its own layout-driven
-        // size changes (for example the expression-duration row).  Calling
-        // SetWindowPos/RefreshPersonalPanel for every model WM_WINDOWPOSCHANGED
-        // made dragging the model needlessly repaint both layered windows.
         if (personalPanelManuallyPositioned_) {
             if (sizeChanged) {
                 SetWindowPos(borderPanelHwnd_, WindowZOrder(), 0, 0, panelW, panelH,
@@ -8975,17 +9622,13 @@ private:
         }
         RECT model{};
         GetWindowRect(hwnd_, &model);
-        MONITORINFO mi{};
-        mi.cbSize = sizeof(mi);
-        GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
-        const int screenMid = (mi.rcWork.left + mi.rcWork.right) / 2;
-        const int modelMid = (model.left + model.right) / 2;
-        int x = modelMid < screenMid ? model.right + 8 : model.left - panelW - 8;
-        if (x + panelW > mi.rcWork.right) x = model.left - panelW - 8;
-        if (x < mi.rcWork.left) x = model.right + 8;
-        int y = model.bottom - panelH;
-        y = (std::clamp)(y, static_cast<int>(mi.rcWork.top), static_cast<int>(mi.rcWork.bottom) - panelH);
-        SetWindowPos(borderPanelHwnd_, WindowZOrder(), x, y, panelW, panelH,
+        MONITORINFO mi{sizeof(MONITORINFO)};
+        if (!GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi)) return;
+        RECT toolbar{};
+        const bool hasToolbar = IsWindowVisible(toolbarHwnd_) && GetWindowRect(toolbarHwnd_, &toolbar);
+        const POINT position = PersonalPanelPosition(model, mi.rcWork, hasToolbar ? &toolbar : nullptr,
+            SIZE{panelW, panelH});
+        SetWindowPos(borderPanelHwnd_, WindowZOrder(), position.x, position.y, panelW, panelH,
             SWP_NOACTIVATE | SWP_SHOWWINDOW | resizeFlags);
         if (sizeChanged) {
             // Do not let Windows preserve the old footer pixels when an option
@@ -9354,18 +9997,1455 @@ private:
         return FALSE;
     }
 
+    bool CropActive() const {
+        return !EqualRect(&cropSelection_, &kFullCrop);
+    }
+
+    static RECT CropPixels(const RECT& selection, int width, int height) {
+        if (width <= 0 || height <= 0) return {};
+        const int left = (std::min)(width - 1, MulDiv(selection.left, width, kCropExtent));
+        const int top = (std::min)(height - 1, MulDiv(selection.top, height, kCropExtent));
+        return RECT{left, top,
+            (std::clamp)(MulDiv(selection.right, width, kCropExtent), left + 1, width),
+            (std::clamp)(MulDiv(selection.bottom, height, kCropExtent), top + 1, height)};
+    }
+
+    RECT SourceViewPixels() const {
+        return CropPixels(cropEditing_ ? kFullCrop : cropSelection_,
+            static_cast<int>(sourceWidth_), static_cast<int>(sourceHeight_));
+    }
+
+    RECT CropDraftPixels() const {
+        return CropPixels(cropDraft_, sourceWidth_, sourceHeight_);
+    }
+
+    void SetCropDraftPixels(const RECT& pixels) {
+        cropDraft_ = RECT{MulDiv(pixels.left, kCropExtent, sourceWidth_),
+            MulDiv(pixels.top, kCropExtent, sourceHeight_),
+            MulDiv(pixels.right, kCropExtent, sourceWidth_),
+            MulDiv(pixels.bottom, kCropExtent, sourceHeight_)};
+        UpdateCropEdits();
+        resetFrameSchedule_ = true;
+    }
+
+    RECT CropAspectBounds() const {
+        return RECT{0, 0, cropAspectSize_.cx, cropAspectSize_.cy};
+    }
+
+    void LoadFeatherEdges() {
+        const std::wstring value = ReadConfigString(L"crop", L"feather_edges");
+        const wchar_t* cursor = value.c_str();
+        for (size_t i = 0; i < cropFeather_.size(); ++i) {
+            wchar_t* end = nullptr;
+            const LONG stored = std::wcstol(cursor, &end, 10);
+            const bool last = i + 1 == cropFeather_.size();
+            if (end == cursor || *end != (last ? L'\0' : L',')) {
+                const int legacy = (std::clamp)(ReadConfigInt(L"crop", L"feather_px", 0),
+                    0, kMaximumFeatherPixels);
+                cropFeather_.fill(FeatherEdge{legacy, legacy > 0});
+                return;
+            }
+            const LONG limit = kMaximumFeatherPixels;
+            const int pixels = static_cast<int>(std::abs((std::clamp)(stored, -limit, limit)));
+            // "+0" marks an enabled edge whose feather width is still zero.
+            cropFeather_[i] = FeatherEdge{pixels, stored > 0 || (stored == 0 && *cursor == L'+')};
+            if (!last) cursor = end + 1;
+        }
+    }
+
+    void SaveFeatherEdges() const {
+        std::wstring stored;
+        for (const FeatherEdge& edge : cropFeather_) {
+            if (!stored.empty()) stored += L',';
+            if (edge.enabled && edge.pixels == 0) stored += L'+';
+            stored += std::to_wstring(edge.enabled ? edge.pixels : -edge.pixels);
+        }
+        WriteConfigString(L"crop", L"feather_edges", stored);
+    }
+
+    static SIZE BoundedCropSize(const RECT& source, const RECT& work, double requestedScale) {
+        const LONG width = source.right - source.left;
+        const LONG height = source.bottom - source.top;
+        const double scale = (std::min)({requestedScale,
+            (work.right - work.left) / static_cast<double>(width),
+            (work.bottom - work.top) / static_cast<double>(height)});
+        return SIZE{(std::max)(1L, std::lround(width * scale)),
+            (std::max)(1L, std::lround(height * scale))};
+    }
+
+    void FitCropViewport(const RECT& requested, const RECT& source, HMONITOR monitor = nullptr) {
+        if (IsRectEmpty(&source)) return;
+        MONITORINFO info{sizeof(MONITORINFO)};
+        if (!monitor) monitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
+        if (!GetMonitorInfoW(monitor, &info)) return;
+        RECT work = info.rcWork;
+        if (IsRectEmpty(&work)) return;
+        const double scale = (std::max)(1L, requested.right - requested.left) /
+            static_cast<double>(source.right - source.left);
+        if (cropEditing_) {
+            const SIZE preview = BoundedCropSize(source, work, scale);
+            const int width = (std::min)(static_cast<int>(work.right - work.left),
+                (std::max)(static_cast<int>(preview.cx), UiScaled(680)));
+            const int toolbarHeight = BuildCropToolbarLayout(width).rows * UiScaled(kToolbarHeight) + ViewSettingsWarningHeight();
+            work.top += (std::min)(toolbarHeight + UiScaled(kToolbarGap),
+                static_cast<int>(work.bottom - work.top - 1));
+            const int firstRow = UiScaled(kCropReadoutRowHeight);
+            work.bottom -= (std::min)(UiScaled(kCropReadoutGap) + firstRow,
+                static_cast<int>(work.bottom - work.top - 1));
+            const SIZE fitted = BoundedCropSize(source, work, scale);
+            const auto readout = BuildCropReadoutLayout(fitted.cx, work.right - work.left);
+            work.bottom -= (std::min)(static_cast<int>(readout.size.cy) - firstRow,
+                static_cast<int>(work.bottom - work.top - 1));
+        }
+        const SIZE size = BoundedCropSize(source, work, scale);
+        const int x = (std::clamp)(requested.left, work.left, work.right - size.cx);
+        const int y = (std::clamp)(requested.top, work.top, work.bottom - size.cy);
+        SetWindowPos(hwnd_, WindowZOrder(), x, y, size.cx, size.cy, SWP_NOACTIVATE);
+    }
+
+    void BeginViewEdit() {
+        if (viewEditing_ || locked_ || !CropAvailable()) return;
+        viewEditing_ = true;
+        CancelFpsCapture();
+        CancelHotkeyCapture();
+        HideGithubDropdown();
+        toolbarHovered_ = ToolbarButton::None;
+        PositionToolbar();
+    }
+
+    void EndViewEdit() {
+        if (!viewEditing_) return;
+        viewEditing_ = false;
+        CloseShadowPanel(false);
+        CloseImagePanel(false);
+        if (!cropEditing_) CloseFeatherPanel();
+        CloseUiScalePicker(uiScalePickerHwnd_);
+        if (cropEditing_) EndCropEdit(false);
+        toolbarHovered_ = ToolbarButton::None;
+        PositionToolbar();
+    }
+
+    void BeginCropEdit() {
+        if (!viewEditing_ || cropEditing_ || locked_ || !CropAvailable()) return;
+        CloseShadowPanel(false);
+        CloseImagePanel(false);
+        StopImageBackdrop();
+        CloseFeatherPanel();
+        if (!GetWindowRect(hwnd_, &cropBeforeEditBounds_)) return;
+        if (!CreateCropEdits()) return;
+        CancelFpsCapture();
+        CancelHotkeyCapture();
+        CancelHoverExpression();
+        if (toolbarGuideHwnd_) FinishToolbarGuide(false);
+        HideGithubDropdown();
+        cropDraft_ = cropSelection_;
+        cropBeforeEditSelection_ = cropSelection_;
+        cropNumericSaved_ = false;
+        cropFeatherDraft_ = cropFeather_;
+        imageTransformDraft_ = imageTransform_;
+        const RECT previous = SourceViewPixels();
+        cropAspectSize_ = SIZE{previous.right - previous.left, previous.bottom - previous.top};
+        RECT preview = cropBeforeEditBounds_;
+        const RECT previousBounds = DisplayImageBounds();
+        const int oldWidth = MulDiv(preview.right - preview.left, previous.right - previous.left, previousBounds.right);
+        const int oldHeight = MulDiv(preview.bottom - preview.top, previous.bottom - previous.top, previousBounds.bottom);
+        const int previousWidth = previous.right - previous.left;
+        const int previousHeight = previous.bottom - previous.top;
+        preview.left -= MulDiv(previous.left, oldWidth, previousWidth);
+        preview.top -= MulDiv(previous.top, oldHeight, previousHeight);
+        preview.right = preview.left + (std::max)(kMinimumWidth,
+            MulDiv(oldWidth, static_cast<int>(sourceWidth_), previousWidth));
+        cropEditing_ = true;
+        UpdateCropEdits();
+        if (borderPanelHwnd_) ShowWindow(borderPanelHwnd_, SW_HIDE);
+        scaleReadbackPrimed_ = false;
+        toolbarHovered_ = ToolbarButton::None;
+        imagePreviewBounds_ = preview;
+        RefreshCropTransform();
+        PositionToolbar();
+        SetFocus(hwnd_);
+        resetFrameSchedule_ = true;
+    }
+
+    void SaveCropSelection() const {
+        const auto stored = std::to_wstring(cropSelection_.left) + L"," +
+            std::to_wstring(cropSelection_.top) + L"," +
+            std::to_wstring(cropSelection_.right) + L"," + std::to_wstring(cropSelection_.bottom);
+        WriteConfigString(L"crop", L"rect", stored);
+    }
+
+    void EndCropEdit(bool save) {
+        if (!cropEditing_) return;
+        CloseUiScalePicker(uiScalePickerHwnd_);
+        if (save) {
+            const HWND focused = GetFocus();
+            if (focused == cropWidthHwnd_ || focused == cropHeightHwnd_) CommitCropEdit(focused);
+        }
+        CloseFeatherPanel();
+        RECT preview{};
+        GetWindowRect(hwnd_, &preview);
+        if (!save) {
+            if (cropNumericSaved_) cropDraft_ = cropSelection_;
+            imageTransformDraft_ = imageTransform_;
+        }
+        const auto selection = CropDraftPixels();
+        const RECT fullSource = DisplayImageRegion();
+        const auto mapping = ImageMappingFor(fullSource, imageTransformDraft_);
+        cropEditing_ = false;
+        cropInputPressed_ = nullptr;
+        cropInputDragging_ = false;
+        DestroyCropEdits();
+        cropDrag_ = 0;
+        if (GetCapture() == hwnd_) ReleaseCapture();
+        scaleReadbackPrimed_ = false;
+        toolbarHovered_ = ToolbarButton::None;
+        if (save && cropFeather_ != cropFeatherDraft_) {
+            cropFeather_ = cropFeatherDraft_;
+            SaveFeatherEdges();
+        }
+        const bool transformChanged = !(imageTransformDraft_ == imageTransform_);
+        if (save && transformChanged) {
+            imageTransform_ = imageTransformDraft_;
+            WriteConfigInt(L"image", L"rotation_tenths", static_cast<int>(std::lround(imageTransform_.degrees * 10)));
+            WriteConfigInt(L"image", L"flip_horizontal", imageTransform_.flipX);
+            WriteConfigInt(L"image", L"flip_vertical", imageTransform_.flipY);
+        }
+        if (((save && transformChanged) || ((save || cropNumericSaved_) &&
+                !EqualRect(&cropDraft_, &cropBeforeEditSelection_))) &&
+            sourceWidth_ && sourceHeight_ && !IsRectEmpty(&preview)) {
+            cropSelection_ = cropDraft_;
+            SaveCropSelection();
+            const auto corners = CropScreenCorners(selection, mapping,
+                preview.right - preview.left, preview.bottom - preview.top);
+            RECT screenSelection{corners[0].x, corners[0].y, corners[0].x, corners[0].y};
+            for (const POINT point : corners) {
+                screenSelection.left = (std::min)(screenSelection.left, point.x);
+                screenSelection.top = (std::min)(screenSelection.top, point.y);
+                screenSelection.right = (std::max)(screenSelection.right, point.x);
+                screenSelection.bottom = (std::max)(screenSelection.bottom, point.y);
+            }
+            OffsetRect(&screenSelection, preview.left, preview.top);
+            if (!CropActive() && !imageTransform_.active()) {
+                screenSelection.right = (std::max)(screenSelection.right, screenSelection.left + kMinimumWidth);
+            }
+            FitCropViewport(screenSelection, DisplayImageBounds());
+            SaveWindowPlacement();
+        } else {
+            const RECT bounds = cropBeforeEditBounds_;
+            SetWindowPos(hwnd_, WindowZOrder(), bounds.left, bounds.top,
+                bounds.right - bounds.left, bounds.bottom - bounds.top, SWP_NOACTIVATE);
+        }
+        PositionToolbar();
+        if (borderPanelHwnd_) ShowWindow(borderPanelHwnd_, SW_SHOWNA);
+        resetFrameSchedule_ = true;
+    }
+
+    #include "image_panel.inl"
+    #include "shadow_panel.inl"
+
+    void ToggleCropAspect() {
+        cropAspectLocked_ = !cropAspectLocked_;
+        const RECT draft = CropDraftPixels();
+        cropAspectSize_ = SIZE{draft.right - draft.left, draft.bottom - draft.top};
+        WriteConfigInt(L"crop", L"lock_aspect", cropAspectLocked_);
+        InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+    }
+
+    static LRESULT CALLBACK CropEditProc(HWND edit, UINT message, WPARAM wParam, LPARAM lParam,
+                                         UINT_PTR, DWORD_PTR data) {
+        auto* overlay = reinterpret_cast<LayeredOverlay*>(data);
+        if (message == WM_SETCURSOR) {
+            SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
+            return TRUE;
+        }
+        const HWND parent = GetParent(edit);
+        if (parent && parent == overlay->featherPanelHwnd_) {
+            if (const auto handled = overlay->HandleFeatherInputMouse(edit, message, wParam, lParam)) {
+                return *handled;
+            }
+        } else if (const auto handled = overlay->HandleCropInputMouse(edit, message, wParam, lParam)) {
+            return *handled;
+        }
+        if (message == WM_KEYDOWN) {
+            switch (wParam) {
+            case VK_ESCAPE:
+                if (parent == overlay->featherPanelHwnd_) overlay->CloseFeatherPanel();
+                else overlay->EndCropEdit(false);
+                return 0;
+            case VK_RETURN:
+                SetFocus(parent);
+                return 0;
+            case VK_TAB: {
+                if (const HWND next = GetNextDlgTabItem(parent, edit, GetKeyState(VK_SHIFT) < 0)) {
+                    SetFocus(next);
+                }
+                return 0;
+            }
+            case 'A':
+                if (GetKeyState(VK_CONTROL) < 0) {
+                    SendMessageW(edit, EM_SETSEL, 0, -1);
+                    return 0;
+                }
+                break;
+            }
+        }
+        if (message == WM_SETFOCUS) {
+            const LRESULT result = DefSubclassProc(edit, message, wParam, lParam);
+            SendMessageW(edit, EM_SETSEL, 0, -1);
+            return result;
+        }
+        if (message == WM_CHAR &&
+            (wParam == VK_RETURN || wParam == VK_TAB || wParam == VK_ESCAPE || wParam == 1)) {
+            return 0;
+        }
+        return DefSubclassProc(edit, message, wParam, lParam);
+    }
+
+    HWND CreateCropNumericEdit(HWND parent, UINT id, const wchar_t* cue, HFONT font) {
+        const HWND edit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_BORDER | WS_TABSTOP |
+            ES_CENTER | ES_NUMBER | ES_AUTOHSCROLL,
+            0, 0, 0, 0, parent, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(id)), instance_, nullptr);
+        if (!edit) return nullptr;
+        if (!SetWindowSubclass(edit, &LayeredOverlay::CropEditProc, id, reinterpret_cast<DWORD_PTR>(this))) {
+            DestroyWindow(edit);
+            return nullptr;
+        }
+        if (font) SendMessageW(edit, WM_SETFONT, reinterpret_cast<WPARAM>(font), FALSE);
+        SendMessageW(edit, EM_LIMITTEXT, 6, 0);
+        SendMessageW(edit, EM_SETCUEBANNER, FALSE, reinterpret_cast<LPARAM>(cue));
+        RegisterNumericHint(edit);
+        return edit;
+    }
+
+    HFONT CreateCropEditFont(int size = 15) const {
+        return CreateFontW(-UiScaled(size), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+            DEFAULT_PITCH | FF_DONTCARE, UiFontFace());
+    }
+
+    bool CreateCropEdits() {
+        WNDCLASSW windowClass{};
+        windowClass.hInstance = instance_;
+        windowClass.lpfnWndProc = &LayeredOverlay::CropReadoutProc;
+        windowClass.lpszClassName = kCropReadoutClass;
+        windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        if (!RegisterClassW(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
+
+        cropReadoutHwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_LAYERED | (desktopMode_ ? 0 : WS_EX_TOPMOST),
+            kCropReadoutClass, L"", WS_POPUP | WS_CLIPCHILDREN, 0, 0, 1, 1,
+            hwnd_, nullptr, instance_, this);
+        if (!cropReadoutHwnd_) return false;
+        SetLayeredWindowAttributes(cropReadoutHwnd_, 0, 234, LWA_ALPHA);
+        cropReadoutFont_ = CreateCropEditFont(kCropReadoutFontHeight);
+        cropWidthHwnd_ = CreateCropNumericEdit(cropReadoutHwnd_, kCropWidthEdit, Tr(L"宽度"), cropReadoutFont_);
+        cropHeightHwnd_ = CreateCropNumericEdit(cropReadoutHwnd_, kCropHeightEdit, Tr(L"高度"), cropReadoutFont_);
+        if (cropWidthHwnd_ && cropHeightHwnd_) return true;
+        DestroyCropEdits();
+        Log("[crop] could not create resolution readout fields");
+        return false;
+    }
+
+    void DestroyCropEdits() {
+        cropWidthHwnd_ = nullptr;
+        cropHeightHwnd_ = nullptr;
+        if (const HWND readout = std::exchange(cropReadoutHwnd_, nullptr); IsWindow(readout)) DestroyWindow(readout);
+        if (const HFONT font = std::exchange(cropReadoutFont_, nullptr)) DeleteObject(font);
+    }
+
+    static LRESULT CALLBACK CropReadoutProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+        auto* overlay = reinterpret_cast<LayeredOverlay*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lParam);
+            overlay = static_cast<LayeredOverlay*>(create->lpCreateParams);
+            SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(overlay));
+        }
+        if (!overlay) return DefWindowProcW(window, message, wParam, lParam);
+        switch (message) {
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT paint{};
+            const HDC dc = BeginPaint(window, &paint);
+            RECT client{};
+            GetClientRect(window, &client);
+            PanelFill(dc, client, RGB(18, 43, 32));
+            const RECT topEdge{0, 0, client.right, 1};
+            PanelFill(dc, topEdge, RGB(52, 105, 81));
+            const auto& layout = overlay->cropReadoutLayout_;
+            const auto text = [&](const std::wstring& value, const RECT& bounds) {
+                PanelText(dc, value, bounds, RGB(181, 227, 200), overlay->UiScaled(kCropReadoutFontHeight), true,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            };
+            text(overlay->CropSourceLabel(), layout.source);
+            text(Tr(L"裁剪分辨率"), layout.label);
+            text(L"×", layout.separator);
+            EndPaint(window, &paint);
+            return 0;
+        }
+        case WM_COMMAND:
+            if (overlay->cropEditing_ && (LOWORD(wParam) == kCropWidthEdit || LOWORD(wParam) == kCropHeightEdit)) {
+                if (HIWORD(wParam) == EN_KILLFOCUS) overlay->CommitCropEdit(reinterpret_cast<HWND>(lParam));
+                return 0;
+            }
+            break;
+        case WM_CTLCOLOREDIT: {
+            const HDC dc = reinterpret_cast<HDC>(wParam);
+            constexpr COLORREF background = RGB(28, 62, 47);
+            SetTextColor(dc, RGB(226, 248, 233));
+            SetBkColor(dc, background);
+            SetDCBrushColor(dc, background);
+            return reinterpret_cast<LRESULT>(GetStockObject(DC_BRUSH));
+        }
+        case WM_KEYDOWN:
+            if (wParam == VK_ESCAPE) {
+                overlay->EndCropEdit(false);
+                return 0;
+            }
+            break;
+        }
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+
+    CropReadoutLayout BuildCropReadoutLayout(int outputWidth, int workWidth) const {
+        CropReadoutLayout layout{};
+        const int padding = UiScaled(8);
+        const int gap = UiScaled(6);
+        const int rowHeight = UiScaled(kCropReadoutRowHeight);
+        const HDC dc = GetDC(cropReadoutHwnd_);
+        const HGDIOBJ oldFont = cropReadoutFont_ ? SelectObject(dc, cropReadoutFont_) : nullptr;
+        const auto measure = [&](const std::wstring& label) {
+            SIZE size{};
+            GetTextExtentPoint32W(dc, label.c_str(), static_cast<int>(label.size()), &size);
+            return static_cast<int>(size.cx) + UiScaled(2);
+        };
+        const int sourceWidth = measure(CropSourceLabel());
+        const int cropLabelWidth = measure(Tr(L"裁剪分辨率"));
+        const int fieldWidth = (std::max)(UiScaled(44), measure(L"00000") + gap);
+        const int separatorWidth = measure(L"×");
+        if (oldFont) SelectObject(dc, oldFont);
+        ReleaseDC(cropReadoutHwnd_, dc);
+
+        const int dimensionsWidth = fieldWidth * 2 + separatorWidth + gap * 2;
+        const int cropWidth = cropLabelWidth + gap + dimensionsWidth;
+        const int singleWidth = padding * 2 + sourceWidth + gap * 2 + cropWidth;
+        const bool singleRow = singleWidth <= (std::min)(outputWidth, workWidth);
+        const int width = singleRow ? singleWidth :
+            (std::min)(workWidth, padding * 2 + (std::max)(sourceWidth, cropWidth));
+        layout.size = SIZE{width, singleRow ? rowHeight : rowHeight * 2};
+        layout.source = RECT{padding, 0, (std::min)(padding + sourceWidth, width - padding), rowHeight};
+        const int top = singleRow ? 0 : rowHeight;
+        const int labelLeft = singleRow ? layout.source.right + gap * 2 : padding;
+        const int fieldLeft = width - padding - dimensionsWidth;
+        layout.label = RECT{labelLeft, top, fieldLeft - gap, top + rowHeight};
+        const int fieldHeight = UiScaled(18);
+        const int fieldTop = top + (rowHeight - fieldHeight) / 2;
+        layout.widthEdit = RECT{fieldLeft, fieldTop, fieldLeft + fieldWidth, fieldTop + fieldHeight};
+        const int separatorLeft = layout.widthEdit.right + gap;
+        layout.separator = RECT{separatorLeft, top, separatorLeft + separatorWidth, top + rowHeight};
+        const int heightLeft = layout.separator.right + gap;
+        layout.heightEdit = RECT{heightLeft, fieldTop, heightLeft + fieldWidth, fieldTop + fieldHeight};
+        return layout;
+    }
+
+    void PositionCropReadout(const RECT& output, const RECT& work) {
+        if (!cropReadoutHwnd_ || !overlayVisible_ || IsIconic(hwnd_)) return;
+        cropReadoutLayout_ = BuildCropReadoutLayout(output.right - output.left, work.right - work.left);
+        const auto& layout = cropReadoutLayout_;
+        const LONG x = (std::clamp)((output.left + output.right - layout.size.cx) / 2,
+            work.left, work.right - layout.size.cx);
+        const LONG y = output.bottom + UiScaled(kCropReadoutGap);
+        SetWindowPos(cropReadoutHwnd_, nullptr, x, y, layout.size.cx, layout.size.cy,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        const auto place = [](HWND edit, const RECT& bounds) {
+            SetWindowPos(edit, nullptr, bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        };
+        place(cropWidthHwnd_, layout.widthEdit);
+        place(cropHeightHwnd_, layout.heightEdit);
+        InvalidateRect(cropReadoutHwnd_, nullptr, FALSE);
+    }
+
+    static void SetCropNumericEdit(HWND edit, LONG pixels) {
+        if (!edit) return;
+        wchar_t current[16]{};
+        GetWindowTextW(edit, current, ARRAYSIZE(current));
+        const std::wstring text = std::to_wstring(pixels);
+        if (text != current) SetWindowTextW(edit, text.c_str());
+    }
+
+    static std::optional<LONG> ReadCropNumericEdit(HWND edit) {
+        wchar_t text[16]{};
+        if (!GetWindowTextW(edit, text, ARRAYSIZE(text))) return std::nullopt;
+        wchar_t* end = nullptr;
+        const LONG value = std::wcstol(text, &end, 10);
+        if (end == text || *end) return std::nullopt;
+        return value;
+    }
+
+    void UpdateCropEdits() const {
+        const RECT crop = CropDraftPixels();
+        SetCropNumericEdit(cropWidthHwnd_, crop.right - crop.left);
+        SetCropNumericEdit(cropHeightHwnd_, crop.bottom - crop.top);
+    }
+
+    void CommitCropEdit(HWND edit) {
+        if (!cropEditing_) return;
+        if (const auto value = ReadCropNumericEdit(edit)) SetCropDimension(edit == cropWidthHwnd_, *value);
+        else UpdateCropEdits();
+    }
+
+    void SetCropDimension(bool width, LONG value) {
+        const RECT canvas{0, 0, static_cast<LONG>(sourceWidth_), static_cast<LONG>(sourceHeight_)};
+        const RECT previous = CropDraftPixels();
+        SIZE size{previous.right - previous.left, previous.bottom - previous.top};
+        LONG& dimension = width ? size.cx : size.cy;
+        const LONG requested = (std::clamp)(value, 1L, width ? canvas.right : canvas.bottom);
+        if (requested == dimension) {
+            UpdateCropEdits();
+            return;
+        }
+        if (cropAspectLocked_) {
+            const LONG reference = width ? cropAspectSize_.cx : cropAspectSize_.cy;
+            size = BoundedCropSize(CropAspectBounds(), canvas, requested / static_cast<double>(reference));
+        } else {
+            dimension = requested;
+        }
+        const LONG x = (std::min)(previous.left, canvas.right - size.cx);
+        const LONG y = (std::min)(previous.top, canvas.bottom - size.cy);
+        SetCropDraftPixels(RECT{x, y, x + size.cx, y + size.cy});
+    }
+
+    std::optional<LRESULT> HandleCropInputMouse(HWND edit, UINT message, WPARAM wParam, LPARAM lParam) {
+        const bool angle = edit == cropAngleHwnd_;
+        const bool width = edit == cropWidthHwnd_;
+        switch (message) {
+        case WM_LBUTTONDOWN: {
+            SetFocus(edit);
+            SendMessageW(edit, EM_SETSEL, 0, -1);
+            POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ClientToScreen(edit, &point);
+            const RECT crop = CropDraftPixels();
+            cropInputBase_ = angle ? imageTransformDraft_.degrees :
+                width ? crop.right - crop.left : crop.bottom - crop.top;
+            if (angle) {
+                if (const auto input = ReadDecimalField(edit)) cropInputBase_ = (std::clamp)(*input, -180.0, 180.0);
+            } else if (const auto input = ReadCropNumericEdit(edit)) {
+                cropInputBase_ = (std::clamp)(*input, 1L, static_cast<LONG>(width ? sourceWidth_ : sourceHeight_));
+            }
+            cropInputStartX_ = point.x;
+            cropInputPressed_ = edit;
+            cropInputDragging_ = false;
+            if (GetCapture() != edit) SetCapture(edit);
+            return 0;
+        }
+        case WM_MOUSEMOVE:
+        case WM_LBUTTONUP: {
+            if (cropInputPressed_ != edit) break;
+            POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ClientToScreen(edit, &point);
+            const LONG delta = point.x - cropInputStartX_;
+            if (!cropInputDragging_ && std::abs(delta) >= UiScaled(4)) {
+                cropInputDragging_ = true;
+                SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
+            }
+            if (!cropInputDragging_ && message == WM_MOUSEMOVE) break;
+            if (cropInputDragging_) {
+                if (angle) {
+                    const double degrees = (std::clamp)(cropInputBase_ + MulDiv(delta, 100, uiScalePercent_), -180.0, 180.0);
+                    if (std::exchange(imageTransformDraft_.degrees, degrees) != degrees) {
+                        UpdateCropAngleField();
+                        RefreshCropTransform();
+                    }
+                } else {
+                    SetCropDimension(width, static_cast<LONG>(cropInputBase_) + MulDiv(delta, 100, uiScalePercent_));
+                }
+                if (message == WM_MOUSEMOVE) return 0;
+                SendMessageW(edit, EM_SETSEL, 0, -1);
+                SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
+                CommitNumericDrag(edit);
+            }
+            cropInputPressed_ = nullptr;
+            cropInputDragging_ = false;
+            const LRESULT result = DefSubclassProc(edit, message, wParam, lParam);
+            if (GetCapture() == edit) ReleaseCapture();
+            return result;
+        }
+        case WM_CAPTURECHANGED:
+        case WM_CANCELMODE:
+        case WM_KILLFOCUS:
+        case WM_NCDESTROY:
+            if (cropInputPressed_ == edit) {
+                cropInputPressed_ = nullptr;
+                cropInputDragging_ = false;
+            }
+            break;
+        }
+        return std::nullopt;
+    }
+
+    FeatherPanelLayout FeatherPanelGeometry(HWND panel) const {
+        RECT client{};
+        GetClientRect(panel, &client);
+        const auto x = [&](int n) { return MulDiv(n, client.right, kFeatherPanelWidth); };
+        const auto y = [&](int n) { return MulDiv(n, client.bottom, kFeatherPanelHeight); };
+        const auto rect = [&](int l, int t, int r, int b) {
+            return RECT{x(l), y(t), x(r), y(b)};
+        };
+        FeatherPanelLayout layout{};
+        layout.header = rect(0, 0, 440, 40);
+        layout.close = rect(394, 2, 438, 38);
+        layout.hint = rect(16, 44, 424, 74);
+        layout.canvas = rect(105, 115, 335, 236);
+        layout.guide = rect(15, 414, 425, 453);
+        layout.rotationTitle = rect(16, 283, 424, 308);
+        layout.angleLabel = rect(16, 352, 82, 382);
+        layout.angle = rect(84, 354, 148, 379);
+        layout.angleUnit = rect(153, 352, 181, 382);
+        layout.buttons = {rect(14, 312, 146, 343), rect(154, 312, 286, 343),
+            rect(294, 312, 426, 343), rect(187, 351, 303, 382), rect(311, 351, 426, 382),
+            rect(14, 389, 426, 413)};
+        layout.edits = {rect(23, 163, 75, 189), rect(184, 82, 236, 108),
+            rect(347, 163, 399, 189), rect(184, 243, 236, 269)};
+        layout.units = {rect(79, 163, 103, 189), rect(241, 82, 265, 108),
+            rect(403, 163, 427, 189), rect(241, 243, 265, 269)};
+        constexpr POINT edges[FeatherSideCount][4] = {
+            {{105, 119}, {123, 137}, {123, 214}, {105, 232}},
+            {{109, 115}, {331, 115}, {313, 133}, {127, 133}},
+            {{335, 119}, {335, 232}, {317, 214}, {317, 137}},
+            {{109, 236}, {127, 218}, {313, 218}, {331, 236}},
+        };
+        for (size_t i = 0; i < layout.edges.size(); ++i) {
+            for (size_t j = 0; j < layout.edges[i].size(); ++j) {
+                layout.edges[i][j] = POINT{x(edges[i][j].x), y(edges[i][j].y)};
+            }
+        }
+        return layout;
+    }
+
+    static int FeatherPanelHitTest(const FeatherPanelLayout& layout, POINT point) {
+        if (PtInRect(&layout.close, point)) return ViewClose;
+        for (size_t i = 0; i < layout.buttons.size(); ++i) {
+            if (PtInRect(&layout.buttons[i], point)) return FeatherRotateLeft + static_cast<int>(i);
+        }
+        if (!PtInRect(&layout.canvas, point)) return FeatherNoAction;
+        for (size_t i = 0; i < layout.edges.size(); ++i) {
+            const auto& polygon = layout.edges[i];
+            const HRGN edge = CreatePolygonRgn(polygon.data(), static_cast<int>(polygon.size()), WINDING);
+            const bool hit = edge && PtInRegion(edge, point.x, point.y);
+            if (edge) DeleteObject(edge);
+            if (hit) return static_cast<int>(i);
+        }
+        return FeatherNoAction;
+    }
+
+    static HBRUSH CropNumericBrush(HDC dc, bool muted = false) {
+        constexpr COLORREF field = RGB(25, 43, 65);
+        SetTextColor(dc, muted ? RGB(152, 175, 202) : RGB(240, 246, 255));
+        SetBkColor(dc, field);
+        SetDCBrushColor(dc, field);
+        return static_cast<HBRUSH>(GetStockObject(DC_BRUSH));
+    }
+
+    void PaintFeatherPanel(HWND panel) const {
+        PAINTSTRUCT paint{};
+        const HDC target = BeginPaint(panel, &paint);
+        RECT client{};
+        GetClientRect(panel, &client);
+        const HDC dc = CreateCompatibleDC(target);
+        const HBITMAP buffer = CreateCompatibleBitmap(target, client.right, client.bottom);
+        if (!dc || !buffer) {
+            if (buffer) DeleteObject(buffer);
+            if (dc) DeleteDC(dc);
+            EndPaint(panel, &paint);
+            return;
+        }
+        const HGDIOBJ oldBitmap = SelectObject(dc, buffer);
+        const FeatherPanelLayout layout = FeatherPanelGeometry(panel);
+        const auto px = [&](int n) { return ViewPanelPx(client.right, n); };
+        PanelFill(dc, client, RGB(16, 25, 39));
+        PanelFill(dc, layout.header, RGB(27, 45, 68));
+        const HBRUSH frame = CreateSolidBrush(RGB(44, 72, 104));
+        FrameRect(dc, &client, frame);
+        DeleteObject(frame);
+        RECT title = layout.header;
+        title.left += px(13);
+        title.right = layout.close.left;
+        PanelText(dc, Tr(L"羽化与旋转"), title, RGB(241, 246, 255), px(18), true,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        const auto button = [&](int action, RECT bounds, const std::wstring& label, COLORREF color) {
+            if (featherPanelHover_ == action) color = RGB(36, 83, 130);
+            if (featherPanelPressed_ == action) color = RGB(20, 52, 87);
+            PanelFill(dc, bounds, color);
+            PanelText(dc, label, bounds, RGB(240, 246, 255), px(15), true,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        };
+        button(ViewClose, layout.close, L"×", RGB(27, 45, 68));
+        PaintCropSettings(dc, layout, client.right, button);
+        BitBlt(target, 0, 0, client.right, client.bottom, dc, 0, 0, SRCCOPY);
+        SelectObject(dc, oldBitmap);
+        DeleteObject(buffer);
+        DeleteDC(dc);
+        EndPaint(panel, &paint);
+    }
+
+    template <typename DrawButton>
+    void PaintCropSettings(HDC dc, const FeatherPanelLayout& layout, int width, DrawButton button) const {
+        const auto px = [&](int n) { return ViewPanelPx(width, n); };
+        constexpr UINT line = DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
+        PanelText(dc, Tr(L"边缘羽化"), layout.hint, RGB(223, 238, 252), px(14), true, DT_LEFT | line);
+        RECT hint = layout.hint;
+        hint.left += MulDiv(width, 148, kFeatherPanelWidth);
+        PanelText(dc, Tr(L"点击边缘开关羽化"), hint, RGB(170, 194, 221), px(12), false, DT_RIGHT | line);
+
+        PanelFill(dc, layout.canvas, RGB(13, 21, 34));
+        for (size_t i = 0; i < layout.edges.size(); ++i) {
+            const auto& polygon = layout.edges[i];
+            const bool active = cropFeatherDraft_[i].enabled;
+            const bool hovered = featherPanelHover_ == static_cast<int>(i);
+            const HRGN shape = CreatePolygonRgn(polygon.data(), static_cast<int>(polygon.size()), WINDING);
+            if (shape) {
+                RECT bounds{};
+                GetRgnBox(shape, &bounds);
+                SelectClipRgn(dc, shape);
+                if (active) {
+                    const bool vertical = i == FeatherLeft || i == FeatherRight;
+                    const bool reverse = i == FeatherRight || i == FeatherBottom;
+                    const LONG start = vertical ? bounds.left : bounds.top;
+                    const LONG length = vertical ? bounds.right - bounds.left : bounds.bottom - bounds.top;
+                    constexpr int steps = 12;
+                    for (int step = 0; step < steps; ++step) {
+                        const int intensity = reverse ? steps - 1 - step : step;
+                        const LONG a = start + MulDiv(length, step, steps);
+                        const LONG b = start + MulDiv(length, step + 1, steps);
+                        const RECT band = vertical ? RECT{a, bounds.top, b, bounds.bottom}
+                            : RECT{bounds.left, a, bounds.right, b};
+                        PanelFill(dc, band, RGB(25 + 2 * intensity, 62 + 7 * intensity,
+                            106 + 11 * intensity));
+                    }
+                } else {
+                    PanelFill(dc, bounds, hovered ? RGB(36, 61, 89) : RGB(22, 38, 59));
+                }
+                SelectClipRgn(dc, nullptr);
+                DeleteObject(shape);
+            }
+            const COLORREF outline = hovered ? RGB(149, 206, 255) :
+                active ? RGB(98, 175, 249) : RGB(65, 94, 129);
+            const HPEN pen = CreatePen(PS_SOLID, 1, outline);
+            const HGDIOBJ oldPen = SelectObject(dc, pen);
+            const HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+            Polygon(dc, polygon.data(), static_cast<int>(polygon.size()));
+            SelectObject(dc, oldBrush);
+            SelectObject(dc, oldPen);
+            DeleteObject(pen);
+            PanelText(dc, L"px", layout.units[i], active ? RGB(198, 225, 253) : RGB(152, 175, 202),
+                px(13), false, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        }
+
+        RECT divider = layout.rotationTitle;
+        divider.bottom = divider.top;
+        --divider.top;
+        PanelFill(dc, divider, RGB(44, 72, 104));
+        PanelText(dc, Tr(L"旋转与翻转"), layout.rotationTitle, RGB(223, 238, 252), px(14), true, DT_LEFT | line);
+        PanelText(dc, Tr(L"角度"), layout.angleLabel, RGB(223, 238, 252), px(14), false, DT_LEFT | line);
+        PanelText(dc, L"°", layout.angleUnit, RGB(223, 238, 252), px(14), false, DT_LEFT | line);
+        const wchar_t* labels[]{L"↶ 90°", L"↷ 90°", L"180°", Tr(L"水平翻转"),
+            Tr(L"垂直翻转"), Tr(L"重置旋转与翻转")};
+        for (int action = FeatherRotateLeft; action < FeatherActionCount; ++action) {
+            const bool active = (action == FeatherFlipX && imageTransformDraft_.flipX) ||
+                (action == FeatherFlipY && imageTransformDraft_.flipY);
+            const int index = action - FeatherRotateLeft;
+            button(action, layout.buttons[index], labels[index], active ? RGB(31, 85, 141) : RGB(24, 42, 64));
+        }
+        PanelText(dc, Tr(L"按住输入框左右拖动可调整数值。"),
+            layout.guide, RGB(170, 194, 221), px(13), false, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
+    }
+
+    void CommitFeatherEdit(size_t side) {
+        FeatherEdge& edge = cropFeatherDraft_[side];
+        const HWND edit = featherPanelEdits_[side];
+        if (const auto value = ReadCropNumericEdit(edit)) {
+            edge.pixels = (std::clamp)(*value, 0L, static_cast<LONG>(kMaximumFeatherPixels));
+        }
+        SetCropNumericEdit(edit, edge.pixels);
+        InvalidateRect(featherPanelHwnd_, nullptr, FALSE);
+        InvalidateRect(edit, nullptr, TRUE);
+        if (featherScrubHwnd_) InvalidateRect(featherScrubHwnd_, nullptr, FALSE);
+        resetFrameSchedule_ = true;
+    }
+
+    static const wchar_t* FeatherSideLabel(size_t side) {
+        const wchar_t* labels[] = {Tr(L"左边缘"), Tr(L"上边缘"), Tr(L"右边缘"), Tr(L"下边缘")};
+        return labels[side];
+    }
+
+    void PositionFeatherScrub(HWND edit) const {
+        RECT panel{}, field{};
+        if (!GetWindowRect(featherPanelHwnd_, &panel) || !GetWindowRect(edit, &field)) return;
+        MONITORINFO info{sizeof(MONITORINFO)};
+        if (!GetMonitorInfoW(MonitorFromWindow(featherPanelHwnd_, MONITOR_DEFAULTTONEAREST), &info)) return;
+        const RECT work = info.rcWork;
+        const SIZE size{(std::min)(static_cast<LONG>(UiScaled(kFeatherScrubWidth)), work.right - work.left),
+            (std::min)(static_cast<LONG>(UiScaled(kFeatherScrubHeight)), work.bottom - work.top)};
+        if (size.cx <= 0 || size.cy <= 0) return;
+        const POINT position = SidePanelPosition(panel, work, nullptr, size, UiScaled(8),
+            (field.top + field.bottom - size.cy) / 2);
+        SetWindowPos(featherScrubHwnd_, WindowZOrder(), position.x, position.y, size.cx, size.cy,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+
+    void ShowFeatherScrub(HWND edit, size_t side) {
+        if (!featherScrubHwnd_) {
+            WNDCLASSW windowClass{};
+            windowClass.lpfnWndProc = &LayeredOverlay::FeatherScrubProc;
+            windowClass.hInstance = instance_;
+            windowClass.lpszClassName = kFeatherScrubClass;
+            if (!RegisterClassW(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return;
+            featherScrubHwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                kFeatherScrubClass, L"", WS_POPUP, 0, 0, 0, 0,
+                featherPanelHwnd_, nullptr, instance_, this);
+            if (!featherScrubHwnd_) return;
+        }
+        if (featherScrubSide_ == static_cast<int>(side) && IsWindowVisible(featherScrubHwnd_)) return;
+        featherScrubSide_ = static_cast<int>(side);
+        PositionFeatherScrub(edit);
+        InvalidateRect(featherScrubHwnd_, nullptr, FALSE);
+    }
+
+    void StopFeatherPress() {
+        featherPressedEdit_ = nullptr;
+        featherDragging_ = false;
+        if (std::exchange(featherScrubSide_, FeatherNoAction) != FeatherNoAction && featherScrubHwnd_) {
+            ShowWindow(featherScrubHwnd_, SW_HIDE);
+        }
+    }
+
+    void UpdateFeatherScrub(HWND edit, size_t side, LONG cursorX) {
+        const int steps = (cursorX - featherPressX_) / UiScaled(kFeatherScrubDragStep);
+        FeatherEdge value = featherDragBase_;
+        if (steps != 0) {
+            // Manual entries can be between ticks. Move to the next tick in the drag direction.
+            const int startTick = (value.pixels + (steps < 0 ? kFeatherScrubStep - 1 : 0)) / kFeatherScrubStep;
+            value.pixels = (std::clamp)((startTick + steps) * kFeatherScrubStep, 0, kMaximumFeatherPixels);
+        }
+        if (value == cropFeatherDraft_[side]) return;
+        cropFeatherDraft_[side] = value;
+        SetCropNumericEdit(edit, value.pixels);
+        InvalidateRect(edit, nullptr, TRUE);
+        InvalidateRect(featherPanelHwnd_, nullptr, FALSE);
+        if (featherScrubHwnd_) InvalidateRect(featherScrubHwnd_, nullptr, FALSE);
+        resetFrameSchedule_ = true;
+    }
+
+    std::optional<LRESULT> HandleFeatherInputMouse(HWND edit, UINT message, WPARAM wParam, LPARAM lParam) {
+        const size_t side = static_cast<UINT>(GetDlgCtrlID(edit)) - kFirstFeatherEdit;
+        if (side >= featherPanelEdits_.size()) return std::nullopt;
+        switch (message) {
+        case WM_LBUTTONDOWN: {
+            StopFeatherPress();
+            SetFocus(edit);
+            SendMessageW(edit, EM_SETSEL, 0, -1);
+            POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ClientToScreen(edit, &point);
+            featherPressX_ = point.x;
+            featherPressedEdit_ = edit;
+            if (GetCapture() != edit) SetCapture(edit);
+            return 0;
+        }
+        case WM_MOUSEMOVE:
+        case WM_LBUTTONUP: {
+            if (featherPressedEdit_ != edit) break;
+            const POINT local{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            POINT screen = local;
+            ClientToScreen(edit, &screen);
+            // A full step of horizontal movement distinguishes a drag from a click.
+            if (!featherDragging_ && std::abs(screen.x - featherPressX_) >= UiScaled(kFeatherScrubDragStep)) {
+                CommitFeatherEdit(side);
+                featherDragBase_ = cropFeatherDraft_[side];
+                featherDragging_ = true;
+                SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
+            }
+            const bool dragging = featherDragging_;
+            if (dragging) {
+                UpdateFeatherScrub(edit, side, screen.x);
+                if (message == WM_MOUSEMOVE) {
+                    ShowFeatherScrub(edit, side);
+                    return 0;
+                }
+            }
+            if (message == WM_LBUTTONUP) {
+                StopFeatherPress();
+                const LRESULT result = DefSubclassProc(edit, message, wParam, lParam);
+                if (GetCapture() == edit) ReleaseCapture();
+                if (dragging) {
+                    SendMessageW(edit, EM_SETSEL, 0, -1);
+                    CommitNumericDrag(edit);
+                }
+                RECT client{};
+                GetClientRect(edit, &client);
+                if (PtInRect(&client, local)) SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
+                return result;
+            }
+            break;
+        }
+        case WM_CAPTURECHANGED:
+        case WM_CANCELMODE:
+        case WM_KILLFOCUS:
+            if (featherPressedEdit_ == edit) StopFeatherPress();
+            break;
+        }
+        return std::nullopt;
+    }
+
+    void PaintFeatherScrub(HWND window) const {
+        PAINTSTRUCT paint{};
+        const HDC target = BeginPaint(window, &paint);
+        RECT client{};
+        GetClientRect(window, &client);
+        const HDC dc = CreateCompatibleDC(target);
+        const HBITMAP buffer = CreateCompatibleBitmap(target, client.right, client.bottom);
+        if (!dc || !buffer) {
+            if (buffer) DeleteObject(buffer);
+            if (dc) DeleteDC(dc);
+            EndPaint(window, &paint);
+            return;
+        }
+        const HGDIOBJ oldBitmap = SelectObject(dc, buffer);
+        PanelFill(dc, client, RGB(16, 25, 39));
+        const HBRUSH frame = CreateSolidBrush(RGB(65, 119, 176));
+        FrameRect(dc, &client, frame);
+        DeleteObject(frame);
+        if (featherScrubSide_ != FeatherNoAction) {
+            const size_t side = featherScrubSide_;
+            const int value = cropFeatherDraft_[side].pixels;
+            const auto rect = [&](int l, int t, int r, int b) {
+                return RECT{MulDiv(l, client.right, kFeatherScrubWidth),
+                    MulDiv(t, client.bottom, kFeatherScrubHeight),
+                    MulDiv(r, client.right, kFeatherScrubWidth),
+                    MulDiv(b, client.bottom, kFeatherScrubHeight)};
+            };
+            constexpr UINT line = DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
+            constexpr COLORREF valueColor = RGB(120, 193, 255);
+            PanelText(dc, FeatherSideLabel(side), rect(12, 5, 142, 29),
+                RGB(170, 194, 221), UiScaled(13), false, DT_LEFT | line);
+            PanelText(dc, std::to_wstring(value) + L" px", rect(142, 5, 214, 29),
+                valueColor, UiScaled(16), true, DT_RIGHT | line);
+            const RECT track = rect(14, 35, 212, 39);
+            PanelFill(dc, track, RGB(37, 58, 83));
+            const LONG sliderX = track.left + MulDiv((std::min)(value, kMaximumFeatherPixels),
+                track.right - track.left, kMaximumFeatherPixels);
+            PanelFill(dc, RECT{track.left, track.top, sliderX, track.bottom}, RGB(55, 133, 217));
+            for (int mark = 0; mark <= 10; ++mark) {
+                const int x = 14 + MulDiv(198, mark, 10);
+                PanelFill(dc, rect(x, 44, x + 1, mark % 5 == 0 ? 49 : 47), RGB(91, 121, 156));
+            }
+            const int thumb = UiScaled(3);
+            PanelFill(dc, RECT{sliderX - thumb, track.top - UiScaled(3),
+                sliderX + thumb, track.bottom + UiScaled(3)}, valueColor);
+            PanelText(dc, L"0 px", rect(12, 49, 70, 67),
+                RGB(170, 194, 221), UiScaled(12), false, DT_LEFT | line);
+            PanelText(dc, std::to_wstring(kMaximumFeatherPixels) + L" px", rect(150, 49, 214, 67),
+                RGB(170, 194, 221), UiScaled(12), false, DT_RIGHT | line);
+        }
+        BitBlt(target, 0, 0, client.right, client.bottom, dc, 0, 0, SRCCOPY);
+        SelectObject(dc, oldBitmap);
+        DeleteObject(buffer);
+        DeleteDC(dc);
+        EndPaint(window, &paint);
+    }
+
+    static LRESULT CALLBACK FeatherScrubProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+        auto* overlay = reinterpret_cast<LayeredOverlay*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+        switch (message) {
+        case WM_NCCREATE: {
+            const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+            break;
+        }
+        case WM_PAINT:
+            if (overlay) {
+                overlay->PaintFeatherScrub(window);
+                return 0;
+            }
+            break;
+        case WM_ERASEBKGND: return 1;
+        case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+        case WM_NCHITTEST: return HTTRANSPARENT;
+        case WM_NCDESTROY:
+            if (overlay && overlay->featherScrubHwnd_ == window) {
+                overlay->featherScrubHwnd_ = nullptr;
+                overlay->featherScrubSide_ = FeatherNoAction;
+            }
+            break;
+        }
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+
+    void UpdateCropAngleField() const {
+        wchar_t text[24]{};
+        swprintf_s(text, L"%.1f", imageTransformDraft_.degrees);
+        SetWindowTextW(cropAngleHwnd_, text);
+    }
+
+    void ActivateCropTransform(int action) {
+        switch (action) {
+        case FeatherRotateLeft: case FeatherRotateRight: case FeatherRotateHalf: {
+            const double delta = action == FeatherRotateLeft ? -90 : action == FeatherRotateRight ? 90 : 180;
+            imageTransformDraft_.degrees = std::remainder(imageTransformDraft_.degrees + delta, 360);
+            break;
+        }
+        case FeatherFlipX: imageTransformDraft_.flipX = !imageTransformDraft_.flipX; break;
+        case FeatherFlipY: imageTransformDraft_.flipY = !imageTransformDraft_.flipY; break;
+        case FeatherResetRotation: imageTransformDraft_ = {}; break;
+        }
+        UpdateCropAngleField();
+        RefreshCropTransform();
+    }
+
+    void CloseFeatherPanel() {
+        const HWND panel = featherPanelHwnd_;
+        if (!panel) return;
+        const HWND focused = GetFocus();
+        const auto edit = std::find(featherPanelEdits_.begin(), featherPanelEdits_.end(), focused);
+        if (focused && edit != featherPanelEdits_.end()) CommitFeatherEdit(edit - featherPanelEdits_.begin());
+        StopFeatherPress();
+        if (const HWND scrub = std::exchange(featherScrubHwnd_, nullptr)) DestroyWindow(scrub);
+        featherScrubSide_ = FeatherNoAction;
+        featherPanelHwnd_ = nullptr;
+        cropAngleHwnd_ = nullptr;
+        featherPanelEdits_.fill(nullptr);
+        DestroyWindow(panel);
+        if (const HFONT font = std::exchange(featherEditFont_, nullptr)) DeleteObject(font);
+        if (!cropEditing_) {
+            if (cropFeather_ != cropFeatherDraft_) {
+                cropFeather_ = cropFeatherDraft_;
+                SaveFeatherEdges();
+            }
+            WriteConfigInt(L"image", L"rotation_tenths", static_cast<int>(std::lround(imageTransform_.degrees * 10)));
+            WriteConfigInt(L"image", L"flip_horizontal", imageTransform_.flipX);
+            WriteConfigInt(L"image", L"flip_vertical", imageTransform_.flipY);
+            SaveWindowPlacement();
+        }
+        InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+        resetFrameSchedule_ = true;
+    }
+
+    static int ViewPanelPx(int width, int size) {
+        return (std::max)(1, MulDiv(width, size, kFeatherPanelWidth));
+    }
+
+    SIZE ViewPanelSize(const RECT& work) const {
+        const int width = (std::min)({UiScaled(kFeatherPanelWidth), int(work.right - work.left),
+            MulDiv(work.bottom - work.top, kFeatherPanelWidth, kFeatherPanelHeight)});
+        return SIZE{(std::max)(1, width), ViewPanelPx(width, kFeatherPanelHeight)};
+    }
+
+    void UpdateFeatherFieldFont(int width) {
+        const HFONT font = CreateFontW(-ViewPanelPx(width, 15), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+            DEFAULT_PITCH | FF_DONTCARE, UiFontFace());
+        if (!font) return;
+        for (const HWND edit : featherPanelEdits_) {
+            if (edit) SendMessageW(edit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+        }
+        if (cropAngleHwnd_) SendMessageW(cropAngleHwnd_, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+        if (const HFONT old = std::exchange(featherEditFont_, font)) DeleteObject(old);
+    }
+
+    void ResizeViewPanel() {
+        if (!featherPanelHwnd_) return;
+        RECT toolbar{}, panel{};
+        const HWND anchor = featherPanelDetached_ ? featherPanelHwnd_ : toolbarHwnd_;
+        MONITORINFO info{sizeof(MONITORINFO)};
+        if (!GetWindowRect(toolbarHwnd_, &toolbar) || !GetWindowRect(featherPanelHwnd_, &panel) ||
+            !GetMonitorInfoW(MonitorFromWindow(anchor, MONITOR_DEFAULTTONEAREST), &info)) return;
+        const RECT work = info.rcWork;
+        const SIZE size = ViewPanelSize(work);
+        const POINT position = featherPanelDetached_
+            ? POINT{(std::clamp)(panel.left, work.left, work.right - size.cx),
+                (std::clamp)(panel.top, work.top, work.bottom - size.cy)}
+            : SidePanelPosition(toolbar, work, nullptr, size, UiScaled(8), toolbar.top);
+        SetWindowPos(featherPanelHwnd_, nullptr, position.x, position.y, size.cx, size.cy, SWP_NOZORDER | SWP_NOACTIVATE);
+        if (size.cx != panel.right - panel.left) UpdateFeatherFieldFont(size.cx);
+        const auto layout = FeatherPanelGeometry(featherPanelHwnd_);
+        const auto place = [](HWND field, const RECT& bounds) {
+            if (field) MoveWindow(field, bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top, TRUE);
+        };
+        for (size_t i = 0; i < featherPanelEdits_.size(); ++i) place(featherPanelEdits_[i], layout.edits[i]);
+        place(cropAngleHwnd_, layout.angle);
+        InvalidateRect(featherPanelHwnd_, nullptr, FALSE);
+    }
+
+    void ApplyUiScale(int selected) {
+        uiScalePercent_ = selected;
+        WriteConfigInt(L"ui", L"scale_percent", uiScalePercent_);
+        if (cropEditing_) {
+            if (const HFONT font = CreateCropEditFont(kCropReadoutFontHeight)) {
+                SendMessageW(cropWidthHwnd_, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+                SendMessageW(cropHeightHwnd_, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+                if (const HFONT previous = std::exchange(cropReadoutFont_, font)) DeleteObject(previous);
+            }
+            RefreshCropTransform();
+        }
+        personalPanelManuallyPositioned_ = false;
+        statusFrameDirty_ = true;
+        PositionToolbar();
+        PositionBorderPanel();
+        if (borderPanelHwnd_) RefreshPersonalPanel(borderPanelHwnd_);
+        ResizeViewPanel();
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+
+    std::optional<POINT> DockedPanelPosition(HWND window, bool detached, const RECT& toolbar, const RECT& work) const {
+        if (!window || detached) return std::nullopt;
+        RECT panel{};
+        if (!GetWindowRect(window, &panel)) return std::nullopt;
+        const SIZE size{panel.right - panel.left, panel.bottom - panel.top};
+        const POINT position = SidePanelPosition(toolbar, work, nullptr, size, UiScaled(8), toolbar.top);
+        if (position.x == panel.left && position.y == panel.top) return std::nullopt;
+        return position;
+    }
+
+    void ShowFeatherPanel() {
+        if (featherPanelHwnd_) {
+            CloseFeatherPanel();
+            return;
+        }
+        WNDCLASSW windowClass{};
+        windowClass.lpfnWndProc = &LayeredOverlay::FeatherPanelProc;
+        windowClass.hInstance = instance_;
+        windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        windowClass.lpszClassName = kFeatherPanelClass;
+        if (!RegisterClassW(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return;
+        RECT toolbar{};
+        if (!GetWindowRect(toolbarHwnd_, &toolbar)) return;
+        MONITORINFO info{sizeof(MONITORINFO)};
+        if (!GetMonitorInfoW(MonitorFromWindow(toolbarHwnd_, MONITOR_DEFAULTTONEAREST), &info)) return;
+        const RECT work = info.rcWork;
+        const SIZE size = ViewPanelSize(work);
+        const POINT position = SidePanelPosition(toolbar, work, nullptr, size, UiScaled(8), toolbar.top);
+        featherPanelHover_ = featherPanelPressed_ = FeatherNoAction;
+        featherPanelDetached_ = false;
+        featherPanelHwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | (desktopMode_ ? 0 : WS_EX_TOPMOST),
+            kFeatherPanelClass, Tr(L"羽化与旋转"), WS_POPUP | WS_CLIPCHILDREN,
+            position.x, position.y, size.cx, size.cy, toolbarHwnd_, nullptr, instance_, this);
+        if (!featherPanelHwnd_) return;
+        if (!cropEditing_) {
+            cropFeatherDraft_ = cropFeather_;
+            imageTransformDraft_ = imageTransform_;
+        }
+        UpdateFeatherFieldFont(size.cx);
+        if (!CreateFeatherFields()) {
+            CloseFeatherPanel();
+            return;
+        }
+        ShowWindow(featherPanelHwnd_, SW_SHOW);
+        InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+    }
+
+    bool CreateFeatherFields() {
+        const auto layout = FeatherPanelGeometry(featherPanelHwnd_);
+        for (size_t i = 0; i < featherPanelEdits_.size(); ++i) {
+            const HWND edit = CreateCropNumericEdit(featherPanelHwnd_, kFirstFeatherEdit + static_cast<UINT>(i),
+                FeatherSideLabel(i), featherEditFont_);
+            if (!edit) return false;
+            featherPanelEdits_[i] = edit;
+            SetCropNumericEdit(edit, cropFeatherDraft_[i].pixels);
+            const RECT bounds = layout.edits[i];
+            SetWindowPos(edit, nullptr, bounds.left, bounds.top, bounds.right - bounds.left,
+                bounds.bottom - bounds.top, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
+        const RECT angle = layout.angle;
+        cropAngleHwnd_ = CreateImageField(featherPanelHwnd_, kCropAngleEdit, angle, featherEditFont_, Tr(L"角度"));
+        if (!cropAngleHwnd_) return false;
+        UpdateCropAngleField();
+        return true;
+    }
+
+    static LRESULT CALLBACK FeatherPanelProc(HWND panel, UINT message, WPARAM wParam, LPARAM lParam) {
+        auto* overlay = reinterpret_cast<LayeredOverlay*>(GetWindowLongPtrW(panel, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            overlay = static_cast<LayeredOverlay*>(create->lpCreateParams);
+            SetWindowLongPtrW(panel, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(overlay));
+        }
+        if (!overlay) return DefWindowProcW(panel, message, wParam, lParam);
+        if (message == WM_PAINT) {
+            overlay->PaintFeatherPanel(panel);
+            return 0;
+        }
+        switch (message) {
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_COMMAND:
+        case WM_CTLCOLOREDIT:
+            if (overlay->featherPanelHwnd_ == panel) {
+                const UINT id = message == WM_COMMAND ? LOWORD(wParam) :
+                    GetDlgCtrlID(reinterpret_cast<HWND>(lParam));
+                if (id == kCropAngleEdit) {
+                    if (message == WM_CTLCOLOREDIT) {
+                        return reinterpret_cast<LRESULT>(CropNumericBrush(reinterpret_cast<HDC>(wParam)));
+                    }
+                    if (overlay->cropAngleHwnd_ && HIWORD(wParam) == EN_CHANGE) {
+                        if (const auto value = ReadDecimalField(overlay->cropAngleHwnd_)) {
+                            const double angle = std::round((std::clamp)(*value, -180.0, 180.0) * 10) / 10;
+                            if (std::exchange(overlay->imageTransformDraft_.degrees, angle) != angle) {
+                                overlay->RefreshCropTransform();
+                            }
+                        }
+                    }
+                    if (overlay->cropAngleHwnd_ && HIWORD(wParam) == EN_KILLFOCUS) overlay->UpdateCropAngleField();
+                    return 0;
+                }
+                if (id >= kFirstFeatherEdit && id < kFirstFeatherEdit + FeatherSideCount) {
+                    const size_t side = id - kFirstFeatherEdit;
+                    if (message == WM_CTLCOLOREDIT) {
+                        return reinterpret_cast<LRESULT>(CropNumericBrush(reinterpret_cast<HDC>(wParam),
+                            !overlay->cropFeatherDraft_[side].enabled));
+                    }
+                    if (HIWORD(wParam) == EN_KILLFOCUS) overlay->CommitFeatherEdit(side);
+                    return 0;
+                }
+            }
+            break;
+        case WM_NCHITTEST: {
+            POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ScreenToClient(panel, &point);
+            const auto layout = overlay->FeatherPanelGeometry(panel);
+            if (PtInRect(&layout.header, point) && !PtInRect(&layout.close, point)) return HTCAPTION;
+            return HTCLIENT;
+        }
+        case WM_SETCURSOR:
+            if (LOWORD(lParam) == HTCLIENT) {
+                POINT point{};
+                GetCursorPos(&point);
+                ScreenToClient(panel, &point);
+                const bool action = FeatherPanelHitTest(overlay->FeatherPanelGeometry(panel), point) != FeatherNoAction;
+                SetCursor(LoadCursorW(nullptr, action ? IDC_HAND : IDC_ARROW));
+                return TRUE;
+            }
+            break;
+        case WM_MOUSEMOVE: {
+            const POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            const int hover = FeatherPanelHitTest(overlay->FeatherPanelGeometry(panel), point);
+            if (std::exchange(overlay->featherPanelHover_, hover) != hover) InvalidateRect(panel, nullptr, FALSE);
+            TRACKMOUSEEVENT track{sizeof(TRACKMOUSEEVENT), TME_LEAVE, panel, 0};
+            TrackMouseEvent(&track);
+            return 0;
+        }
+        case WM_MOUSELEAVE:
+            overlay->featherPanelHover_ = FeatherNoAction;
+            InvalidateRect(panel, nullptr, FALSE);
+            return 0;
+        case WM_WINDOWPOSCHANGED:
+            if (overlay->featherScrubSide_ != FeatherNoAction && IsWindowVisible(overlay->featherScrubHwnd_)) {
+                overlay->PositionFeatherScrub(overlay->featherPanelEdits_[overlay->featherScrubSide_]);
+            }
+            break;
+        case WM_MOVING: {
+            const auto* proposed = reinterpret_cast<const RECT*>(lParam);
+            RECT current{};
+            if (proposed && GetWindowRect(panel, &current) &&
+                (proposed->left != current.left || proposed->top != current.top)) {
+                overlay->featherPanelDetached_ = true;
+            }
+            return TRUE;
+        }
+        case WM_LBUTTONDOWN: {
+            SetFocus(panel);
+            const POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            overlay->featherPanelPressed_ = FeatherPanelHitTest(overlay->FeatherPanelGeometry(panel), point);
+            if (overlay->featherPanelPressed_ != FeatherNoAction) SetCapture(panel);
+            InvalidateRect(panel, nullptr, FALSE);
+            return 0;
+        }
+        case WM_CAPTURECHANGED:
+            overlay->featherPanelPressed_ = FeatherNoAction;
+            InvalidateRect(panel, nullptr, FALSE);
+            return 0;
+        case WM_LBUTTONUP: {
+            const POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            const int hit = FeatherPanelHitTest(overlay->FeatherPanelGeometry(panel), point);
+            const int pressed = std::exchange(overlay->featherPanelPressed_, FeatherNoAction);
+            if (GetCapture() == panel) ReleaseCapture();
+            if (hit != pressed || hit == FeatherNoAction) return 0;
+            if (hit == ViewClose) {
+                overlay->CloseFeatherPanel();
+            } else if (hit >= FeatherRotateLeft) {
+                overlay->ActivateCropTransform(hit);
+            } else {
+                FeatherEdge& edge = overlay->cropFeatherDraft_[hit];
+                edge.enabled = !edge.enabled;
+                const HWND edit = overlay->featherPanelEdits_[hit];
+                SetCropNumericEdit(edit, edge.pixels);
+                InvalidateRect(edit, nullptr, TRUE);
+                InvalidateRect(panel, nullptr, FALSE);
+                overlay->resetFrameSchedule_ = true;
+            }
+            return 0;
+        }
+        case WM_KEYDOWN:
+            if (wParam == VK_ESCAPE) {
+                overlay->CloseFeatherPanel();
+                return 0;
+            }
+            break;
+        case WM_CLOSE:
+            overlay->CloseFeatherPanel();
+            return 0;
+        case WM_NCDESTROY:
+            if (overlay->featherPanelHwnd_ == panel) {
+                overlay->StopFeatherPress();
+                overlay->featherPanelHwnd_ = nullptr;
+                overlay->cropAngleHwnd_ = nullptr;
+                overlay->featherPanelEdits_.fill(nullptr);
+            }
+            break;
+        }
+        return DefWindowProcW(panel, message, wParam, lParam);
+    }
+
+    enum CropDrag : unsigned {
+        CropLeft = 1, CropTop = 2, CropRight = 4, CropBottom = 8, CropMove = 16, CropDraw = 32,
+    };
+
+    unsigned CropDragAt(POINT point) const {
+        if (EqualRect(&cropDraft_, &kFullCrop)) return CropDraw;
+        RECT client{};
+        GetClientRect(hwnd_, &client);
+        const auto mapped = CropSourcePoint(point, client);
+        point = {std::lround(mapped[0] * client.right), std::lround(mapped[1] * client.bottom)};
+        const RECT frame = CropPixels(cropDraft_, client.right, client.bottom);
+        const int grip = UiScaled(8);
+        RECT hit = frame;
+        InflateRect(&hit, grip, grip);
+        if (!PtInRect(&hit, point)) return CropDraw;
+        unsigned edges = 0;
+        if (abs(point.x - frame.left) <= grip || abs(point.x - frame.right) <= grip) {
+            edges |= abs(point.x - frame.left) <= abs(point.x - frame.right) ? CropLeft : CropRight;
+        }
+        if (abs(point.y - frame.top) <= grip || abs(point.y - frame.bottom) <= grip) {
+            edges |= abs(point.y - frame.top) <= abs(point.y - frame.bottom) ? CropTop : CropBottom;
+        }
+        if (edges) return edges;
+        return CropMove;
+    }
+
+    std::array<double, 2> CropSourcePoint(POINT point, const RECT& client) const {
+        const auto map = ImageMappingFor(DisplayImageRegion(), imageTransformDraft_);
+        const double u = double(point.x) / (std::max)(1L, client.right) - 0.5;
+        const double v = double(point.y) / (std::max)(1L, client.bottom) - 0.5;
+        return {map.xx * u + map.xy * v + 0.5, map.yx * u + map.yy * v + 0.5};
+    }
+
+    LPCWSTR CropResizeCursor(unsigned action) const {
+        if (action == CropMove) return IDC_SIZEALL;
+        const int x = action & CropLeft ? -1 : action & CropRight ? 1 : 0;
+        const int y = action & CropTop ? -1 : action & CropBottom ? 1 : 0;
+        if (!x && !y) return IDC_CROSS;
+        const double radians = imageTransformDraft_.degrees * 3.14159265358979323846 / 180.0;
+        const int dx = imageTransformDraft_.flipX ? -x : x;
+        const int dy = imageTransformDraft_.flipY ? -y : y;
+        const double angle = std::atan2(dy, dx) + radians;
+        const auto axis = (std::lround(angle * 4 / 3.14159265358979323846) + 8) % 4;
+        const LPCWSTR cursors[]{IDC_SIZEWE, IDC_SIZENWSE, IDC_SIZENS, IDC_SIZENESW};
+        return cursors[axis];
+    }
+
+    POINT NormalizedCropPoint(LPARAM lParam) const {
+        RECT client{};
+        GetClientRect(hwnd_, &client);
+        const auto point = CropSourcePoint(POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)}, client);
+        return POINT{std::lround((std::clamp)(point[0], 0.0, 1.0) * kCropExtent),
+            std::lround((std::clamp)(point[1], 0.0, 1.0) * kCropExtent)};
+    }
+
+    void ResizeLockedCrop(const RECT& requested, unsigned edges, POINT anchor) {
+        const LONG sourceWidth = sourceWidth_;
+        const LONG sourceHeight = sourceHeight_;
+        const bool horizontal = (edges & (CropLeft | CropRight)) != 0;
+        const bool vertical = (edges & (CropTop | CropBottom)) != 0;
+        const LONG availableWidth = !horizontal ? sourceWidth :
+            (edges & CropLeft) ? anchor.x : sourceWidth - anchor.x;
+        const LONG availableHeight = !vertical ? sourceHeight :
+            (edges & CropTop) ? anchor.y : sourceHeight - anchor.y;
+        if (availableWidth <= 0 || availableHeight <= 0) return;
+        const LONG w = requested.right - requested.left;
+        const LONG h = requested.bottom - requested.top;
+        const double aspectWidth = cropAspectSize_.cx;
+        const double aspectHeight = cropAspectSize_.cy;
+        // Project a corner drag onto the locked aspect; edge drags use that edge's axis.
+        const double scale = horizontal && vertical
+            ? (w * aspectWidth + h * aspectHeight) /
+                (aspectWidth * aspectWidth + aspectHeight * aspectHeight)
+            : horizontal ? w / aspectWidth : h / aspectHeight;
+        const SIZE size = BoundedCropSize(CropAspectBounds(),
+            RECT{0, 0, availableWidth, availableHeight}, scale);
+        const LONG x = (std::clamp)(horizontal ?
+            ((edges & CropLeft) ? anchor.x - size.cx : anchor.x) : anchor.x - size.cx / 2,
+            0L, sourceWidth - size.cx);
+        const LONG y = (std::clamp)(vertical ?
+            ((edges & CropTop) ? anchor.y - size.cy : anchor.y) : anchor.y - size.cy / 2,
+            0L, sourceHeight - size.cy);
+        SetCropDraftPixels(RECT{x, y, x + size.cx, y + size.cy});
+    }
+
+    void UpdateCropDrag(LPARAM lParam) {
+        if (!cropDrag_) return;
+        const POINT cursor = NormalizedCropPoint(lParam);
+        const LONG dx = cursor.x - cropDragStart_.x;
+        const LONG dy = cursor.y - cropDragStart_.y;
+        RECT draft = cropDragStartRect_;
+        if (cropDrag_ == CropDraw) {
+            if (dx && dy) {
+                draft = RECT{(std::min)(cursor.x, cropDragStart_.x), (std::min)(cursor.y, cropDragStart_.y),
+                    (std::max)(cursor.x, cropDragStart_.x), (std::max)(cursor.y, cropDragStart_.y)};
+            }
+        } else if (cropDrag_ == CropMove) {
+            OffsetRect(&draft, (std::clamp)(dx, -draft.left, kCropExtent - draft.right),
+                (std::clamp)(dy, -draft.top, kCropExtent - draft.bottom));
+        } else {
+            if (cropDrag_ & CropLeft) draft.left = (std::clamp)(draft.left + dx, 0L, draft.right - 1);
+            if (cropDrag_ & CropTop) draft.top = (std::clamp)(draft.top + dy, 0L, draft.bottom - 1);
+            if (cropDrag_ & CropRight) draft.right = (std::clamp)(draft.right + dx, draft.left + 1, kCropExtent);
+            if (cropDrag_ & CropBottom) draft.bottom = (std::clamp)(draft.bottom + dy, draft.top + 1, kCropExtent);
+        }
+        if (cropAspectLocked_ && cropDrag_ != CropMove &&
+            !EqualRect(&draft, &cropDragStartRect_)) {
+            const RECT pixels = CropPixels(draft, sourceWidth_, sourceHeight_);
+            if (cropDrag_ == CropDraw) {
+                const unsigned edges = (dx < 0 ? CropLeft : CropRight) |
+                    (dy < 0 ? CropTop : CropBottom);
+                ResizeLockedCrop(pixels, edges, POINT{
+                    MulDiv(cropDragStart_.x, sourceWidth_, kCropExtent),
+                    MulDiv(cropDragStart_.y, sourceHeight_, kCropExtent)});
+            } else {
+                const RECT original = CropPixels(cropDragStartRect_, sourceWidth_, sourceHeight_);
+                const LONG x = (cropDrag_ & CropLeft) ? original.right :
+                    (cropDrag_ & CropRight) ? original.left : (original.left + original.right) / 2;
+                const LONG y = (cropDrag_ & CropTop) ? original.bottom :
+                    (cropDrag_ & CropBottom) ? original.top : (original.top + original.bottom) / 2;
+                ResizeLockedCrop(pixels, cropDrag_, POINT{x, y});
+            }
+            return;
+        }
+        cropDraft_ = draft;
+        UpdateCropEdits();
+        resetFrameSchedule_ = true;
+    }
+
     void ToggleAspectLock() {
         aspectLocked_ = !aspectLocked_;
         if (aspectLocked_ && sourceWidth_ && sourceHeight_) {
             RECT rect{};
             GetWindowRect(hwnd_, &rect);
-            const int width = rect.right - rect.left;
-            const int height = (std::max)(1, static_cast<int>(
-                (static_cast<std::uint64_t>(width) * sourceHeight_ + sourceWidth_ / 2) /
-                sourceWidth_));
-            SetWindowPos(
-                hwnd_, WindowZOrder(), rect.left, rect.top, width, height,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            if (CropActive() || imageTransform_.active()) {
+                FitCropViewport(rect, DisplayImageBounds());
+            } else {
+                const int width = rect.right - rect.left;
+                const int height = (std::max)(1, MulDiv(width, sourceHeight_, sourceWidth_));
+                SetWindowPos(hwnd_, WindowZOrder(), rect.left, rect.top, width, height,
+                    SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            }
             SaveWindowPlacement();
         }
         SaveUiSettings();
@@ -9452,6 +11532,10 @@ private:
             interactiveRenderer_.join();
         }
         interactiveFramePending_.store(false);
+        if (ScreenImageBlendActive()) {
+            const std::lock_guard lock(imageBackdropMutex_);
+            nextImageBackdrop_ = {};
+        }
         ++requested_;
         RenderFrame();
         PrintStats();
@@ -9532,89 +11616,6 @@ private:
         return SUCCEEDED(result) ? selected : 0;
     }
 
-    bool RestartVtsOnGpuForBenchmark(int adapterIndex) {
-        const int preference = WindowsGpuPreference(adapterIndex);
-        const auto directory = FindVtsDirectory();
-        if (preference == 0 || !directory) {
-            MessageBoxW(
-                toolbarHwnd_,
-                Tr(L"无法自动切换到下一张 GPU，采集已停止并保留现有 CSV。"),
-                Tr(L"分辨率性能采集"), MB_OK | MB_ICONWARNING);
-            return false;
-        }
-
-        const std::filesystem::path vtsExecutable =
-            *directory / kVtsExecutableName;
-        const std::filesystem::path startBatch =
-            *directory / L"start_without_steam.bat";
-        RegistryValueBackup preferenceBackup;
-        if (!SetVtsGpuPreference(
-                vtsExecutable, preference, preferenceBackup)) {
-            MessageBoxW(
-                toolbarHwnd_,
-                Tr(L"写入下一张 GPU 的 Windows 显卡偏好失败，采集已停止并保留现有 CSV。"),
-                Tr(L"分辨率性能采集"), MB_OK | MB_ICONWARNING);
-            return false;
-        }
-
-        if (const auto running = FindRunningVts()) {
-            HANDLE process = OpenProcess(
-                SYNCHRONIZE, FALSE, running->processId);
-            const HWND window = FindMainWindowForProcess(running->processId);
-            if (!window || !PostMessageW(window, WM_CLOSE, 0, 0)) {
-                if (process) CloseHandle(process);
-                RestoreVtsGpuPreference(vtsExecutable, preferenceBackup);
-                MessageBoxW(
-                    toolbarHwnd_,
-                    Tr(L"无法正常关闭 VTube Studio，采集已停止并保留现有 CSV。"),
-                    Tr(L"分辨率性能采集"), MB_OK | MB_ICONWARNING);
-                return false;
-            }
-            const DWORD wait = process
-                ? WaitForSingleObject(process, 15000) : WAIT_FAILED;
-            if (process) CloseHandle(process);
-            if (wait != WAIT_OBJECT_0) {
-                RestoreVtsGpuPreference(vtsExecutable, preferenceBackup);
-                MessageBoxW(
-                    toolbarHwnd_,
-                    Tr(L"VTube Studio 未能在 15 秒内关闭，采集已停止并保留现有 CSV。"),
-                    Tr(L"分辨率性能采集"), MB_OK | MB_ICONWARNING);
-                return false;
-            }
-        }
-
-        const bool useBatch = std::filesystem::is_regular_file(startBatch);
-        const std::filesystem::path launchTarget = useBatch
-            ? startBatch : vtsExecutable;
-        const auto launchResult = reinterpret_cast<INT_PTR>(ShellExecuteW(
-            nullptr, L"open", launchTarget.c_str(), nullptr,
-            directory->c_str(), useBatch ? SW_HIDE : SW_SHOWNORMAL));
-        if (launchResult <= 32) {
-            RestoreVtsGpuPreference(vtsExecutable, preferenceBackup);
-            MessageBoxW(
-                toolbarHwnd_,
-                Tr(L"无法启动 VTube Studio，采集已停止并保留现有 CSV。"),
-                Tr(L"分辨率性能采集"), MB_OK | MB_ICONERROR);
-            return false;
-        }
-
-        selectedGpuIndex_ = adapterIndex;
-        gpuSelectionFallback_ = true;
-        SaveUiSettings();
-        WriteConfigInt(L"ui", L"start_unlocked_once", 1);
-        SaveWindowPlacement();
-        if (!StartOverlayRestartHelper()) {
-            MessageBoxW(
-                toolbarHwnd_,
-                Tr(L"覆盖层自动重启失败，采集已停止并保留现有 CSV。"),
-                Tr(L"分辨率性能采集"), MB_OK | MB_ICONWARNING);
-            return false;
-        }
-        Log("[benchmark] switching to GPU=" +
-            WideToUtf8(GpuName(adapterIndex).c_str()));
-        return true;
-    }
-
     bool RestartVtsOnGpu(int adapterIndex) {
         const int preference = WindowsGpuPreference(adapterIndex);
         if (preference == 0) {
@@ -9645,7 +11646,7 @@ private:
         std::wstring confirmation =
             std::wstring(Tr(L"将把 VTube Studio 切换到：\n\n")) + GpuName(adapterIndex) +
             L" (" + GpuPreferenceLabel(adapterIndex) + L")" +
-            Tr(L"\n\n这会暂时中断面捕，并依次执行：\n1. 正常关闭 VTube Studio\n2. 保存 Windows 显卡偏好\n3. 运行 VTube Studio\n4. 自动重启覆盖层\n\n是否继续？");
+            Tr(L"\n\n这会暂时中断面捕，并依次执行：\n1. 正常关闭 VTube Studio\n2. 保存 Windows 显卡偏好\n3. 运行 VTube Studio\n4. 自动重启 VTSFloat_Meow\n\n是否继续？");
         const int answer = RunModalWhileRendering([this, &confirmation]() {
             return MessageBoxW(
                 toolbarHwnd_, confirmation.c_str(),
@@ -9844,8 +11845,33 @@ private:
         InvalidateRect(toolbarHwnd_, nullptr, FALSE);
     }
 
+    void RefreshSpoutSender() {
+        const auto now = Clock::now();
+        if (now < nextSpoutScan_) return;
+        nextSpoutScan_ = now + std::chrono::milliseconds(500);
+        const auto senders = receiver_.GetSenderList();
+        const auto contains = [&](std::string_view name) {
+            return std::find(senders.begin(), senders.end(), name) != senders.end();
+        };
+        constexpr std::string_view preferred = "VTubeStudioSpout";
+        if (!manualSpoutSender_.empty() && !contains(manualSpoutSender_)) manualSpoutSender_.clear();
+        std::string next = manualSpoutSender_;
+        if (next.empty() && contains(preferred)) next = preferred;
+        if (next.empty() && senders.size() == 1) next = senders.front();
+        const bool needsChoice = next.empty() && senders.size() > 1;
+        if (std::exchange(spoutNeedsChoice_, needsChoice) != needsChoice) statusFrameDirty_ = true;
+        if (next == spoutSender_) return;
+        receiver_.ReleaseReceiver();
+        spoutSender_ = std::move(next);
+        receiver_.SetReceiverName(spoutSender_.c_str());
+        spoutFrameSyncDisabled_ = false;
+        scaleReadbackPrimed_ = false;
+        lastSpoutRebindCheck_ = {};
+        if (!spoutSender_.empty()) TryRebindGraphicsToSpoutSender();
+    }
+
     void CreateGraphics() {
-        receiver_.SetReceiverName("VTubeStudioSpout");
+        receiver_.SetReceiverName(spoutSender_.c_str());
 
         ComPtr<IDXGIFactory6> factory;
         Check(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)), "CreateDXGIFactory2");
@@ -9919,9 +11945,8 @@ private:
             std::to_string(highPerformanceGpuIndex_));
 
         int senderAdapter = -1;
-        char senderName[256]{};
-        if (receiver_.GetActiveSender(senderName)) {
-            senderAdapter = receiver_.GetSenderAdapter(senderName);
+        if (!spoutSender_.empty()) {
+            senderAdapter = receiver_.GetSenderAdapter(spoutSender_.c_str());
         }
         senderGpuIndex_ = senderAdapter;
         if (senderAdapter >= 0) {
@@ -10072,11 +12097,8 @@ private:
         }
         lastSpoutRebindCheck_ = now;
 
-        char senderName[256]{};
-        if (!receiver_.GetActiveSender(senderName) || senderName[0] == '\0') {
-            return false;
-        }
-        const int senderAdapterIndex = receiver_.GetSenderAdapter(senderName);
+        if (spoutSender_.empty()) return false;
+        const int senderAdapterIndex = receiver_.GetSenderAdapter(spoutSender_.c_str());
         if (senderAdapterIndex < 0) {
             return false;
         }
@@ -10092,9 +12114,7 @@ private:
         senderAdapter->GetDesc1(&senderDescription);
 
         // Record the sender even when the current D3D device is already on
-        // the correct adapter.  Multi-GPU benchmark resume waits for this
-        // positive identity; leaving the startup value at -1 made a
-        // successful same-adapter restart wait forever.
+        // the correct adapter.
         const auto normalizedSender = std::find_if(
             gpuAdapters_.begin(), gpuAdapters_.end(),
             [&senderDescription](const GpuAdapterInfo& info) {
@@ -10142,6 +12162,8 @@ private:
         scaleSampler_.Reset();
         scalePointSampler_.Reset();
         scaleSettingsBuffer_.Reset();
+        toneSettingsBuffer_.Reset();
+        toneGpuDirty_ = true;
         scaleRasterizer_.Reset();
         scaleMapX_.clear();
         scaleMapY_.clear();
@@ -10162,6 +12184,7 @@ private:
             gpuProcessMemoryCounter_ = nullptr;
         }
         activeAdapter3_.Reset();
+        StopImageBackdrop();
         context_.Reset();
         device_.Reset();
 
@@ -10203,7 +12226,16 @@ private:
 
         // Keep a locked overlay in sync not only at startup, but also when
         // VTube Studio changes its Spout canvas aspect while being resized.
-        if (aspectLocked_ && sourceWidth_ && sourceHeight_ &&
+        const bool sourceSizeChanged = previousSourceWidth != sourceWidth_ ||
+            previousSourceHeight != sourceHeight_;
+        if (cropEditing_ || ((CropActive() || imageTransform_.active()) && aspectLocked_ &&
+                (!initialAspectApplied_ || sourceSizeChanged))) {
+            RECT window{};
+            GetWindowRect(hwnd_, &window);
+            FitCropViewport(window, DisplayImageBounds());
+            if (cropEditing_ && GetCurrentThreadId() == uiThreadId_) UpdateCropEdits();
+            initialAspectApplied_ = true;
+        } else if (aspectLocked_ && sourceWidth_ && sourceHeight_ &&
             (!initialAspectApplied_ || sourceAspectChanged)) {
             RECT window{};
             GetWindowRect(hwnd_, &window);
@@ -10292,7 +12324,7 @@ private:
             return false;
         }
         if (scaleVertexShader_ && scalePixelShader_ && scaleSampler_ &&
-            scalePointSampler_ && scaleSettingsBuffer_ && scaleRasterizer_) {
+            scalePointSampler_ && scaleSettingsBuffer_ && toneSettingsBuffer_ && scaleRasterizer_) {
             return true;
         }
 
@@ -10319,8 +12351,14 @@ SamplerState pointSampler : register(s1);
 cbuffer ScaleSettings : register(b0) {
     uint2 sourceSize;
     uint qualityMode;
-    float padding;
+    uint featherEnabled;
+    float4 featherPixels;
+    float4 imageMapping;
+    uint toneEnabled;
+    uint colorGradeEnabled;
+    uint2 padding;
 };
+cbuffer ToneSettings : register(b1) { float4 toneTable[256]; float4 colorGrade[3]; };
 float4 Premultiply(float4 color) {
     return float4(color.rgb * color.a, color.a);
 }
@@ -10349,9 +12387,34 @@ float4 BicubicSample(float2 uv) {
     return saturate(result);
 }
 float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
-    if (qualityMode == 0) return Premultiply(sourceTexture.Sample(pointSampler, uv));
-    if (qualityMode == 2) return BicubicSample(uv);
-    return Premultiply(sourceTexture.Sample(linearSampler, uv));
+    const float2 centered = uv - 0.5;
+    uv = float2(dot(imageMapping.xy, centered), dot(imageMapping.zw, centered)) + 0.5;
+    if (any(uv < 0.0) || any(uv > 1.0)) return 0.0;
+    float4 color;
+    if (qualityMode == 0) color = Premultiply(sourceTexture.Sample(pointSampler, uv));
+    else if (qualityMode == 2) color = BicubicSample(uv);
+    else color = Premultiply(sourceTexture.Sample(linearSampler, uv));
+    [branch]
+    if (toneEnabled != 0 && color.a > 0.0) {
+        const float3 index = saturate(color.rgb / color.a) * 255.0;
+        const uint3 lo = (uint3)index;
+        const uint3 hi = min(lo + 1, 255);
+        color.rgb = color.a * lerp(float3(toneTable[lo.r].r, toneTable[lo.g].g, toneTable[lo.b].b),
+            float3(toneTable[hi.r].r, toneTable[hi.g].g, toneTable[hi.b].b), frac(index));
+    }
+    [branch]
+    if (colorGradeEnabled != 0) {
+        color.rgb = clamp(float3(dot(colorGrade[0], color), dot(colorGrade[1], color),
+            dot(colorGrade[2], color)), 0.0, color.a);
+    }
+    [branch]
+    if (featherEnabled != 0) {
+        const float4 edgeDistance = float4(uv, 1.0 - uv) * float4(sourceSize, sourceSize);
+        const float4 fades = smoothstep(0.0, max(featherPixels, 1.0), edgeDistance);
+        const float4 mask = lerp(1.0, fades, step(1.0, featherPixels));
+        color *= min(min(mask.x, mask.y), min(mask.z, mask.w));
+    }
+    return color;
 }
  )";
 
@@ -10405,11 +12468,15 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         if (FAILED(result)) return fail("point_sampler_create", result);
 
         D3D11_BUFFER_DESC settings{};
-        settings.ByteWidth = 16;
+        settings.ByteWidth = 64;
         settings.Usage = D3D11_USAGE_DEFAULT;
         settings.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
         result = device_->CreateBuffer(&settings, nullptr, &scaleSettingsBuffer_);
         if (FAILED(result)) return fail("settings_buffer_create", result);
+        settings.ByteWidth = sizeof(toneSettings_);
+        result = device_->CreateBuffer(&settings, nullptr, &toneSettingsBuffer_);
+        if (FAILED(result)) return fail("tone_buffer_create", result);
+        toneGpuDirty_ = true;
 
         D3D11_RASTERIZER_DESC rasterizer{};
         rasterizer.FillMode = D3D11_FILL_SOLID;
@@ -10421,15 +12488,15 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         return true;
     }
 
-    bool EnsureGpuScalerTextures(ID3D11Texture2D* source, int width, int height) {
+    bool EnsureGpuScalerTextures(const RECT& region, int width, int height) {
         if (!InitializeGpuScaler()) {
             return false;
         }
-        D3D11_TEXTURE2D_DESC sourceDescription{};
-        source->GetDesc(&sourceDescription);
-        if (scaleInput_ && scaleSourceWidth_ == sourceDescription.Width &&
-            scaleSourceHeight_ == sourceDescription.Height &&
-            scaleSourceFormat_ == sourceDescription.Format &&
+        const auto regionWidth = static_cast<UINT>(region.right - region.left);
+        const auto regionHeight = static_cast<UINT>(region.bottom - region.top);
+        if (scaleInput_ && scaleSourceWidth_ == regionWidth &&
+            scaleSourceHeight_ == regionHeight &&
+            scaleSourceFormat_ == sourceFormat_ &&
             scaleOutputWidth_ == width && scaleOutputHeight_ == height) {
             return true;
         }
@@ -10445,11 +12512,11 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         scaleReadbackPrimed_ = false;
 
         D3D11_TEXTURE2D_DESC input{};
-        input.Width = sourceDescription.Width;
-        input.Height = sourceDescription.Height;
+        input.Width = regionWidth;
+        input.Height = regionHeight;
         input.MipLevels = 1;
         input.ArraySize = 1;
-        input.Format = sourceDescription.Format;
+        input.Format = sourceFormat_;
         input.SampleDesc.Count = 1;
         input.Usage = D3D11_USAGE_DEFAULT;
         input.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -10509,9 +12576,9 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         }
         scaleReadbackWriteIndex_ = 0;
         scaleReadbackPrimed_ = false;
-        scaleSourceWidth_ = sourceDescription.Width;
-        scaleSourceHeight_ = sourceDescription.Height;
-        scaleSourceFormat_ = sourceDescription.Format;
+        scaleSourceWidth_ = regionWidth;
+        scaleSourceHeight_ = regionHeight;
+        scaleSourceFormat_ = sourceFormat_;
         scaleOutputWidth_ = width;
         scaleOutputHeight_ = height;
         Log("[scaler] gpu_bilinear resources=" + std::to_string(width) + "x" +
@@ -10519,11 +12586,18 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         return true;
     }
 
-    bool GpuScaleIntoDib(ID3D11Texture2D* source, int width, int height) {
-        if (!EnsureGpuScalerTextures(source, width, height)) {
+    bool GpuScaleIntoDib(ID3D11Texture2D* source, const RECT& region, int width, int height,
+                         const FeatherRadii& feather, const vtsfloat::ImageMapping& mapping) {
+        if (!EnsureGpuScalerTextures(region, width, height)) {
             return false;
         }
-        context_->CopyResource(scaleInput_.Get(), source);
+        if (scaleSourceWidth_ == sourceWidth_ && scaleSourceHeight_ == sourceHeight_) {
+            context_->CopyResource(scaleInput_.Get(), source);
+        } else {
+            const D3D11_BOX box{static_cast<UINT>(region.left), static_cast<UINT>(region.top), 0,
+                static_cast<UINT>(region.right), static_cast<UINT>(region.bottom), 1};
+            context_->CopySubresourceRegion(scaleInput_.Get(), 0, 0, 0, 0, source, 0, &box);
+        }
         ID3D11RenderTargetView* renderTarget = scaleOutputView_.Get();
         context_->OMSetRenderTargets(1, &renderTarget, nullptr);
         D3D11_VIEWPORT viewport{};
@@ -10546,16 +12620,30 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             UINT sourceWidth;
             UINT sourceHeight;
             UINT qualityMode;
-            float padding;
+            UINT featherEnabled;
+            std::array<float, FeatherSideCount> featherPixels;
+            std::array<float, 4> mapping;
+            UINT toneEnabled;
+            UINT colorGradeEnabled;
+            UINT padding[2];
         } settings{
             scaleSourceWidth_,
             scaleSourceHeight_,
             static_cast<UINT>(scalingQuality_),
-            0.0f,
+            feather != FeatherRadii{} ? 1u : 0u,
+            {static_cast<float>(feather[FeatherLeft]), static_cast<float>(feather[FeatherTop]),
+             static_cast<float>(feather[FeatherRight]), static_cast<float>(feather[FeatherBottom])},
+            {mapping.xx, mapping.xy, mapping.yx, mapping.yy},
+            toneEnabled_ ? 1u : 0u, colorGradeEnabled_ ? 1u : 0u, {},
         };
+        static_assert(sizeof(ScaleSettings) == 64);
         context_->UpdateSubresource(scaleSettingsBuffer_.Get(), 0, nullptr, &settings, 0, 0);
-        ID3D11Buffer* settingsBuffer = scaleSettingsBuffer_.Get();
-        context_->PSSetConstantBuffers(0, 1, &settingsBuffer);
+        if ((toneEnabled_ || colorGradeEnabled_) && toneGpuDirty_) {
+            context_->UpdateSubresource(toneSettingsBuffer_.Get(), 0, nullptr, &toneSettings_, 0, 0);
+            toneGpuDirty_ = false;
+        }
+        ID3D11Buffer* settingsBuffers[]{scaleSettingsBuffer_.Get(), toneSettingsBuffer_.Get()};
+        context_->PSSetConstantBuffers(0, ARRAYSIZE(settingsBuffers), settingsBuffers);
         context_->Draw(3, 0);
         ID3D11ShaderResourceView* nullView = nullptr;
         context_->PSSetShaderResources(0, 1, &nullView);
@@ -10621,12 +12709,11 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             subjectHoverMaskBits_.empty()) {
             return false;
         }
-        const double maskGridX =
-            (static_cast<double>(x) + 0.5) * subjectHoverMaskGridWidth_ /
-            (std::max)(1, width);
-        const double maskGridY =
-            (static_cast<double>(y) + 0.5) * subjectHoverMaskGridHeight_ /
-            (std::max)(1, height);
+        const double u = (x + 0.5) / width - 0.5, v = (y + 0.5) / height - 0.5;
+        const double maskGridX = (subjectImageMapping_.xx * u + subjectImageMapping_.xy * v + 0.5) *
+            subjectHoverMaskGridWidth_;
+        const double maskGridY = (subjectImageMapping_.yx * u + subjectImageMapping_.yy * v + 0.5) *
+            subjectHoverMaskGridHeight_;
         const int gridX = static_cast<int>(std::floor(maskGridX));
         const int gridY = static_cast<int>(std::floor(maskGridY));
         if (gridX < 0 || gridY < 0 ||
@@ -10665,7 +12752,6 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             // Border decoration pixels do not count as model.
             if (PreviewBorderPixel(xx, yy)) return 0;
             // Performance/debug pixels do not count as model either.
-            if (DebugOverlayPixel(xx, yy)) return 0;
             if (excludeEffectsFromHover_ && subjectHoverRegionConfigured_) {
                 // Use the tracked subject shape. The reference mask is moved
                 // and scaled from the live dominant connected component, so
@@ -10708,19 +12794,6 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             x >= dibWidth_ - preserved || y >= dibHeight_ - preserved;
     }
 
-    // The debug performance readout is an overlay, not model content. Keep a
-    // conservative hit-test rectangle around it so opacity/hover expansion
-    // cannot turn its text or chart into a model pixel.
-    bool DebugOverlayPixel(int x, int y) const {
-        if (!debugMode_ || dibWidth_ < UiScaled(180) ||
-            dibHeight_ < UiScaled(90)) {
-            return false;
-        }
-        return x >= 0 && y >= 0 &&
-            x < (std::min)(dibWidth_, UiScaled(520)) &&
-            y < (std::min)(dibHeight_, UiScaled(300));
-    }
-
     void RestoreHoverPreviewBase() {
         if (!dibBits_ || hoverPreviewBasePixels_.empty() ||
             hoverPreviewBaseWidth_ != dibWidth_ ||
@@ -10733,9 +12806,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     }
 
     void ApplyHoverPreviewOpacity() {
-        const bool debugOpacity = debugMode_ && currentOverlayAlpha_ < 255;
         const bool panelOpacity = borderDialogOpen_ && currentOverlayAlpha_ < 255;
-        if ((!hoverOpacityPreviewActive_ && !debugOpacity && !panelOpacity) || !dibBits_ ||
+        if ((!hoverOpacityPreviewActive_ && !panelOpacity) || !dibBits_ ||
             hoverPreviewBasePixels_.empty() ||
             hoverPreviewBaseWidth_ != dibWidth_ ||
             hoverPreviewBaseHeight_ != dibHeight_) {
@@ -10750,7 +12822,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         auto* pixels = static_cast<std::uint8_t*>(dibBits_);
         for (int y = 0; y < dibHeight_; ++y) {
             for (int x = 0; x < dibWidth_; ++x) {
-                if (PreviewBorderPixel(x, y) || DebugOverlayPixel(x, y)) {
+                if (PreviewBorderPixel(x, y)) {
                     continue;
                 }
                 auto* pixel = pixels +
@@ -10768,7 +12840,6 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     }
 
     void CaptureHoverPreviewBase() {
-        const bool debugOpacity = debugMode_ && currentOverlayAlpha_ < 255;
         const bool panelOpacity = borderDialogOpen_ && currentOverlayAlpha_ < 255;
         // The expansion indicator is derived from the model's alpha shape. Keep
         // this raw snapshot in sync with every received frame while the range is
@@ -10779,7 +12850,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             borderDialogOpen_ && hoverFadeEnabled_ &&
             (hoverExpandEditing_ || showHoverExpandPreview_ ||
              hoverExpandPreviewAlpha_ > 0.01);
-        if ((!hoverOpacityPreviewActive_ && !debugOpacity && !panelOpacity &&
+        if ((!hoverOpacityPreviewActive_ && !panelOpacity &&
              !hoverRangePreview) || !dibBits_ ||
             dibWidth_ <= 0 || dibHeight_ <= 0) {
             return;
@@ -11583,7 +13654,6 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         auto alphaAt = [&](int x, int y) -> int {
             if (x < 0 || y < 0 || x >= width || y >= height) return 0;
             if (isBorderRegion(x, y)) return 0;
-            if (DebugOverlayPixel(x, y)) return 0;
             if (excludeEffectsFromHover_ && subjectHoverRegionConfigured_) {
                 return IsLockedSubjectMaskPixel(x, y, width, height) ? 255 : 0;
             }
@@ -11594,7 +13664,6 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         auto setHighlight = [&](int x, int y) {
             if (x < 0 || y < 0 || x >= width || y >= height) return;
             if (isBorderRegion(x, y)) return;
-            if (DebugOverlayPixel(x, y)) return;
             auto* p = pixels + (static_cast<size_t>(y) * width + x) * 4;
             if (outside) {
                 p[0] = static_cast<std::uint8_t>(std::lround(40 * hoverExpandPreviewAlpha_));
@@ -11660,69 +13729,177 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         }
     }
 
+    static std::vector<Gdiplus::PointF> SimplifySubjectContour(
+        const std::vector<POINT>& closed, float scaleX, float scaleY) {
+        // The mask stores cell occupancy. Recover straight runs across
+        // stair steps before the contour is rasterized at screen resolution.
+        constexpr double toleranceSquared = 0.9 * 0.9;
+        std::vector<bool> keep(closed.size());
+        keep.front() = keep.back() = true;
+        std::vector<std::pair<size_t, size_t>> pending{{0, closed.size() - 1}};
+        while (!pending.empty()) {
+            const auto [first, last] = pending.back();
+            pending.pop_back();
+            const POINT start = closed[first];
+            const double dx = closed[last].x - start.x, dy = closed[last].y - start.y;
+            const double lengthSquared = dx * dx + dy * dy;
+            double farthest = toleranceSquared;
+            size_t split = last;
+            for (size_t i = first + 1; i < last; ++i) {
+                const double x = closed[i].x - start.x, y = closed[i].y - start.y;
+                const double t = lengthSquared > 0
+                    ? (std::clamp)((x * dx + y * dy) / lengthSquared, 0.0, 1.0) : 0.0;
+                const double ex = x - dx * t, ey = y - dy * t;
+                const double distance = ex * ex + ey * ey;
+                if (distance > farthest) {
+                    farthest = distance;
+                    split = i;
+                }
+            }
+            if (split != last) {
+                keep[split] = true;
+                pending.emplace_back(first, split);
+                pending.emplace_back(split, last);
+            }
+        }
+        if (std::count(keep.begin(), keep.end(), true) < 4) {
+            std::fill(keep.begin(), keep.end(), true);
+        }
+        std::vector<Gdiplus::PointF> contour;
+        for (size_t i = 0; i + 1 < closed.size(); ++i) {
+            if (keep[i]) contour.emplace_back(closed[i].x * scaleX, closed[i].y * scaleY);
+        }
+        return contour;
+    }
+
+    void BuildSubjectRegionOutline(int width, int height) {
+        const int gridWidth = subjectHoverMaskGridWidth_;
+        const int gridHeight = subjectHoverMaskGridHeight_;
+        subjectOutlineWidth_ = width;
+        subjectOutlineHeight_ = height;
+        subjectOutlineGridWidth_ = gridWidth;
+        subjectOutlineGridHeight_ = gridHeight;
+        subjectOutlineMapping_ = subjectImageMapping_;
+        subjectOutlineMask_ = subjectHoverMaskBits_;
+        subjectOutlinePixels_.clear();
+        if (gridWidth <= 0 || gridHeight <= 0 || subjectOutlineMask_.empty()) return;
+
+        const auto occupied = [&](int x, int y) {
+            if (x < 0 || x >= gridWidth || y < 0 || y >= gridHeight) return false;
+            const size_t bit = static_cast<size_t>(y) * gridWidth + x;
+            return bit / 8 < subjectOutlineMask_.size() &&
+                (subjectOutlineMask_[bit / 8] & (1u << (bit % 8))) != 0;
+        };
+        const int stride = gridWidth + 1;
+        std::vector<std::uint8_t> edges(static_cast<size_t>(stride) * (gridHeight + 1));
+        const auto vertex = [stride](int x, int y) { return static_cast<size_t>(y) * stride + x; };
+        // Keep occupied cells on the right of every directed edge, including
+        // the inner contours of holes.
+        for (int y = 0; y < gridHeight; ++y) {
+            for (int x = 0; x < gridWidth; ++x) {
+                if (!occupied(x, y)) continue;
+                if (!occupied(x, y - 1)) edges[vertex(x, y)] |= 1 << 0;
+                if (!occupied(x + 1, y)) edges[vertex(x + 1, y)] |= 1 << 1;
+                if (!occupied(x, y + 1)) edges[vertex(x + 1, y + 1)] |= 1 << 2;
+                if (!occupied(x - 1, y)) edges[vertex(x, y + 1)] |= 1 << 3;
+            }
+        }
+
+        ULONG_PTR token{};
+        Gdiplus::GdiplusStartupInput startup{};
+        if (Gdiplus::GdiplusStartup(&token, &startup, nullptr) != Gdiplus::Ok) return;
+        {
+            constexpr POINT directions[] = {{1, 0}, {0, 1}, {-1, 0}, {0, -1}};
+            constexpr int turns[] = {1, 0, 3, 2};
+            const float scaleX = static_cast<float>(width) / gridWidth;
+            const float scaleY = static_cast<float>(height) / gridHeight;
+            Gdiplus::GraphicsPath path(Gdiplus::FillModeWinding);
+            for (size_t start = 0; start < edges.size(); ++start) {
+                while (edges[start]) {
+                    POINT point{static_cast<LONG>(start % stride), static_cast<LONG>(start / stride)};
+                    size_t index = start;
+                    int direction = 0;
+                    while (!(edges[start] & (1 << direction))) ++direction;
+                    std::vector<POINT> contour{point};
+                    do {
+                        edges[index] &= static_cast<std::uint8_t>(~(1 << direction));
+                        point.x += directions[direction].x;
+                        point.y += directions[direction].y;
+                        index = vertex(point.x, point.y);
+                        contour.push_back(point);
+                        if (index == start || !edges[index]) break;
+                        // At a corner shared by two diagonal islands, follow
+                        // the current island instead of crossing to the other.
+                        for (const int turn : turns) {
+                            const int next = (direction + turn) % 4;
+                            if (edges[index] & (1 << next)) {
+                                direction = next;
+                                break;
+                            }
+                        }
+                    } while (true);
+                    if (index != start || contour.size() < 4) continue;
+                    auto smooth = SimplifySubjectContour(contour, scaleX, scaleY);
+                    for (auto& point : smooth) {
+                        const auto output = vtsfloat::ImageOutputPoint(subjectOutlineMapping_, point.X / width, point.Y / height);
+                        point.X = static_cast<float>(output[0] * width);
+                        point.Y = static_cast<float>(output[1] * height);
+                    }
+                    if (smooth.size() >= 3) path.AddPolygon(smooth.data(), static_cast<INT>(smooth.size()));
+                }
+            }
+            if (path.GetPointCount() > 0) {
+                Gdiplus::RectF bounds{};
+                path.GetBounds(&bounds);
+                constexpr int padding = 8;
+                const int left = (std::max)(0, static_cast<int>(std::floor(bounds.X)) - padding);
+                const int top = (std::max)(0, static_cast<int>(std::floor(bounds.Y)) - padding);
+                const int right = (std::min)(width, static_cast<int>(std::ceil(bounds.GetRight())) + padding);
+                const int bottom = (std::min)(height, static_cast<int>(std::ceil(bounds.GetBottom())) + padding);
+                const int rowWidth = right - left;
+                const int rowCount = bottom - top;
+                if (rowWidth > 0 && rowCount > 0) {
+                    std::vector<std::uint32_t> image(static_cast<size_t>(rowWidth) * rowCount);
+                    Gdiplus::Bitmap bitmap(rowWidth, rowCount, rowWidth * 4, PixelFormat32bppPARGB,
+                        reinterpret_cast<BYTE*>(image.data()));
+                    {
+                        Gdiplus::Graphics graphics(&bitmap);
+                        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                        graphics.TranslateTransform(static_cast<float>(-left), static_cast<float>(-top));
+                        Gdiplus::Pen pen(Gdiplus::Color(255, 70, 255, 70), 12.0f);
+                        pen.SetLineJoin(Gdiplus::LineJoinRound);
+                        graphics.DrawPath(&pen, &path);
+                        // Only keep the outside half of the stroke.
+                        graphics.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
+                        const Gdiplus::SolidBrush clear(Gdiplus::Color(0, 0, 0, 0));
+                        graphics.FillPath(&clear, &path);
+                        graphics.Flush(Gdiplus::FlushIntentionSync);
+                    }
+                    for (int y = 0; y < rowCount; ++y) {
+                        for (int x = 0; x < rowWidth; ++x) {
+                            const auto alpha = static_cast<std::uint8_t>(image[static_cast<size_t>(y) * rowWidth + x] >> 24);
+                            if (alpha) subjectOutlinePixels_.push_back(SubjectOutlinePixel{left + x, top + y, alpha});
+                        }
+                    }
+                }
+            }
+        }
+        Gdiplus::GdiplusShutdown(token);
+    }
+
     void DrawSubjectRegionPreview(int width, int height) {
         if (!showSubjectRegionPreview_ || !subjectHoverRegionConfigured_ ||
-            !dibBits_ || width <= 0 || height <= 0) {
+            !excludeEffectsFromHover_ || !dibBits_ || width <= 0 || height <= 0) {
             return;
         }
-        constexpr int thickness = 8;
-        auto* pixels = static_cast<std::uint8_t*>(dibBits_);
-        auto isSelectedModel = [&](int x, int y) {
-            if (x < 0 || y < 0 || x >= width || y >= height) return false;
-            if (PreviewBorderPixel(x, y) || DebugOverlayPixel(x, y)) return false;
-            return IsLockedSubjectMaskPixel(x, y, width, height);
-        };
-
-        std::vector<int> distance(static_cast<size_t>(width) * height, 0);
-        constexpr int farAway = thickness + 2;
-        for (int y = 0; y < height; ++y) {
-            for (int x = 0; x < width; ++x) {
-                distance[static_cast<size_t>(y) * width + x] =
-                    isSelectedModel(x, y) ? 0 : farAway;
-            }
+        if (width != subjectOutlineWidth_ || height != subjectOutlineHeight_ ||
+            subjectHoverMaskGridWidth_ != subjectOutlineGridWidth_ ||
+            subjectHoverMaskGridHeight_ != subjectOutlineGridHeight_ ||
+            subjectHoverMaskBits_ != subjectOutlineMask_ || !(subjectOutlineMapping_ == subjectImageMapping_)) {
+            BuildSubjectRegionOutline(width, height);
         }
-        for (int y = 0; y < height; ++y) {
-            for (int x = 0; x < width; ++x) {
-                int& value = distance[static_cast<size_t>(y) * width + x];
-                if (value == 0) continue;
-                if (x > 0) value = (std::min)(value,
-                    distance[static_cast<size_t>(y) * width + x - 1] + 1);
-                if (y > 0) value = (std::min)(value,
-                    distance[static_cast<size_t>(y - 1) * width + x] + 1);
-                if (x > 0 && y > 0) value = (std::min)(value,
-                    distance[static_cast<size_t>(y - 1) * width + x - 1] + 1);
-                if (x + 1 < width && y > 0) value = (std::min)(value,
-                    distance[static_cast<size_t>(y - 1) * width + x + 1] + 1);
-            }
-        }
-        for (int y = height - 1; y >= 0; --y) {
-            for (int x = width - 1; x >= 0; --x) {
-                int& value = distance[static_cast<size_t>(y) * width + x];
-                if (value == 0) continue;
-                if (x + 1 < width) value = (std::min)(value,
-                    distance[static_cast<size_t>(y) * width + x + 1] + 1);
-                if (y + 1 < height) value = (std::min)(value,
-                    distance[static_cast<size_t>(y + 1) * width + x] + 1);
-                if (x + 1 < width && y + 1 < height) value = (std::min)(value,
-                    distance[static_cast<size_t>(y + 1) * width + x + 1] + 1);
-                if (x > 0 && y + 1 < height) value = (std::min)(value,
-                    distance[static_cast<size_t>(y + 1) * width + x - 1] + 1);
-            }
-        }
-        for (int y = 0; y < height; ++y) {
-            for (int x = 0; x < width; ++x) {
-                const int value = distance[static_cast<size_t>(y) * width + x];
-                if (value <= 0 || value > thickness ||
-                    PreviewBorderPixel(x, y) || DebugOverlayPixel(x, y)) {
-                    continue;
-                }
-                auto* pixel = pixels +
-                    (static_cast<size_t>(y) * width + x) * 4;
-                pixel[0] = 70;
-                pixel[1] = 255;
-                pixel[2] = 70;
-                pixel[3] = 255;
-            }
+        for (const auto& pixel : subjectOutlinePixels_) {
+            if (!PreviewBorderPixel(pixel.x, pixel.y)) BlendPixel(pixel.x, pixel.y, 70, 255, 70, pixel.alpha);
         }
     }
 
@@ -11798,13 +13975,14 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         }
     }
 
-    void PresentLayeredFrame(const RECT& rect, int width, int height, bool modelFrame = true) {
+    bool PresentLayeredFrame(const RECT& rect, int width, int height, HWND target = nullptr) {
+        const bool modelFrame = !target;
         if (!memoryDc_ || !dibBits_ || width != dibWidth_ || height != dibHeight_) {
-            return;
+            return false;
         }
         // Status pages share the DIB, but contain UI rather than model alpha.
         // Never expand their pixels or paint model diagnostics into the cache.
-        if (modelFrame) {
+        if (modelFrame && !cropEditing_) {
             DrawBgWarningOverlay(width, height);
             DrawGpuWarningOverlay(width, height);
             DrawHoverExpandPreview(width, height);
@@ -11822,16 +14000,13 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         BLENDFUNCTION blend{
             AC_SRC_OVER, 0,
             static_cast<BYTE>(
-                (statusMode_ != VtsStatusMode::Hidden && !statusDismissed_)
+                (!modelFrame || cropEditing_)
                     ? 255
-                    // Debug text is drawn after the model-only opacity pass;
-                    // never multiply it by the window-wide alpha.
-                    : (debugMode_ || borderDialogOpen_ ? 255
-                                  : (hoverOpacityPreviewActive_ ? 255 : currentOverlayAlpha_))),
+                    : (borderDialogOpen_ || hoverOpacityPreviewActive_ || shadowMaskReady_[1] ? 255 : currentOverlayAlpha_)),
             AC_SRC_ALPHA };
         HDC screen = GetDC(nullptr);
         const BOOL updated = UpdateLayeredWindow(
-            hwnd_, screen, &destination, &size, memoryDc_, &sourcePoint,
+            target ? target : hwnd_, screen, &destination, &size, memoryDc_, &sourcePoint,
             0, &blend, ULW_ALPHA);
         ReleaseDC(nullptr, screen);
 
@@ -11841,8 +14016,83 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         maxUpdateMs_ = (std::max)(maxUpdateMs_, updateMs);
         if (updated) {
             ++updated_;
+            if (modelFrame) {
+                lastModelPresentation_ = updateStarted;
+                if (++modelPresentations_ == 1) firstModelPresentation_ = updateStarted;
+            }
         } else {
             ++errors_;
+        }
+        return updated != FALSE;
+    }
+
+    RECT VtsStatusBounds(const RECT& model, const RECT& anchor, const RECT& work, bool docked) const {
+        const int preferredWidth = docked ? anchor.right - anchor.left
+            : PreferredWideToolbarWidth(model.right - model.left);
+        const int width = (std::min)(preferredWidth, static_cast<int>(work.right - work.left));
+        int height = (std::min)(UiScaled(280), static_cast<int>(work.bottom - work.top));
+        const int gap = UiScaled(kToolbarGap);
+        int top = model.top;
+        if (docked) {
+            const int below = work.bottom - anchor.bottom - gap;
+            const int above = anchor.top - gap - work.top;
+            const bool placeAbove = below < height && above > below;
+            const int available = placeAbove ? above : below;
+            if (available > 0) height = (std::min)(height, available);
+            top = placeAbove ? anchor.top - gap - height : anchor.bottom + gap;
+        }
+        if (width <= 0 || height <= 0) return {};
+        top = (std::clamp)(top, static_cast<int>(work.top), static_cast<int>(work.bottom) - height);
+        const int left = (std::clamp)(static_cast<int>(anchor.left),
+            static_cast<int>(work.left), static_cast<int>(work.right) - width);
+        return RECT{left, top, left + width, top + height};
+    }
+
+    void PresentVtsStatus() {
+        if (GetCurrentThreadId() != uiThreadId_ || statusMode_ == VtsStatusMode::Hidden ||
+            statusDismissed_) return;
+        if (!statusHwnd_) CreateVtsStatusWindow();
+        if (!statusHwnd_) return;
+
+        RECT model{};
+        if (!GetWindowRect(hwnd_, &model)) return;
+        RECT anchor = model;
+        const bool docked = !locked_ && toolbarHwnd_ && IsWindowVisible(toolbarHwnd_) &&
+            GetWindowRect(toolbarHwnd_, &anchor);
+        MONITORINFO monitor{sizeof(MONITORINFO)};
+        if (!GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &monitor)) return;
+        const RECT bounds = VtsStatusBounds(model, anchor, monitor.rcWork, docked);
+        if (IsRectEmpty(&bounds)) return;
+        const int width = bounds.right - bounds.left;
+        const int height = bounds.bottom - bounds.top;
+
+        const bool visible = IsWindowVisible(statusHwnd_) != FALSE;
+        if (!visible) {
+            // The model window keeps its saved bounds while the waiting page
+            // is visible. Clear any previous model pixels before showing it.
+            const int modelWidth = model.right - model.left;
+            const int modelHeight = model.bottom - model.top;
+            RecreateDib(modelWidth, modelHeight);
+            std::memset(dibBits_, 0, static_cast<size_t>(modelWidth) * modelHeight * 4);
+            PresentLayeredFrame(model, modelWidth, modelHeight, hwnd_);
+            statusFrameDirty_ = true;
+        }
+        RECT current{};
+        GetWindowRect(statusHwnd_, &current);
+        const bool redraw = statusFrameDirty_ || width != dibWidth_ || height != dibHeight_;
+        if (redraw) {
+            RecreateDib(width, height);
+            DrawVtsStatusPanel(width, height);
+        }
+        if ((redraw || !EqualRect(&bounds, &current)) &&
+            !PresentLayeredFrame(bounds, width, height, statusHwnd_)) {
+            statusFrameDirty_ = true;
+            return;
+        }
+        const bool topmost = (GetWindowLongPtrW(statusHwnd_, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+        if (!visible || topmost == desktopMode_) {
+            SetWindowPos(statusHwnd_, WindowZOrder(), 0, 0, 0, 0,
+                SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
         }
     }
 
@@ -11853,29 +14103,20 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             !overlayVisible_ || subjectSelectionHwnd_) {
             return;
         }
-        UpdateHoverOpacity();
-        UpdateHoverExpression();
-        const auto presentVtsStatus = [this]() {
-            RECT current{};
-            GetWindowRect(hwnd_, &current);
-            const int width = (std::max)(1L, current.right - current.left);
-            const int height = (std::max)(1L, current.bottom - current.top);
-            RecreateDib(width, height);
-            if (statusFrameDirty_ || width != statusDrawWidth_ || height != statusDrawHeight_) {
-                DrawVtsStatusPanel(width, height);
-                statusDrawWidth_ = width;
-                statusDrawHeight_ = height;
-            }
-            PresentLayeredFrame(current, width, height, false);
-        };
+        if (!cropEditing_) {
+            UpdateHoverOpacity();
+            UpdateHoverExpression();
+        }
+        if (GetCurrentThreadId() == uiThreadId_) RefreshSpoutSender();
         const auto receiveStarted = Clock::now();
-        if (!receiver_.ReceiveTexture()) {
+        if (spoutSender_.empty() || !receiver_.ReceiveTexture()) {
+            SetSpoutFrameAvailable(false);
             // VTS may have been launched after this process and can publish
             // Spout from another GPU.  Rebind before presenting the waiting
             // page; the next frame can then be received without restarting.
             TryRebindGraphicsToSpoutSender();
             PollVtsStatus();
-            presentVtsStatus();
+            PresentVtsStatus();
             return;
         }
         // Spout's optional frame-count mutex can block for 67 ms when another
@@ -11893,8 +14134,9 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
 
         ID3D11Texture2D* source = receiver_.GetSenderTexture();
         if (!source || (!spoutFrameSyncDisabled_ && !receiver_.IsFrameNew())) {
+            SetSpoutFrameAvailable(false);
             PollVtsStatus();
-            presentVtsStatus();
+            PresentVtsStatus();
             return;
         }
         // Modal menus render on a worker thread.  Do not change window styles
@@ -11902,14 +14144,22 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         // TrackPopupMenu can deadlock and make the process appear hung.
         if (GetCurrentThreadId() == uiThreadId_) {
             HideVtsStatus();
+        } else if (statusMode_ != VtsStatusMode::Hidden && !statusDismissed_) {
+            return;
         }
         ++newFrames_;
+        SetSpoutFrameAvailable(true);
         const bool firstModelFrame = !hasReceivedModel_;
         hasReceivedModel_ = true;
         if (firstModelFrame && GetCurrentThreadId() == uiThreadId_) {
-            if (!apiStartedAfterModel_ && toolbarHwnd_) {
+            if (!apiOptedOut_ && !apiStartedAfterModel_ && toolbarHwnd_) {
                 apiStartScheduled_ = true;
                 SetTimer(toolbarHwnd_, 48, kVtsApiModelReadyDelayMs, nullptr);
+                if (ReadConfigString(L"VtsApi", L"Token").empty()) {
+                    awaitingUserApproval_ = true;
+                    SetTimer(toolbarHwnd_, 45, 500, nullptr);
+                    SetTimer(toolbarHwnd_, 46, kVtsApiAuthorizationWaitMs + kVtsApiModelReadyDelayMs, nullptr);
+                }
             }
             // The API banner is intentionally hidden before a real Spout
             // model frame arrives. Reflow and repaint immediately on that
@@ -11934,11 +14184,17 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         const int height = (std::max)(1L, rect.bottom - rect.top);
         RecreateDib(width, height);
 
+        const RECT region = DisplayImageRegion();
+        const auto transform = DisplayImageTransform();
+        const auto mapping = ImageMappingFor(region, transform);
+        if (!cropEditing_) subjectImageMapping_ = mapping;
+        const FeatherRadii feather = cropEditing_ ? FeatherRadii{} :
+            CropFeatherRadii(region, featherPanelHwnd_ ? cropFeatherDraft_ : cropFeather_);
         const auto mapStarted = Clock::now();
         // The GPU path also performs premultiplied-alpha conversion. Use it
         // at 1:1 as well so the normal path no longer walks every pixel on
         // the CPU merely to premultiply RGB by alpha.
-        bool scaledOnGpu = GpuScaleIntoDib(source, width, height);
+        const bool scaledOnGpu = GpuScaleIntoDib(source, region, width, height, feather, mapping);
         if (!scaledOnGpu) {
             context_->CopyResource(staging_.Get(), source);
             D3D11_MAPPED_SUBRESOURCE mapped{};
@@ -11948,29 +14204,46 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 ++errors_;
                 return;
             }
-            ConvertAndScale(mapped, width, height);
+            if (transform.active()) ScaleTransformedCpu(mapped, region, width, height, mapping, feather);
+            else {
+                ConvertAndScale(mapped, region, width, height);
+                if (feather != FeatherRadii{}) ApplyFeather(RECT{0, 0, width, height}, region, feather);
+            }
             context_->Unmap(staging_.Get(), 0);
+            if (toneEnabled_ || colorGradeEnabled_) ApplyImageToneCpu(width, height);
         }
+        ApplyImageDetail(width, height);
+        if (!cropEditing_) {
+            PrepareShadow(width, height);
+            ApplyImageBlend(rect, width);
+        }
+        ApplyImageVignette(width, height);
         mapMs_ += std::chrono::duration<double, std::milli>(Clock::now() - mapStarted).count();
 
-        // Capture the raw model before controls/debug text are painted. This
-        // keeps opacity previews and hover fades restricted to model pixels.
-        CaptureHoverPreviewBase();
-
-        if (!locked_ || debugMode_) {
-            DrawControls(width, height);
+        if (cropEditing_) {
+            DrawCropEditor(width, height, mapping);
+        } else {
+            // Capture the model before painting controls, so hover opacity only affects the model.
+            if (shadowMaskReady_[0]) CompositeShadow(width, height, 0);
+            CaptureHoverPreviewBase();
+            if (shadowMaskReady_[1]) {
+                if (!borderDialogOpen_ && !hoverOpacityPreviewActive_ && currentOverlayAlpha_ < 255) {
+                    auto* pixels = static_cast<uint8_t*>(dibBits_);
+                    const size_t bytes = static_cast<size_t>(width) * height * 4;
+                    for (size_t i = 0; i < bytes; ++i) {
+                        pixels[i] = static_cast<uint8_t>((pixels[i] * currentOverlayAlpha_ + 127) / 255);
+                    }
+                }
+                CompositeShadow(width, height, 1);
+            }
+            if (!locked_ || debugMode_) DrawControls(width, height);
         }
-        if (debugMode_) {
-            DrawDebugOverlay(width, height);
-        }
-
         PresentLayeredFrame(rect, width, height);
     }
 
-    void EnsureBilinearScaleMaps(int width, int height) {
+    void EnsureBilinearScaleMaps(int width, int height, UINT regionWidth, UINT regionHeight) {
         if (scaleMapWidth_ == width && scaleMapHeight_ == height &&
-            scaleMapSourceWidth_ == sourceWidth_ &&
-            scaleMapSourceHeight_ == sourceHeight_) {
+            scaleMapSourceWidth_ == regionWidth && scaleMapSourceHeight_ == regionHeight) {
             return;
         }
 
@@ -12003,20 +14276,24 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         scaleMapX_.resize(width);
         scaleMapY_.resize(height);
         for (int x = 0; x < width; ++x) {
-            scaleMapX_[x] = makeSample(x, width, sourceWidth_);
+            scaleMapX_[x] = makeSample(x, width, regionWidth);
         }
         for (int y = 0; y < height; ++y) {
-            scaleMapY_[y] = makeSample(y, height, sourceHeight_);
+            scaleMapY_[y] = makeSample(y, height, regionHeight);
         }
         scaleMapWidth_ = width;
         scaleMapHeight_ = height;
-        scaleMapSourceWidth_ = sourceWidth_;
-        scaleMapSourceHeight_ = sourceHeight_;
+        scaleMapSourceWidth_ = regionWidth;
+        scaleMapSourceHeight_ = regionHeight;
     }
 
-    void ConvertAndScale(const D3D11_MAPPED_SUBRESOURCE& mapped, int width, int height) {
+    void ConvertAndScale(const D3D11_MAPPED_SUBRESOURCE& mapped, const RECT& region,
+                         int width, int height) {
         auto* destination = static_cast<std::uint8_t*>(dibBits_);
-        const auto* sourceBase = static_cast<const std::uint8_t*>(mapped.pData);
+        const auto* sourceBase = static_cast<const std::uint8_t*>(mapped.pData) +
+            static_cast<size_t>(region.top) * mapped.RowPitch + static_cast<size_t>(region.left) * 4;
+        const auto regionWidth = static_cast<UINT>(region.right - region.left);
+        const auto regionHeight = static_cast<UINT>(region.bottom - region.top);
         const bool sourceIsBgra =
             sourceFormat_ == DXGI_FORMAT_B8G8R8A8_UNORM ||
             sourceFormat_ == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
@@ -12037,8 +14314,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         };
 
         // No resampling at 1:1: retain the original fast copy path.
-        if (static_cast<UINT>(width) == sourceWidth_ &&
-            static_cast<UINT>(height) == sourceHeight_) {
+        if (static_cast<UINT>(width) == regionWidth && static_cast<UINT>(height) == regionHeight) {
             for (int y = 0; y < height; ++y) {
                 const auto* sourceRow = sourceBase +
                     static_cast<size_t>(y) * mapped.RowPitch;
@@ -12052,7 +14328,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             return;
         }
 
-        EnsureBilinearScaleMaps(width, height);
+        EnsureBilinearScaleMaps(width, height, regionWidth, regionHeight);
         const auto sourceChannel = [sourceIsBgra](
             const std::uint8_t* pixel, int outputChannel) -> unsigned {
             if (outputChannel == 1) return pixel[1];
@@ -12167,7 +14443,191 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         PutPixel(x, y, color.blue, color.green, color.red);
     }
 
+    static FeatherRadii CropFeatherRadii(const RECT& source, const FeatherEdges& settings) {
+        const int halfWidth = (source.right - source.left) / 2;
+        const int halfHeight = (source.bottom - source.top) / 2;
+        FeatherRadii radii{};
+        for (size_t i = 0; i < radii.size(); ++i) {
+            if (settings[i].enabled) {
+                const int limit = i == FeatherLeft || i == FeatherRight ? halfWidth : halfHeight;
+                radii[i] = (std::min)(settings[i].pixels, limit);
+            }
+        }
+        return radii;
+    }
+
+    static const std::vector<std::uint16_t>& FeatherOpacity(
+        FeatherRamp& ramp, int outputExtent, int sourceExtent, int radius) {
+        if (ramp.outputExtent != outputExtent || ramp.sourceExtent != sourceExtent ||
+            ramp.radius != radius) {
+            ramp.outputExtent = outputExtent;
+            ramp.sourceExtent = sourceExtent;
+            ramp.radius = radius;
+            const double sourcePixelsPerOutputPixel = sourceExtent / static_cast<double>(outputExtent);
+            const int band = (std::clamp)(static_cast<int>(
+                std::ceil(radius / sourcePixelsPerOutputPixel - 0.5)), 0, (outputExtent + 1) / 2);
+            ramp.opacity.resize(band);
+            for (int i = 0; i < band; ++i) {
+                const double t = (i + 0.5) * sourcePixelsPerOutputPixel / radius;
+                ramp.opacity[i] = static_cast<std::uint16_t>(std::lround(256 * t * t * (3 - 2 * t)));
+            }
+        }
+        return ramp.opacity;
+    }
+
+    void ApplyFeather(const RECT& output, const RECT& source, const FeatherRadii& radii) {
+        const int width = output.right - output.left;
+        const int height = output.bottom - output.top;
+        const int sourceWidth = source.right - source.left;
+        const int sourceHeight = source.bottom - source.top;
+        const auto& left = FeatherOpacity(featherRamps_[FeatherLeft], width, sourceWidth, radii[FeatherLeft]);
+        const auto& top = FeatherOpacity(featherRamps_[FeatherTop], height, sourceHeight, radii[FeatherTop]);
+        const auto& right = FeatherOpacity(featherRamps_[FeatherRight], width, sourceWidth, radii[FeatherRight]);
+        const auto& bottom = FeatherOpacity(featherRamps_[FeatherBottom], height, sourceHeight, radii[FeatherBottom]);
+        const int leftEnd = static_cast<int>(left.size());
+        const int rightStart = width - static_cast<int>(right.size());
+        const int topEnd = static_cast<int>(top.size());
+        const int bottomStart = height - static_cast<int>(bottom.size());
+        auto* base = static_cast<std::uint8_t*>(dibBits_);
+        const auto fade = [](std::uint8_t* pixel, unsigned opacity) {
+            // RGB must fade with alpha to keep the DIB premultiplied.
+            for (int channel = 0; channel < 4; ++channel) {
+                pixel[channel] = static_cast<std::uint8_t>((pixel[channel] * opacity + 128) >> 8);
+            }
+        };
+        for (int y = 0; y < height; ++y) {
+            const unsigned rowOpacity = y < topEnd ? top[y] : y >= bottomStart ? bottom[height - 1 - y] : 256;
+            auto* row = base + (static_cast<size_t>(output.top + y) * dibWidth_ + output.left) * 4;
+            for (int x = 0; x < leftEnd; ++x) {
+                fade(row + x * 4, (std::min)(rowOpacity, static_cast<unsigned>(left[x])));
+            }
+            if (rowOpacity < 256) {
+                for (int x = leftEnd; x < rightStart; ++x) fade(row + x * 4, rowOpacity);
+            }
+            for (int x = rightStart; x < width; ++x) {
+                fade(row + x * 4, (std::min)(rowOpacity, static_cast<unsigned>(right[width - 1 - x])));
+            }
+        }
+    }
+
+    static void ShadeOutsideCrop(std::uint8_t* pixel) {
+        const unsigned transparency = 255 - pixel[3];
+        const unsigned gray = (28 * transparency + 127) / 255;
+        for (int i = 0; i < 3; ++i) pixel[i] = (pixel[i] * 112 >> 8) + gray;
+        pixel[3] += (144 * transparency + 127) / 255;
+    }
+
+    void DrawTransformedCropMask(int width, int height, const vtsfloat::ImageMapping& map,
+                                 const RECT& crop) {
+        const float dx = map.xx * sourceWidth_ / width;
+        const float dy = map.yx * sourceHeight_ / width;
+        auto* pixel = static_cast<std::uint8_t*>(dibBits_);
+        for (int y = 0; y < height; ++y) {
+            const float v = (y + 0.5f) / height - 0.5f;
+            const float u = 0.5f / width - 0.5f;
+            float sx = (map.xx * u + map.xy * v + 0.5f) * sourceWidth_;
+            float sy = (map.yx * u + map.yy * v + 0.5f) * sourceHeight_;
+            for (int x = 0; x < width; ++x, pixel += 4, sx += dx, sy += dy) {
+                if ((sx < crop.left || sx >= crop.right || sy < crop.top || sy >= crop.bottom) &&
+                    sx >= 0 && sx < sourceWidth_ && sy >= 0 && sy < sourceHeight_) {
+                    ShadeOutsideCrop(pixel);
+                }
+            }
+        }
+    }
+
+    void DrawCropEditor(int width, int height, const vtsfloat::ImageMapping& mapping) {
+        const bool hasSelection = !EqualRect(&cropDraft_, &kFullCrop);
+        const RECT selection = CropPixels(cropDraft_, width, height);
+        const RECT source = CropDraftPixels();
+        const bool transformed = imageTransformDraft_.active();
+        if (!hasSelection) {
+            auto* pixels = static_cast<uint8_t*>(dibBits_);
+            for (size_t i = 0, count = size_t(width) * height; i < count; ++i, pixels += 4) {
+                ShadeOutsideCrop(pixels);
+            }
+        } else if (transformed) {
+            DrawTransformedCropMask(width, height, mapping, source);
+        } else {
+            auto* pixels = static_cast<std::uint8_t*>(dibBits_);
+            for (int y = 0; y < height; ++y) {
+                const bool insideRows = y >= selection.top && y < selection.bottom;
+                for (int x = 0; x < width; ++x, pixels += 4) {
+                    if (!insideRows || x < selection.left || x >= selection.right) {
+                        ShadeOutsideCrop(pixels);
+                    }
+                }
+            }
+        }
+
+        auto* previewPixel = static_cast<uint8_t*>(dibBits_);
+        constexpr unsigned backdropOpacity = 150;
+        constexpr unsigned previewGray = 104;
+        constexpr unsigned premultipliedGray = (previewGray * backdropOpacity + 127) / 255;
+        for (size_t i = 0, count = size_t(width) * height; i < count; ++i, previewPixel += 4) {
+            const unsigned transparency = 255 - previewPixel[3];
+            if (!transparency) continue;
+            const unsigned gray = (premultipliedGray * transparency + 127) / 255;
+            for (int c = 0; c < 3; ++c) {
+                previewPixel[c] += gray;
+            }
+            previewPixel[3] += (backdropOpacity * transparency + 127) / 255;
+        }
+        if (!hasSelection) return;
+
+        const auto fill = [&](RECT bounds, std::uint32_t color) {
+            const RECT canvas{0, 0, width, height};
+            if (!IntersectRect(&bounds, &bounds, &canvas)) return;
+            auto* canvasPixels = static_cast<std::uint32_t*>(dibBits_);
+            for (LONG y = bounds.top; y < bounds.bottom; ++y) {
+                std::fill_n(canvasPixels + static_cast<size_t>(y) * width + bounds.left,
+                    bounds.right - bounds.left, color);
+            }
+        };
+        const int stroke = UiScaled(2);
+        const int grip = UiScaled(4);
+        constexpr std::uint32_t border = 0xff64bcff;
+        const LONG left = selection.left, right = selection.right;
+        const LONG top = selection.top, bottom = selection.bottom;
+        std::array<POINT, 4> corners{{{left, top}, {right, top}, {right, bottom}, {left, bottom}}};
+        if (transformed) {
+            corners = CropScreenCorners(source, mapping, width, height);
+            for (size_t i = 0; i < corners.size(); ++i) {
+                const POINT a = corners[i], b = corners[(i + 1) % corners.size()];
+                const LONG steps = (std::max)({1L, std::abs(b.x - a.x), std::abs(b.y - a.y)});
+                for (LONG step = 0; step <= steps; ++step) {
+                    const LONG x = (std::clamp)(a.x + MulDiv(step, b.x - a.x, steps), 0L, width - 1L);
+                    const LONG y = (std::clamp)(a.y + MulDiv(step, b.y - a.y, steps), 0L, height - 1L);
+                    fill(RECT{x - stroke / 2, y - stroke / 2,
+                        x - stroke / 2 + stroke, y - stroke / 2 + stroke}, border);
+                }
+            }
+        } else {
+            fill(RECT{left, top, right, top + stroke}, border);
+            fill(RECT{left, bottom - stroke, right, bottom}, border);
+            fill(RECT{left, top, left + stroke, bottom}, border);
+            fill(RECT{right - stroke, top, right, bottom}, border);
+        }
+        std::array<POINT, 8> handles{};
+        for (size_t i = 0; i < corners.size(); ++i) {
+            const POINT a = corners[i], b = corners[(i + 1) % corners.size()];
+            handles[i * 2] = a;
+            handles[i * 2 + 1] = POINT{(a.x + b.x) / 2, (a.y + b.y) / 2};
+        }
+        for (POINT point : handles) {
+            point.x = (std::clamp)(point.x, 0L, width - 1L);
+            point.y = (std::clamp)(point.y, 0L, height - 1L);
+            fill(RECT{point.x - grip, point.y - grip, point.x + grip + 1, point.y + grip + 1},
+                0xffe6f4ff);
+        }
+    }
+
     void DrawControls(int width, int height) {
+        const bool cropped = CropActive();
+        const int thickness = cropped
+            ? (std::min)(borderThickness_, ((std::min)(width, height) - 1) / 4)
+            : borderThickness_;
+        if (cropped && thickness <= 0) return;
         // Normal mode crossfades the entire frame in sync. Chase mode keeps
         // the spatial rainbow moving around the perimeter.
         const int horizontal = (std::max)(0, width - 1);
@@ -12199,7 +14659,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             }
         };
 
-        for (int n = 0; n < borderThickness_; ++n) {
+        for (int n = 0; n < thickness; ++n) {
             for (int x = n; x < width - n; ++x) {
                 put(x, n, x);
                 put(
@@ -12211,7 +14671,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 put(width - 1 - n, y, horizontal + y);
             }
         }
-        for (int n = borderThickness_; n < borderThickness_ + 2; ++n) {
+        for (int n = thickness; n < thickness + 2; ++n) {
             for (int i = n; i < (std::min)(kCornerLength, width - n); ++i) {
                 put(i, n, i);
                 put(width - 1 - i, n, horizontal - i);
@@ -12235,16 +14695,82 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         }
     }
 
-    void DrawDebugOverlay(int width, int height) {
-        if (!debugMode_ || !dibBits_ || !memoryDc_ ||
-            width < UiScaled(180) || height < UiScaled(90)) {
+    void RefreshDebugReadout(bool redraw) {
+        if (GetCurrentThreadId() != uiThreadId_) return;
+        if (!debugMode_ || !overlayVisible_ || !hasReceivedModel_ || subjectSelectionHwnd_ || cropEditing_ ||
+            desktopOutputPaused_.load(std::memory_order_relaxed) ||
+            (statusMode_ != VtsStatusMode::Hidden && !statusDismissed_)) {
+            if (debugReadoutHwnd_ && IsWindowVisible(debugReadoutHwnd_)) {
+                ShowWindow(debugReadoutHwnd_, SW_HIDE);
+            }
             return;
         }
-        DrawDebugOverlayImpl(width, height);
+        RECT model{};
+        if (!GetWindowRect(hwnd_, &model)) return;
+        const int width = (std::min)(static_cast<int>(model.right - model.left), UiScaled(520));
+        const int height = (std::min)(static_cast<int>(model.bottom - model.top), UiScaled(270));
+        if (width < UiScaled(180) || height < UiScaled(90)) {
+            if (debugReadoutHwnd_) ShowWindow(debugReadoutHwnd_, SW_HIDE);
+            return;
+        }
+        if (!debugReadoutHwnd_) {
+            debugReadoutHwnd_ = CreateWindowExW(
+                WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+                kDebugReadoutClass, L"VTSFloat_Meow", WS_POPUP,
+                model.left, model.top, width, height, hwnd_, nullptr, instance_, nullptr);
+            if (!debugReadoutHwnd_) return;
+        }
+        RECT current{};
+        GetWindowRect(debugReadoutHwnd_, &current);
+        if (!redraw && IsWindowVisible(debugReadoutHwnd_) &&
+            current.right - current.left == width && current.bottom - current.top == height) {
+            if (current.left != model.left || current.top != model.top) {
+                SetWindowPos(debugReadoutHwnd_, nullptr, model.left, model.top, 0, 0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+            return;
+        }
+
+        HDC dc = CreateCompatibleDC(nullptr);
+        if (!dc) return;
+        BITMAPINFO info{};
+        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = width;
+        info.bmiHeader.biHeight = -height;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        void* pixels = nullptr;
+        HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+        if (!bitmap) {
+            DeleteDC(dc);
+            return;
+        }
+        HGDIOBJ previous = SelectObject(dc, bitmap);
+        const size_t count = static_cast<size_t>(width) * height;
+        std::memset(pixels, 0, count * 4);
+        DrawDebugReadout(dc, width, height);
+        GdiFlush();
+        auto* bgra = static_cast<BYTE*>(pixels);
+        for (size_t index = 0; index < count; ++index, bgra += 4) {
+            // GDI draws onto black. Use the brightest channel as coverage
+            // to keep the text antialiased and its RGB premultiplied.
+            bgra[3] = (std::max)({bgra[0], bgra[1], bgra[2]});
+        }
+        POINT position{model.left, model.top}, origin{};
+        SIZE size{width, height};
+        BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+        if (UpdateLayeredWindow(debugReadoutHwnd_, nullptr, &position, &size,
+                                dc, &origin, 0, &blend, ULW_ALPHA)) {
+            SetWindowPos(debugReadoutHwnd_, WindowZOrder(), 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
+        }
+        SelectObject(dc, previous);
+        DeleteObject(bitmap);
+        DeleteDC(dc);
     }
 
-    void DrawDebugOverlayImpl(int width, int height) {
-
+    void DrawDebugReadout(HDC dc, int width, int height) {
         const int left = UiScaled(12);
         const int top = UiScaled(10);
         const int lineHeight = UiScaled(17);
@@ -12316,7 +14842,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                   << Tr(L"  道具 ") << extra.itemCount
                   << L"  API " << std::fixed << std::setprecision(1) << extra.apiLatencyMs << L"ms";
         } else {
-            sixth << Tr(L"VTS API 未连接");
+            sixth << Tr(L"VTube Studio API 未连接");
         }
 
         std::wostringstream seventh;
@@ -12359,53 +14885,17 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             -UiFontSize(nullptr, UiScaled(14)), 0, 0, 0, FW_SEMIBOLD,
             FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, UiFontFace());
-        HGDIOBJ oldFont = SelectObject(memoryDc_, font);
-        SetBkMode(memoryDc_, TRANSPARENT);
+            ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, UiFontFace());
+        HGDIOBJ oldFont = SelectObject(dc, font);
+        SetBkMode(dc, TRANSPARENT);
 
-        const auto drawText = [this, width, height](
+        const auto drawText = [this, dc, width, height](
             const std::wstring& value, int x, int y, COLORREF color) {
-            RECT rect{ x, y, width - UiScaled(8),
-                (std::min)(height, y + UiScaled(16)) };
-            if (rect.right <= rect.left || rect.bottom <= rect.top) return;
-            const int rectWidth = rect.right - rect.left;
-            const int rectHeight = rect.bottom - rect.top;
-            auto* pixels = static_cast<std::uint8_t*>(dibBits_);
-            // Reuse one scratch buffer for every line. Debug mode used to
-            // allocate and release this storage for each of its ten text
-            // rows on every rendered frame.
-            const size_t scratchBytes =
-                static_cast<size_t>(rectWidth) * rectHeight * 4;
-            if (debugTextScratch_.size() < scratchBytes) {
-                debugTextScratch_.resize(scratchBytes);
-            }
-            auto* before = debugTextScratch_.data();
-            for (int row = 0; row < rectHeight; ++row) {
-                std::memcpy(
-                    before + static_cast<size_t>(row) * rectWidth * 4,
-                    pixels + (static_cast<size_t>(rect.top + row) * width + rect.left) * 4,
-                    static_cast<size_t>(rectWidth) * 4);
-            }
-            SetTextColor(memoryDc_, color);
-            DrawTextW(memoryDc_, value.c_str(), -1, &rect,
-                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-            // Restore non-text pixels, set alpha=255 only where text was drawn
-            for (int row = 0; row < rectHeight; ++row) {
-                for (int col = 0; col < rectWidth; ++col) {
-                    auto* pixel = pixels +
-                        (static_cast<size_t>(rect.top + row) * width + rect.left + col) * 4;
-                    const auto* orig = before +
-                        (static_cast<size_t>(row) * rectWidth + col) * 4;
-                    if (pixel[0] != orig[0] || pixel[1] != orig[1] || pixel[2] != orig[2]) {
-                        pixel[3] = 255;
-                    } else {
-                        pixel[0] = orig[0];
-                        pixel[1] = orig[1];
-                        pixel[2] = orig[2];
-                        pixel[3] = orig[3];
-                    }
-                }
-            }
+            RECT text{x, y, width - UiScaled(8), (std::min)(height, y + UiScaled(16))};
+            if (text.right <= text.left || text.bottom <= text.top) return;
+            SetTextColor(dc, color);
+            DrawTextW(dc, value.c_str(), -1, &text,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
         };
 
         drawText(first.str(), left, top, RGB(255, 255, 255));
@@ -12425,50 +14915,28 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             const int graphHeight = chartHeight - UiScaled(14);
             const double fpsScale = (std::max)(60.0, static_cast<double>(EffectiveRequestFps()));
             const double frameScale = 33.3;
-            const auto drawSeries = [this, left, chartWidth, graphTop, graphHeight](
-                const std::vector<double>& values, double scale,
-                std::uint8_t blue, std::uint8_t green, std::uint8_t red) {
-                if (values.size() < 2) {
-                    return;
+            const auto drawSeries = [this, dc, left, chartWidth, graphTop, graphHeight](
+                const std::vector<double>& values, double scale, COLORREF color) {
+                if (values.size() < 2) return;
+                HPEN pen = CreatePen(PS_SOLID, UiScaled(1), color);
+                if (!pen) return;
+                HGDIOBJ previous = SelectObject(dc, pen);
+                for (size_t index = 0; index < values.size(); ++index) {
+                    const double normalized = (std::clamp)(values[index] / scale, 0.0, 1.0);
+                    const int x = left + static_cast<int>(
+                        (index * (chartWidth - 1)) / (values.size() - 1));
+                    const int y = graphTop + graphHeight - 1 -
+                        static_cast<int>(normalized * (graphHeight - 1));
+                    if (index == 0) MoveToEx(dc, x, y, nullptr);
+                    else LineTo(dc, x, y);
                 }
-                for (size_t index = 1; index < values.size(); ++index) {
-                    const auto point = [left, chartWidth, graphTop, graphHeight,
-                                       &values, scale](size_t position) {
-                        const double normalized = (std::clamp)(
-                            values[position] / scale, 0.0, 1.0);
-                        const int x = left + static_cast<int>(
-                            (position * (chartWidth - 1)) /
-                            (values.size() - 1));
-                        const int y = graphTop + graphHeight - 1 - static_cast<int>(
-                            normalized * (graphHeight - 1));
-                        return POINT{ x, y };
-                    };
-                    const POINT from = point(index - 1);
-                    const POINT to = point(index);
-                    const int steps = (std::max)(
-                        std::abs(to.x - from.x), std::abs(to.y - from.y));
-                    for (int step = 0; step <= steps; ++step) {
-                        const double ratio = steps == 0
-                            ? 0.0
-                            : static_cast<double>(step) / steps;
-                        const int x = static_cast<int>(std::lround(
-                            from.x + (to.x - from.x) * ratio));
-                        const int y = static_cast<int>(std::lround(
-                            from.y + (to.y - from.y) * ratio));
-                        const int stroke = UiScaled(1);
-                        for (int offsetY = 0; offsetY < stroke; ++offsetY) {
-                            for (int offsetX = 0; offsetX < stroke; ++offsetX) {
-                                BlendPixel(x + offsetX, y + offsetY,
-                                    blue, green, red, 220);
-                            }
-                        }
-                    }
-                }
+                SelectObject(dc, previous);
+                DeleteObject(pen);
             };
-            drawSeries(debugFpsHistory_, fpsScale, 40, 220, 255);
-            drawSeries(debugFrameMsHistory_, frameScale, 80, 170, 255);
+            drawSeries(debugFpsHistory_, fpsScale, RGB(255, 220, 40));
+            drawSeries(debugFrameMsHistory_, frameScale, RGB(255, 170, 80));
         }
-        SelectObject(memoryDc_, oldFont);
+        SelectObject(dc, oldFont);
         DeleteObject(font);
     }
 
@@ -12477,10 +14945,13 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             return;
         }
         std::memset(dibBits_, 0, static_cast<size_t>(width) * height * 4);
-        // The status page belongs to the overlay, so dock it directly below
-        // the toolbar and use exactly the same width as the model window.
+        const double scale = (std::min)({
+            uiScalePercent_ / 100.0, width / static_cast<double>(kMinimumWidth), height / 280.0});
+        const auto scaleStatus = [scale](int pixels) {
+            return (std::max)(1, static_cast<int>(std::lround(pixels * scale)));
+        };
         const int panelWidth = width;
-        const int panelHeight = (std::min)(height, UiScaled(280));
+        const int panelHeight = height;
         const int left = 0;
         const int top = 0;
         const RECT panel{ left, top, left + panelWidth, top + panelHeight };
@@ -12489,6 +14960,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         statusAddPathRect_ = RECT{};
         statusManualPathRect_ = RECT{};
         statusDocsRect_ = RECT{};
+        statusShortcutRect_ = statusRemoveShortcutRect_ = RECT{};
         const auto fill = [this](const RECT& rect, BYTE r, BYTE g, BYTE b, BYTE a) {
             const BYTE blue = static_cast<BYTE>((b * a + 127) / 255);
             const BYTE green = static_cast<BYTE>((g * a + 127) / 255);
@@ -12500,7 +14972,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             }
         };
         fill(panel, 17, 27, 43, 255);
-        const int borderWidth = UiScaled(1);
+        const int borderWidth = scaleStatus(1);
         for (int inset = 0; inset < borderWidth; ++inset) {
             for (int x = panel.left + inset; x < panel.right - inset; ++x) {
                 PutPixel(x, panel.top + inset, 24, 132, 255);
@@ -12517,62 +14989,65 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         const bool hasExternalLauncher = canLaunch &&
             HasVtsExternalLauncher(statusDirectory_);
         const bool needsPath = statusDirectory_.empty();
-        const int horizontalMargin = UiScaled(24);
-        const int buttonTop = panel.bottom - UiScaled(94);
-        const int buttonHeight = UiScaled(42);
+        const int horizontalMargin = scaleStatus(24);
+        const int buttonTop = panel.bottom - scaleStatus(94);
+        const int buttonHeight = scaleStatus(42);
+        const int gap = scaleStatus(14);
+        const int count = 1 + (canLaunch || needsPath ? 1 : 0) + (hasExternalLauncher ? 1 : 0);
+        const int shortcutGap = scaleStatus(4);
+        const int clearSpace = shortcutApp_.empty() ? 0 : buttonHeight + shortcutGap;
+        const int buttonWidth = (std::max)(1,
+            (panelWidth - horizontalMargin * 2 - gap * (count - 1) - clearSpace) / count);
+        const int first = panel.left + horizontalMargin;
+        const auto launchButton = [&](int index) {
+            const int x = first + index * (buttonWidth + gap);
+            return RECT{x, buttonTop, x + buttonWidth, buttonTop + buttonHeight};
+        };
+        statusShortcutRect_ = launchButton(count - 1);
+        if (shortcutHoverAction_ && !shortcutApp_.empty()) {
+            const LONG clearLeft = statusShortcutRect_.right + shortcutGap;
+            statusRemoveShortcutRect_ = RECT{clearLeft, buttonTop, clearLeft + buttonHeight, buttonTop + buttonHeight};
+            if (shortcutHoverAction_ == 6) fill(statusRemoveShortcutRect_, 194, 48, 57, 255);
+            else fill(statusRemoveShortcutRect_, 53, 78, 111, 255);
+        }
+        fill(statusShortcutRect_, 33, 74, 118, 255);
         if (canLaunch) {
-            if (hasExternalLauncher) {
-                const int gap = UiScaled(14);
-                const int buttonWidth =
-                    (panelWidth - horizontalMargin * 2 - gap) / 2;
-                statusExeRect_ = RECT{
-                    panel.left + horizontalMargin, buttonTop,
-                    panel.left + horizontalMargin + buttonWidth,
-                    buttonTop + buttonHeight };
-                statusBatchRect_ = RECT{
-                    statusExeRect_.right + gap, buttonTop,
-                    statusExeRect_.right + gap + buttonWidth, buttonTop + buttonHeight };
-            } else {
-                statusExeRect_ = RECT{
-                    panel.left + horizontalMargin, buttonTop,
-                    panel.right - horizontalMargin, buttonTop + buttonHeight };
-            }
+            statusExeRect_ = launchButton(0);
             fill(statusExeRect_, 33, 74, 118, 255);
             if (hasExternalLauncher) {
+                statusBatchRect_ = launchButton(1);
                 fill(statusBatchRect_, 33, 74, 118, 255);
             }
         } else if (needsPath) {
-            statusAddPathRect_ = RECT{
-                panel.left + horizontalMargin, buttonTop,
-                panel.right - horizontalMargin, buttonTop + buttonHeight };
+            statusAddPathRect_ = launchButton(0);
             fill(statusAddPathRect_, 33, 74, 118, 255);
         }
 
         HFONT titleFont = CreateFontW(
-            -UiFontSize(nullptr, UiScaled(22)), 0, 0, 0,
+            -UiFontSize(nullptr, scaleStatus(22)), 0, 0, 0,
             FW_SEMIBOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, UiFontFace());
         HFONT bodyFont = CreateFontW(
-            -UiFontSize(nullptr, UiScaled(16)), 0, 0, 0,
+            -UiFontSize(nullptr, scaleStatus(16)), 0, 0, 0,
             FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, UiFontFace());
         HFONT docsFont = CreateFontW(
-            -UiFontSize(nullptr, UiScaled(14)), 0, 0, 0,
+            -UiFontSize(nullptr, scaleStatus(14)), 0, 0, 0,
             FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, UiFontFace());
         HFONT docsLinkFont = CreateFontW(
-            -UiFontSize(nullptr, UiScaled(14)), 0, 0, 0,
+            -UiFontSize(nullptr, scaleStatus(14)), 0, 0, 0,
             FW_SEMIBOLD, FALSE, TRUE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, UiFontFace());
         HGDIOBJ oldFont = SelectObject(memoryDc_, titleFont);
         SetBkMode(memoryDc_, TRANSPARENT);
         SetTextColor(memoryDc_, RGB(240, 246, 255));
-        RECT titleRect{ panel.left + horizontalMargin, panel.top + UiScaled(22),
-                        panel.right - horizontalMargin, panel.top + UiScaled(54) };
+        RECT titleRect{ panel.left + horizontalMargin, panel.top + scaleStatus(22),
+                        panel.right - horizontalMargin, panel.top + scaleStatus(54) };
         const std::wstring title = statusMode_ == VtsStatusMode::LaunchChoices
             ? Tr(L"已找到 VTube Studio，但当前尚未运行")
             : Tr(L"等待 VTube Studio 启动中");
@@ -12581,13 +15056,15 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
 
         SelectObject(memoryDc_, bodyFont);
         RECT instructionRect{
-            panel.left + horizontalMargin, panel.top + UiScaled(64),
-            panel.right - horizontalMargin, panel.top + UiScaled(124) };
+            panel.left + horizontalMargin, panel.top + scaleStatus(64),
+            panel.right - horizontalMargin, panel.top + scaleStatus(124) };
         const std::wstring instruction =
-            std::wstring(Tr(L"如已启动，请在 设置 - 相机 中打开“激活 Spout2”开关，\r\n")) +
-            Tr(L"将背景调整成“ColorPicker”，然后启动透明推流。");
+            spoutNeedsChoice_ ? Tr(L"请在图形设置中选择 Spout2 发送源") : statusMode_ == VtsStatusMode::LaunchChoices
+            ? Tr(L"或使用其他支持Spout2的任意应用")
+            : std::wstring(Tr(L"如已启动，请在 设置 - 相机 中打开“激活 Spout2”开关，\r\n")) +
+                Tr(L"将背景调整成“ColorPicker”，然后启动透明推流。");
         DrawTextW(memoryDc_, instruction.c_str(), -1, &instructionRect,
-                  DT_LEFT | DT_TOP | DT_WORDBREAK);
+                  DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS);
 
         // Keep the surrounding sentence passive and expose only the project
         // name as the hyperlink. At narrow widths the link moves to a second
@@ -12608,8 +15085,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                               static_cast<int>(docsLink.size()), &linkSize);
         const int docsLeft = panel.left + horizontalMargin;
         const int docsRight = panel.right - horizontalMargin;
-        const int docsTop = panel.top + UiScaled(126);
-        const int docsLineHeight = UiScaled(22);
+        const int docsTop = panel.top + scaleStatus(126);
+        const int docsLineHeight = scaleStatus(22);
         const int docsWidth = docsRight - docsLeft;
         const bool docsWrap = prefixSize.cx + linkSize.cx + suffixSize.cx > docsWidth;
         int docsLinkLeft = docsLeft + (docsWrap ? 0 : prefixSize.cx);
@@ -12638,8 +15115,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         RECT pathRect{
-            panel.left + horizontalMargin, panel.bottom - UiScaled(42),
-            panel.right - horizontalMargin, panel.bottom - UiScaled(14) };
+            panel.left + horizontalMargin, panel.bottom - scaleStatus(42),
+            panel.right - horizontalMargin, panel.bottom - scaleStatus(14) };
         const std::wstring pathText = statusDirectory_.empty()
             ? (statusPathLookupFailed_
                 ? Tr(L"所选位置未找到 VTube Studio，请重新选择路径。")
@@ -12647,7 +15124,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             : std::wstring(Tr(L"VTS 安装路径：")) + statusDirectory_.wstring();
         const std::wstring manualPathText = Tr(L"手动选择路径");
         HFONT manualPathFont = CreateFontW(
-            -UiFontSize(nullptr, UiScaled(16)), 0, 0, 0,
+            -UiFontSize(nullptr, scaleStatus(16)), 0, 0, 0,
             FW_BOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, UiFontFace());
@@ -12657,13 +15134,13 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             memoryDc_, manualPathText.c_str(),
             static_cast<int>(manualPathText.size()), &manualPathSize);
         const int manualLeft = (std::max)(
-            pathRect.left + UiScaled(160),
+            pathRect.left + scaleStatus(160),
             pathRect.right - static_cast<int>(manualPathSize.cx));
         statusManualPathRect_ = RECT{
             manualLeft, pathRect.top, pathRect.right, pathRect.bottom };
         RECT pathTextRect = pathRect;
         pathTextRect.right = (std::max)(
-            static_cast<int>(pathTextRect.left), manualLeft - UiScaled(12));
+            static_cast<int>(pathTextRect.left), manualLeft - scaleStatus(12));
         SelectObject(memoryDc_, bodyFont);
         SetTextColor(memoryDc_, RGB(164, 204, 240));
         DrawTextW(memoryDc_, pathText.c_str(), -1, &pathTextRect,
@@ -12688,6 +15165,34 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             const std::wstring addPathLabel = Tr(L"添加启动路径");
             DrawTextW(memoryDc_, addPathLabel.c_str(), -1, &statusAddPathRect_,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        SetTextColor(memoryDc_, RGB(240, 246, 255));
+        SelectObject(memoryDc_, manualPathFont);
+        constexpr UINT shortcutTextFlags = DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
+        RECT shortcutText = statusShortcutRect_;
+        InflateRect(&shortcutText, -scaleStatus(6), 0);
+        if (shortcutApp_.empty()) {
+            DrawTextW(memoryDc_, Tr(L"启动其他应用"), -1, &shortcutText, shortcutTextFlags | DT_CENTER);
+        } else {
+            const wchar_t* prefix = Tr(L"第三方");
+            const std::wstring name = L"(" + shortcutApp_.stem().wstring() + L")";
+            SIZE prefixSize{}, nameSize{};
+            GetTextExtentPoint32W(memoryDc_, prefix, static_cast<int>(std::wcslen(prefix)), &prefixSize);
+            SelectObject(memoryDc_, docsFont);
+            GetTextExtentPoint32W(memoryDc_, name.c_str(), static_cast<int>(name.size()), &nameSize);
+            shortcutText.left += (std::max)(0L, (shortcutText.right - shortcutText.left - prefixSize.cx - nameSize.cx) / 2);
+            RECT prefixRect = shortcutText;
+            prefixRect.right = (std::min)(shortcutText.right, shortcutText.left + prefixSize.cx);
+            SelectObject(memoryDc_, manualPathFont);
+            DrawTextW(memoryDc_, prefix, -1, &prefixRect, shortcutTextFlags | DT_LEFT);
+            shortcutText.left = prefixRect.right;
+            SelectObject(memoryDc_, docsFont);
+            DrawTextW(memoryDc_, name.c_str(), -1, &shortcutText, shortcutTextFlags | DT_LEFT);
+        }
+        SelectObject(memoryDc_, docsFont);
+        if (!IsRectEmpty(&statusRemoveShortcutRect_)) {
+            DrawTextW(memoryDc_, L"×", -1, &statusRemoveShortcutRect_,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
         SelectObject(memoryDc_, oldFont);
         DeleteObject(titleFont);
@@ -12957,7 +15462,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             return;
         }
 
-        UpdateGpuTelemetry();
+        if (!locked_ || debugMode_) UpdateGpuTelemetry();
         if (const auto configuredFps = ReadVtsConfiguredFps(monitorRefreshFps_)) {
             if (vtsConfiguredFps_ != configuredFps->fps ||
                 vtsConfiguredMode_ != configuredFps->mode) {
@@ -12972,9 +15477,9 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             }
         }
         const int prevApiFps = vtsApiFps_;
-        vtsApiFps_ = vtsApi_.GetRealtimeFps();
+        vtsApiFps_ = apiOptedOut_ ? 0 : vtsApi_.GetRealtimeFps();
         const bool authorizationDenied =
-            vtsApi_.WasAuthorizationDenied();
+            !apiOptedOut_ && vtsApi_.WasAuthorizationDenied();
         if (authorizationDenied != lastAuthorizationDenied_) {
             lastAuthorizationDenied_ = authorizationDenied;
             if (authorizationDenied) {
@@ -13011,7 +15516,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 resetFrameSchedule_ = true;
             }
         }
-        if (vtsApiFps_ == 0 && prevApiFps > 0) {
+        if (vtsApiFps_ == 0 && prevApiFps > 0 && !awaitingUserApproval_) {
             if (fpsMode_ == FpsMode::FollowVtsApi) {
                 fpsMode_ = FpsMode::FollowVts;
                 SaveUiSettings();
@@ -13060,13 +15565,10 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             InvalidateRect(toolbarHwnd_, nullptr, FALSE);
         }
 
+        RefreshDebugReadout(true);
         requested_ = received_ = newFrames_ = updated_ = errors_ = 0;
         receiveMs_ = mapMs_ = updateMs_ = maxUpdateMs_ = 0.0;
         wakeLateMs_ = maxWakeLateMs_ = 0.0;
-        MaybeResumeResolutionBenchmark();
-        UpdateResolutionBenchmark();
-        // A completed pair may show a manual VTS-resolution prompt. Start the
-        // next statistics window after that modal pause, never before it.
         statsStarted_ = Clock::now();
     }
 
@@ -13076,48 +15578,56 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             logicalPixels * uiScalePercent_ / 100.0)));
     }
 
-    RECT ToolbarRectToPixels(RECT logical) const {
-        return RECT{
-            UiScaled(logical.left), UiScaled(logical.top),
-            UiScaled(logical.right), UiScaled(logical.bottom) };
-    }
-
-    bool ToolbarUsesCompactLayout() const {
-        if (locked_ || !hwnd_ || !IsWindow(hwnd_)) {
-            return false;
-        }
-        RECT overlay{};
-        return GetWindowRect(hwnd_, &overlay)
-            && overlay.right - overlay.left < UiScaled(kToolbarWideMinimumWidth);
-    }
-
     int ToolbarControlsHeight() const {
-        int h = UiScaled(
-            ToolbarUsesCompactLayout() ? kToolbarHeight * 2 : kToolbarHeight);
-        h += TotalNotificationOffset();
-        return h;
+        return UiScaled(toolbarLayout_.rows * kToolbarHeight) + TotalNotificationOffset();
+    }
+
+    RECT ApiOptOutRect(int width) const {
+        const int top = UiScaled(1) + UpdateNotificationHeight();
+        return RECT{width - (std::min)(UiScaled(340), width / 2), top,
+            width - UiScaled(8), top + UiScaled(kToolbarNotificationHeight)};
+    }
+
+    void SetApiOptOut(bool disabled) {
+        apiOptedOut_ = disabled;
+        WriteConfigInt(L"VtsApi", L"disabled", disabled);
+        for (UINT_PTR timer = 42; timer <= 48; ++timer) KillTimer(toolbarHwnd_, timer);
+        apiStartScheduled_ = !disabled;
+        apiStartedAfterModel_ = false;
+        awaitingUserApproval_ = !disabled;
+        showingApiSuccess_ = false;
+        apiWasConnected_ = false;
+        holdNotificationForScanResult_ = false;
+        scanStartedObserved_ = false;
+        if (disabled) {
+            CancelHoverExpression();
+            vtsApi_.RequestStop();
+        } else {
+            SetTimer(toolbarHwnd_, 48, 100, nullptr);
+            SetTimer(toolbarHwnd_, 45, 500, nullptr);
+            SetTimer(toolbarHwnd_, 46, kVtsApiAuthorizationWaitMs, nullptr);
+        }
+        PositionToolbar();
+        InvalidateRect(toolbarHwnd_, nullptr, FALSE);
     }
 
     bool ShowApiNotification() const {
-        if (locked_) return false;
+        if (locked_ || viewEditing_ || apiOptedOut_) return false;
         // During the VTS/Spout waiting page, an API disconnect is expected;
         // that page already tells the user what needs to be started.
         if (statusMode_ != VtsStatusMode::Hidden) return false;
         if (!hasReceivedModel_) return false;
-        if (!apiStartedAfterModel_) return false;
+        if (!apiStartedAfterModel_) return awaitingUserApproval_;
         if (vtsApi_.WasAuthorizationDenied()) return true;
         if (holdNotificationForScanResult_) return true;
         if (awaitingUserApproval_ || vtsApi_.IsAwaitingAuthorization()) return true;
         if (showingApiSuccess_) return true;
-        if (!vtsApi_.IsInitialDiscoveryDone()) return false;
-        // Only show the API hint after a real model frame has been received.
-        // On a new computer, or after VTS/API disconnects, this is the
-        // reliable way to tell the user that VTS API access needs attention.
-        return !vtsApi_.IsConnected();
+        return apiWasConnected_ && !vtsApi_.IsConnected();
     }
 
     int TotalNotificationOffset() const {
-        return ShowApiNotification() ? UiScaled(kApiNotificationHeight) : 0;
+        return UpdateNotificationHeight() +
+            (ShowApiNotification() ? UiScaled(kToolbarNotificationHeight) : 0);
     }
 
     void CheckGpuWarning() {
@@ -13189,174 +15699,418 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         }
     }
 
-    int ToolbarCurrentHeight() const {
-        if (locked_) return UiScaled(kToolbarLockedHeight);
-        int height;
-        if (ToolbarUsesCompactLayout()) {
-            height = kToolbarCompactHeight;
-        } else if (debugMode_) {
-            height = kToolbarDebugModeHeight;
-        } else {
-            height = kToolbarDebugHeight;
+    ToolbarLayout BuildToolbarLayout(int width) const {
+        struct ButtonWidth {
+            ToolbarButton button;
+            int width;
+        };
+        constexpr int margin = 5;
+        constexpr int gap = 4;
+        const int available = (std::max)(1, width - 2 * margin);
+        const ButtonWidth graphics{ToolbarButton::GraphicsSettings, 34};
+        const ButtonWidth mode{ToolbarButton::WindowMode, 34};
+        const ButtonWidth hotkey{ToolbarButton::Hotkey, 195};
+        const ButtonWidth aspect{ToolbarButton::Aspect, 34};
+        const ButtonWidth scale{ToolbarButton::CropUiScale, 34};
+        const ButtonWidth language{ToolbarButton::Language, 34};
+        const ButtonWidth crop{ToolbarButton::Crop, 130};
+        const ButtonWidth style{ToolbarButton::Border, 88};
+        const ButtonWidth done{ToolbarButton::Lock, 70};
+        const ButtonWidth connect{ToolbarButton::ConnectApi, apiOptedOut_ && spoutFrameAvailable_ ? 228 : 0};
+        const ButtonWidth appTitle{ToolbarButton::AppTitle,
+            (std::clamp)(available - language.width - scale.width - mode.width - aspect.width - gap * 4, 1, kToolbarAppTitleWidth)};
+        const int leftEdge = margin + appTitle.width + language.width + scale.width + mode.width + aspect.width + gap * 5;
+        const std::array left{graphics, hotkey, crop, style};
+        const std::array right{ButtonWidth{ToolbarButton::Close, 46},
+            ButtonWidth{ToolbarButton::Hide, 46}, ButtonWidth{ToolbarButton::Github, 46},
+            done, connect};
+        const std::array compactRight{ButtonWidth{ToolbarButton::Close, 40},
+            ButtonWidth{ToolbarButton::Hide, 40}, ButtonWidth{ToolbarButton::Github, 40},
+            done, connect};
+        const ButtonWidth compactStyle{ToolbarButton::Border, 82};
+        const std::array compactSettings{graphics, crop, compactStyle};
+        ToolbarLayout layout{};
+        const auto place = [&layout](const ButtonWidth& item, int x, int row, int buttonWidth) {
+            const int top = row * kToolbarHeight;
+            layout.buttons[static_cast<size_t>(item.button)] =
+                RECT{x, top + 5, x + buttonWidth, top + kToolbarHeight - 5};
+        };
+        place(appTitle, margin, 0, appTitle.width);
+        const int languageLeft = margin + appTitle.width + gap;
+        place(language, languageLeft, 0, language.width);
+        const int scaleLeft = languageLeft + language.width + gap;
+        place(scale, scaleLeft, 0, scale.width);
+        const int modeLeft = scaleLeft + scale.width + gap;
+        place(mode, modeLeft, 0, mode.width);
+        place(aspect, modeLeft + mode.width + gap, 0, aspect.width);
+        const auto placeRight = [&](const auto& items) {
+            int x = width - margin;
+            int row = 0;
+            for (const auto& item : items) {
+                if (!item.width) continue;
+                const int buttonWidth = (std::min)(item.width, available);
+                const int left = row == 0 ? leftEdge : margin;
+                const int followingWidth = item.button == ToolbarButton::Lock && connect.width
+                    ? (std::min)(connect.width, (std::max)(0, available - buttonWidth - gap)) + gap : 0;
+                if (x - buttonWidth - followingWidth < left) {
+                    x = width - margin;
+                    ++row;
+                }
+                x -= buttonWidth;
+                place(item, x, row, buttonWidth);
+                x -= gap;
+            }
+            layout.rows = row + 1;
+            return x;
+        };
+        if (width >= kToolbarWideMinimumWidth + connect.width) {
+            int x = leftEdge;
+            for (const auto& item : left) {
+                if (!item.width) continue;
+                place(item, x, 0, item.width);
+                x += item.width + gap;
+            }
+            placeRight(right);
+            return layout;
         }
-        if (benchmarkActive_) height += 18;
-        return UiScaled(height) + TotalNotificationOffset();
+
+        const auto placeRows = [&](const auto& items, int row) {
+            std::array<ButtonWidth, 11> pending{};
+            size_t count = 0;
+            int used = 0;
+            const auto finishRow = [&]() {
+                int x = (width - used) / 2;
+                for (size_t i = 0; i < count; ++i) {
+                    const auto& item = pending[i];
+                    place(item, x, row, item.width);
+                    x += item.width + gap;
+                }
+                ++row;
+                count = 0;
+                used = 0;
+            };
+            for (auto item : items) {
+                if (!item.width) continue;
+                item.width = (std::min)(item.width, available);
+                if (count && used + gap + item.width > available) finishRow();
+                if (count) used += gap;
+                pending[count++] = item;
+                used += item.width;
+            }
+            if (count) finishRow();
+            layout.rows = row;
+        };
+
+        const int rightEdge = placeRight(compactRight);
+        const int hotkeyWidth = rightEdge - leftEdge;
+        if (layout.rows == 1 && hotkeyWidth >= hotkey.width) {
+            place(hotkey, leftEdge, 0, hotkeyWidth);
+            placeRows(compactSettings, 1);
+        } else {
+            placeRows(std::array{graphics, hotkey, crop, compactStyle},
+                layout.rows);
+        }
+        return layout;
+    }
+
+    std::wstring CropSourceLabel() const {
+        return std::wstring(Tr(L"原始分辨率")) + L"  " +
+            std::to_wstring(sourceWidth_) + L" × " + std::to_wstring(sourceHeight_);
+    }
+
+    const wchar_t* CropAspectLabel(bool locked) const {
+        return locked ? Tr(L"裁剪比例已锁定") : Tr(L"锁定裁剪比例");
+    }
+
+    CropToolbarLayout BuildCropToolbarLayout(int width) const {
+        CropToolbarLayout layout{};
+        const int margin = UiScaled(8);
+        const int gap = UiScaled(6);
+        const int groupGap = UiScaled(14);
+        const int rowHeight = UiScaled(kToolbarHeight);
+        const int available = (std::max)(1, width - 2 * margin);
+        HDC dc = GetDC(toolbarHwnd_);
+        const HFONT font = CreateFontW(-UiFontSize(toolbarHwnd_, UiScaled(15)), 0, 0, 0, FW_SEMIBOLD,
+            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, UiFontFace());
+        const HGDIOBJ previous = font ? SelectObject(dc, font) : nullptr;
+        const auto measure = [&](const std::wstring& label) {
+            SIZE size{};
+            GetTextExtentPoint32W(dc, label.c_str(), static_cast<int>(label.size()), &size);
+            return static_cast<int>(size.cx) + UiScaled(2);
+        };
+        const auto button = [&](const std::wstring& label, int minimum) {
+            return (std::max)(measure(label) + UiScaled(16), UiScaled(minimum));
+        };
+        const int appTitleWidth = UiScaled(kToolbarAppTitleWidth);
+        const int titleWidth = button(Tr(L"画面编辑菜单-"), 86);
+        const int aspectWidth = (std::max)(button(CropAspectLabel(false), 80), button(CropAspectLabel(true), 80));
+        const int cropWidth = button(Tr(L"裁剪"), 80);
+        const int imageWidth = button(Tr(L"图像"), 80);
+        const int blendWidth = button(Tr(L"画面混合"), 100);
+        const int shadowWidth = button(Tr(L"阴影"), 72);
+        const int doneWidth = button(Tr(L"完成"), 64);
+        const int settingsWidth = button(Tr(L"羽化与旋转"), 98);
+        const int restoreWidth = button(Tr(L"重置"), 64);
+        const int cancelWidth = button(Tr(L"取消"), 64);
+        const int saveWidth = button(Tr(L"保存"), 64);
+        if (previous) SelectObject(dc, previous);
+        if (font) DeleteObject(font);
+        ReleaseDC(toolbarHwnd_, dc);
+
+        struct Item { RECT& rect; int width; };
+        int x = margin;
+        int row = 0;
+        const auto place = [&](std::initializer_list<Item> items, bool right = false) {
+            int naturalWidth = gap * (static_cast<int>(items.size()) - 1);
+            for (const auto& item : items) naturalWidth += item.width;
+            const int groupWidth = (std::min)(naturalWidth, available);
+            if (x + groupWidth > margin + available && x > margin) {
+                x = margin;
+                ++row;
+            }
+            if (right) x = margin + available - groupWidth;
+            int offset = 0;
+            for (const auto& item : items) {
+                const int left = x + MulDiv(offset, groupWidth, naturalWidth);
+                offset += item.width;
+                const int rightEdge = x + MulDiv(offset, groupWidth, naturalWidth);
+                item.rect = RECT{left, row * rowHeight + UiScaled(5),
+                    rightEdge, (row + 1) * rowHeight - UiScaled(5)};
+                offset += gap;
+            }
+            x += groupWidth + groupGap;
+        };
+        place({{layout.appTitle, appTitleWidth}});
+        place({{layout.title, titleWidth}});
+        if (cropEditing_) {
+            place({{layout.aspect, aspectWidth}});
+            place({{layout.restore, restoreWidth}, {layout.cancel, cancelWidth}, {layout.save, saveWidth}}, true);
+        } else {
+            place({{layout.crop, cropWidth}, {layout.image, imageWidth}});
+            place({{layout.blend, blendWidth}});
+            place({{layout.shadow, shadowWidth}});
+            place({{layout.settings, settingsWidth}});
+            place({{layout.done, doneWidth}}, true);
+        }
+        layout.rows = row + 1;
+        return layout;
+    }
+
+    int ViewSettingsWarningHeight() const {
+        return viewEditing_ && !viewSettingsWarningDismissed_ ? UiScaled(kToolbarNotificationHeight) : 0;
+    }
+
+    RECT ViewSettingsWarningActionRect(int width) const {
+        const LONG right = (std::max)(0, width - UiScaled(8));
+        return {right - (std::min)(UiScaled(170), width / 2), 0, right, ViewSettingsWarningHeight()};
+    }
+
+    int ToolbarCurrentHeight() const {
+        const int noticeHeight = TotalNotificationOffset();
+        if (viewEditing_) return cropToolbarLayout_.rows * UiScaled(kToolbarHeight) + ViewSettingsWarningHeight();
+        if (locked_) {
+            return noticeHeight + (debugMode_ || noticeHeight == 0
+                ? UiScaled(kToolbarLockedHeight) : 2 * UiScaled(1));
+        }
+        const int baseHeight = debugMode_ ? kToolbarDebugModeHeight : kToolbarDebugHeight;
+        const int extraHeight = toolbarLayout_.rows > 1
+            ? (toolbarLayout_.rows - 1) * kToolbarHeight + 12 : 0;
+        return UiScaled(baseHeight + extraHeight) + noticeHeight;
     }
 
     RECT ToolbarButtonRect(ToolbarButton button) const {
-        RECT client{};
-        GetClientRect(toolbarHwnd_, &client);
-        client.right = static_cast<LONG>(std::lround(
-            client.right * 100.0 / uiScalePercent_));
-        client.bottom = static_cast<LONG>(std::lround(
-            client.bottom * 100.0 / uiScalePercent_));
-        if (locked_) {
-            return button == ToolbarButton::Unlock
-                ? ToolbarRectToPixels(RECT{
-                    1, 1,
-                    client.right - 1 -
-                        (debugMode_ ? kLockedDebugLabelWidth : 0),
-                    client.bottom - 1 })
-                : RECT{};
-        }
-        const int notifOffset = ShowApiNotification() ? kApiNotificationHeight : 0;
-        const auto take = [notifOffset](int& right, int width, int rowTop) {
-            RECT rect{
-                right - width,
-                notifOffset + rowTop + 5,
-                right,
-                notifOffset + rowTop + kToolbarHeight - 5 };
-            right = rect.left - 4;
-            return rect;
-        };
-        RECT close{};
-        RECT lock{};
-        RECT github{};
-        RECT debug{};
-        RECT language{};
-        RECT border{};
-        RECT aspect{};
-        RECT frameRate{};
-        RECT quality{};
-        RECT hotkey{};
-        RECT monitor{};
-        RECT reset{};
-        RECT hide{};
-        RECT gpu{};
-        RECT graphicsSettings{};
-        const bool showMonitorButton = GetSystemMetrics(SM_CMONITORS) >= 2;
-        if (ToolbarUsesCompactLayout()) {
-            constexpr int gap = 4;
-            // Row 1: [graphics] [hotkey] on left, [close][hide][github][lock] on right.
-            // Keep the hotkey control compact instead of stretching it across
-            // every unused pixel; the remaining strip is the toolbar drag area.
-            int row1Right = client.right - 5;
-            close = take(row1Right, 40, 0);
-            hide = take(row1Right, 40, 0);
-            github = take(row1Right, 40, 0);
-            lock = take(row1Right, 70, 0);
-            graphicsSettings = RECT{
-                5, notifOffset + 5, 5 + 100, notifOffset + kToolbarHeight - 5 };
-            {
-                int hkLeft = 5 + 100 + gap;
-                const int hkRight = static_cast<int>(lock.left) - gap;
-                if (hkRight - hkLeft > 60) {
-                    hotkey = RECT{ hkLeft, notifOffset + 5, hkRight,
-                        notifOffset + kToolbarHeight - 5 };
-                }
-            }
-            // Row 2: [reset] [monitor?] [aspect] [border] [debug] [language]
-            const int row2Width = 112 + (showMonitorButton ? 76 + gap : 0) +
-                82 + 82 + 76 + 82 + gap * 4;
-            const int clientWidth = static_cast<int>(client.right);
-            int cursor = (std::max)(5, (clientWidth - row2Width) / 2);
-            const auto place = [&cursor, gap, notifOffset](int width) {
-                RECT rect{
-                    cursor,
-                    notifOffset + kToolbarHeight + 5,
-                    cursor + width,
-                    notifOffset + kToolbarHeight * 2 - 5 };
-                cursor = rect.right + gap;
+        const int offset = TotalNotificationOffset();
+        if (viewEditing_) {
+            const auto offsetWarning = [this](RECT rect) {
+                if (!IsRectEmpty(&rect)) OffsetRect(&rect, 0, ViewSettingsWarningHeight());
                 return rect;
             };
-            reset = place(112);
-            if (showMonitorButton) monitor = place(76);
-            aspect = place(82);
-            border = place(82);
-            debug = place(76);
-            language = place(82);
-        } else {
-            // Right side (fixed order): close, hide, github, lock, language, debug
-            int right = client.right - 5;
-            close = take(right, 46, 0);
-            hide = take(right, 46, 0);
-            github = take(right, 46, 0);
-            lock = take(right, 70, 0);
-            language = take(right, 84, 0);
-            debug = take(right, 76, 0);
-            // Left side (left-to-right): graphics, reset, monitor, hotkey, aspect, border
-            constexpr int gap = 4;
-            const auto placeLeft = [notifOffset, gap](int& cursor, int width) {
-                RECT r{ cursor, notifOffset + 5,
-                        cursor + width, notifOffset + kToolbarHeight - 5 };
-                cursor += width + gap;
-                return r;
-            };
-            int cursor = 5;
-            graphicsSettings = placeLeft(cursor, 100);
-            reset = placeLeft(cursor, 112);
-            if (showMonitorButton) monitor = placeLeft(cursor, 86);
-            hotkey = placeLeft(cursor, 195);
-            aspect = placeLeft(cursor, 88);
-            border = placeLeft(cursor, 88);
+            switch (button) {
+            case ToolbarButton::ViewCrop: return offsetWarning(cropToolbarLayout_.crop);
+            case ToolbarButton::ViewImage: return offsetWarning(cropToolbarLayout_.image);
+            case ToolbarButton::ViewBlend: return offsetWarning(cropToolbarLayout_.blend);
+            case ToolbarButton::ViewShadow: return offsetWarning(cropToolbarLayout_.shadow);
+            case ToolbarButton::ViewDone: return offsetWarning(cropToolbarLayout_.done);
+            case ToolbarButton::CropAspect: return offsetWarning(cropToolbarLayout_.aspect);
+            case ToolbarButton::ViewSettings: return offsetWarning(cropToolbarLayout_.settings);
+            case ToolbarButton::AppTitle: return offsetWarning(cropToolbarLayout_.appTitle);
+            case ToolbarButton::CropRestore: return offsetWarning(cropToolbarLayout_.restore);
+            case ToolbarButton::CropCancel: return offsetWarning(cropToolbarLayout_.cancel);
+            case ToolbarButton::CropSave: return offsetWarning(cropToolbarLayout_.save);
+            default: return {};
+            }
         }
+        if (locked_) {
+            if (button != ToolbarButton::Unlock || !debugMode_) return {};
+            RECT client{};
+            GetClientRect(toolbarHwnd_, &client);
+            return RECT{UiScaled(1), offset + UiScaled(1),
+                (std::max)(1L, client.right - UiScaled(1) - UiScaled(kLockedDebugLabelWidth)),
+                offset + UiScaled(kToolbarLockedHeight - 1)};
+        }
+        const RECT logical = toolbarLayout_.buttons[static_cast<size_t>(button)];
+        if (IsRectEmpty(&logical)) return {};
+        return RECT{UiScaled(logical.left), offset + UiScaled(logical.top),
+            UiScaled(logical.right), offset + UiScaled(logical.bottom)};
+    }
+
+    static const wchar_t* ToolbarHintLabel(ToolbarButton button) {
         switch (button) {
-        case ToolbarButton::GraphicsSettings: return ToolbarRectToPixels(graphicsSettings);
-        case ToolbarButton::Gpu: return ToolbarRectToPixels(gpu);
-        case ToolbarButton::Quality: return ToolbarRectToPixels(quality);
-        case ToolbarButton::FrameRate: return ToolbarRectToPixels(frameRate);
-        case ToolbarButton::Aspect: return ToolbarRectToPixels(aspect);
-        case ToolbarButton::Border: return ToolbarRectToPixels(border);
-        case ToolbarButton::WindowMode: return ToolbarRectToPixels(reset);
-        case ToolbarButton::Monitor: return ToolbarRectToPixels(monitor);
-        case ToolbarButton::Hotkey: return ToolbarRectToPixels(hotkey);
-        case ToolbarButton::Debug: return ToolbarRectToPixels(debug);
-        case ToolbarButton::Language: return ToolbarRectToPixels(language);
-        case ToolbarButton::Lock: return ToolbarRectToPixels(lock);
-        case ToolbarButton::Github: return ToolbarRectToPixels(github);
-        case ToolbarButton::Hide: return ToolbarRectToPixels(hide);
-        case ToolbarButton::Close: return ToolbarRectToPixels(close);
-        case ToolbarButton::Unlock:
-            return locked_ ? ToolbarRectToPixels(
-                RECT{ 1, 1, client.right - 1, client.bottom - 1 }) : RECT{};
-        default: return RECT{};
+        case ToolbarButton::WindowMode: return Tr(L"窗口模式");
+        case ToolbarButton::Aspect: return Tr(L"比例锁定");
+        case ToolbarButton::CropUiScale: return Tr(L"界面缩放");
+        case ToolbarButton::Language: return L"Language";
+        case ToolbarButton::GraphicsSettings: return Tr(L"图形设置");
+        default: return nullptr;
         }
     }
 
+    void HideToolbarHint() {
+        toolbarHintButton_ = ToolbarButton::None;
+        if (toolbarHintHwnd_ && IsWindowVisible(toolbarHintHwnd_)) ShowWindow(toolbarHintHwnd_, SW_HIDE);
+    }
+
+    void PositionToolbarHint() {
+        if (toolbarHintButton_ == ToolbarButton::None) return;
+        if (locked_ || !overlayVisible_ || updateClosing_ || !IsWindowVisible(toolbarHwnd_)) {
+            HideToolbarHint();
+            return;
+        }
+        RECT anchor = ToolbarButtonRect(toolbarHintButton_);
+        MapWindowPoints(toolbarHwnd_, nullptr, reinterpret_cast<POINT*>(&anchor), 2);
+        const wchar_t* label = ToolbarHintLabel(toolbarHintButton_);
+        const HDC dc = GetDC(toolbarHintHwnd_);
+        const HFONT font = CreateFontW(-UiScaled(14), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_NATURAL_QUALITY, DEFAULT_PITCH | FF_DONTCARE, UiFontFace());
+        const HGDIOBJ previous = font ? SelectObject(dc, font) : nullptr;
+        SIZE text{};
+        GetTextExtentPoint32W(dc, label, static_cast<int>(wcslen(label)), &text);
+        if (previous) SelectObject(dc, previous);
+        if (font) DeleteObject(font);
+        ReleaseDC(toolbarHintHwnd_, dc);
+        const auto popup = ToolbarPopoverBounds(anchor, text.cx + UiScaled(24), UiScaled(28));
+        if (!popup) {
+            HideToolbarHint();
+            return;
+        }
+        SetWindowPos(toolbarHintHwnd_, WindowZOrder(), popup->left, popup->top,
+            popup->right - popup->left, popup->bottom - popup->top,
+            SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+        InvalidateRect(toolbarHintHwnd_, nullptr, FALSE);
+    }
+
+    void ShowToolbarHint(ToolbarButton button) {
+        const wchar_t* label = ToolbarHintLabel(button);
+        if (!label || toolbarPressed_ != ToolbarButton::None) {
+            HideToolbarHint();
+            return;
+        }
+        if (toolbarHintButton_ == button && IsWindowVisible(toolbarHintHwnd_)) return;
+        HideGithubDropdown();
+        if (!toolbarHintHwnd_) {
+            toolbarHintHwnd_ = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT,
+                kToolbarHintClass, L"", WS_POPUP, 0, 0, 1, 1, toolbarHwnd_, nullptr, instance_, this);
+            if (!toolbarHintHwnd_) return;
+        }
+        toolbarHintButton_ = button;
+        SetWindowTextW(toolbarHintHwnd_, label);
+        PositionToolbarHint();
+    }
+
+    static LRESULT CALLBACK ToolbarHintProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+        auto* overlay = reinterpret_cast<LayeredOverlay*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lParam);
+            overlay = static_cast<LayeredOverlay*>(create->lpCreateParams);
+            SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(overlay));
+        }
+        if (!overlay) return DefWindowProcW(window, message, wParam, lParam);
+        switch (message) {
+        case WM_NCHITTEST: return HTTRANSPARENT;
+        case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+        case WM_ERASEBKGND: return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT paint{};
+            const HDC dc = BeginPaint(window, &paint);
+            RECT bounds{};
+            GetClientRect(window, &bounds);
+            PaintToolbarPopoverBackground(dc, bounds);
+            InflateRect(&bounds, -overlay->UiScaled(6), 0);
+            if (const auto* label = ToolbarHintLabel(overlay->toolbarHintButton_)) {
+                PanelText(dc, label, bounds, kToolbarPopoverText, overlay->UiScaled(14),
+                    false, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            }
+            EndPaint(window, &paint);
+            return 0;
+        }
+        case WM_NCDESTROY:
+            overlay->toolbarHintHwnd_ = nullptr;
+            overlay->toolbarHintButton_ = ToolbarButton::None;
+            break;
+        }
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+
+    void LoadToolbarToggleIcons(int size) {
+        if (toolbarToggleIconSize_ == size) return;
+        constexpr int resources[]{IDI_TOOLBAR_FLOATING, IDI_TOOLBAR_DESKTOP, IDI_TOOLBAR_ASPECT_LOCKED,
+            IDI_TOOLBAR_ASPECT_FREE, IDI_TOOLBAR_UI_SCALE, IDI_TOOLBAR_LANGUAGE, IDI_TOOLBAR_GRAPHICS};
+        for (size_t index = 0; index < toolbarToggleIcons_.size(); ++index) {
+            auto& icon = toolbarToggleIcons_[index];
+            if (icon) DestroyIcon(icon);
+            icon = static_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(resources[index]),
+                IMAGE_ICON, size, size, LR_DEFAULTCOLOR));
+        }
+        toolbarToggleIconSize_ = size;
+    }
+
+    bool CropAvailable() const {
+        return hasReceivedModel_ && statusMode_ == VtsStatusMode::Hidden &&
+            sourceWidth_ && sourceHeight_;
+    }
+
+    void SetSpoutFrameAvailable(bool available) {
+        if (GetCurrentThreadId() != uiThreadId_ || spoutFrameAvailable_ == available) return;
+        spoutFrameAvailable_ = available;
+        if (!available && toolbarGuideHwnd_) DestroyWindow(toolbarGuideHwnd_);
+        if (apiOptedOut_) PositionToolbar();
+        if (toolbarHwnd_) InvalidateRect(toolbarHwnd_, nullptr, FALSE);
+    }
+
     ToolbarButton HitTestToolbar(POINT point) const {
+        if (viewEditing_) {
+            for (auto button : {ToolbarButton::ViewCrop, ToolbarButton::ViewImage, ToolbarButton::ViewBlend, ToolbarButton::ViewShadow, ToolbarButton::ViewDone,
+                                ToolbarButton::CropAspect, ToolbarButton::ViewSettings, ToolbarButton::CropRestore,
+                                ToolbarButton::CropCancel, ToolbarButton::CropSave}) {
+                const RECT rect = ToolbarButtonRect(button);
+                if (PtInRect(&rect, point)) return button;
+            }
+            return ToolbarButton::None;
+        }
         if (locked_) {
             RECT unlock = ToolbarButtonRect(ToolbarButton::Unlock);
             return PtInRect(&unlock, point) ? ToolbarButton::Unlock : ToolbarButton::None;
         }
         constexpr ToolbarButton buttons[] = {
+            ToolbarButton::CropUiScale,
             ToolbarButton::GraphicsSettings,
             ToolbarButton::Aspect,
+            ToolbarButton::Crop,
             ToolbarButton::Border,
             ToolbarButton::WindowMode,
-            ToolbarButton::Monitor,
             ToolbarButton::Hotkey,
-            ToolbarButton::Debug,
             ToolbarButton::Language,
+            ToolbarButton::ConnectApi,
             ToolbarButton::Lock,
             ToolbarButton::Github,
             ToolbarButton::Hide,
             ToolbarButton::Close,
         };
         for (ToolbarButton button : buttons) {
-            if (button == ToolbarButton::Monitor &&
-                GetSystemMetrics(SM_CMONITORS) < 2) {
-                continue;
-            }
+            if ((button == ToolbarButton::Crop && !CropAvailable()) ||
+                (button == ToolbarButton::Lock && !spoutFrameAvailable_)) continue;
             // While the status page is waiting for VTS/Spout, the overlay
             // must not be hidden through the toolbar. The user can still
             // close it with X, or hide/show it from the tray double-click.
@@ -13422,8 +16176,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         FrameRect(buffer, &client, border);
         DeleteObject(border);
 
-        const int notificationHeight = UiScaled(kApiNotificationHeight);
-        int notifY = UiScaled(1);
+        const int notificationHeight = UiScaled(kToolbarNotificationHeight);
+        const int notifY = UiScaled(1) + UpdateNotificationHeight();
         if (ShowApiNotification()) {
             const bool authorizationDenied =
                 vtsApi_.WasAuthorizationDenied();
@@ -13459,18 +16213,31 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
                     Clock::now().time_since_epoch()).count();
                 const int dotCount = static_cast<int>(seconds % 4);
-                notifBuf = Tr(L"等待 VTube Studio 授权插件连接中，请打开 VTS 插件进行授权");
+                notifBuf = vtsApi_.IsAwaitingAuthorization()
+                    ? Tr(L"请在 VTube Studio 中授权插件")
+                    : Tr(L"正在连接 VTube Studio API");
                 for (int i = 0; i < dotCount; ++i) notifBuf += L".";
                 notifText = notifBuf.c_str();
             } else if (disconnected) {
-                notifText = Tr(L"VTS API 连接已断开");
+                notifText = Tr(L"VTube Studio API 连接已断开");
             } else {
-                notifText = Tr(L"VTS API 尚未授权");
+                notifText = Tr(L"VTube Studio API 未连接");
             }
             if (awaitingAuthorization || showingApiSuccess_) {
                 RECT textRect{ 0, notifY, client.right, notifY + notificationHeight };
-                DrawTextW(buffer, notifText, -1, &textRect,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                if (awaitingAuthorization && !showingApiSuccess_) {
+                    RECT action = ApiOptOutRect(client.right);
+                    textRect.left = UiScaled(8);
+                    textRect.right = action.left - UiScaled(8);
+                    PanelText(buffer, Tr(L"我不想连接VTube Studio API进行使用"), action, RGB(255, 255, 255),
+                        UiScaled(13), false, DT_RIGHT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+                    SetTextColor(buffer, RGB(130, 255, 150));
+                }
+                if (!vtsfloat::DrawFittedToolbarText(buffer, textRect, notifText, UiFontFace(),
+                        UiScaled(15), UiScaled(10), false)) {
+                    DrawTextW(buffer, notifText, -1, &textRect,
+                        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+                }
             } else {
                 const auto [scanWidth, howWidth, resultWidth,
                             retryAuthorizationWidth] =
@@ -13557,16 +16324,24 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
 
         const auto drawButton = [&](ToolbarButton button, const std::wstring& label) {
             RECT rect = ToolbarButtonRect(button);
-            const bool disabled = button == ToolbarButton::Hide &&
-                statusMode_ != VtsStatusMode::Hidden && !statusDismissed_;
-            COLORREF color = button == ToolbarButton::Lock
-                ? RGB(33, 49, 72)
-                : RGB(20, 36, 58);
+            const bool disabled = (button == ToolbarButton::Hide &&
+                statusMode_ != VtsStatusMode::Hidden && !statusDismissed_) ||
+                (button == ToolbarButton::Crop && !CropAvailable()) ||
+                (button == ToolbarButton::Lock && !spoutFrameAvailable_);
+            const bool active = (button == ToolbarButton::CropAspect && cropAspectLocked_) ||
+                (button == ToolbarButton::ViewSettings && featherPanelHwnd_) ||
+                (button == ToolbarButton::ViewShadow && shadowPanelHwnd_) ||
+                (button == ToolbarButton::WindowMode && desktopMode_) ||
+                (button == ToolbarButton::Aspect && aspectLocked_);
+            const bool primary = button == ToolbarButton::Lock || button == ToolbarButton::CropSave || active;
+            COLORREF color = RGB(20, 36, 58);
+            if (button == ToolbarButton::CropSave || active) color = RGB(31, 87, 142);
+            else if (primary) color = RGB(33, 49, 72);
             if (disabled) color = RGB(14, 25, 40);
             if (!disabled && button == toolbarHovered_) {
                 if (button == ToolbarButton::Close) {
                     color = RGB(205, 55, 62);
-                } else if (button == ToolbarButton::Lock) {
+                } else if (primary) {
                     color = RGB(41, 91, 151);
                 } else {
                     color = RGB(26, 70, 116);
@@ -13575,7 +16350,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             if (!disabled && button == toolbarPressed_) {
                 if (button == ToolbarButton::Close) {
                     color = RGB(170, 35, 42);
-                } else if (button == ToolbarButton::Lock) {
+                } else if (primary) {
                     color = RGB(29, 72, 123);
                 } else {
                     color = RGB(18, 50, 88);
@@ -13584,10 +16359,23 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             HBRUSH brush = CreateSolidBrush(color);
             FillRect(buffer, &rect, brush);
             DeleteObject(brush);
+            if (toolbarGuideHwnd_ && button == ToolbarGuideTarget()) {
+                HBRUSH highlight = CreateSolidBrush(RGB(71, 153, 231));
+                FrameRect(buffer, &rect, highlight);
+                DeleteObject(highlight);
+            }
             SetTextColor(buffer, disabled ? RGB(105, 126, 151) : RGB(240, 246, 255));
             HGDIOBJ previousFont = nullptr;
             if (button == ToolbarButton::Close) {
                 previousFont = SelectObject(buffer, closeFont);
+            }
+            if ((button == ToolbarButton::Hotkey && capturingHotkey_) || cropEditing_ ||
+                button == ToolbarButton::Crop ||
+                button == ToolbarButton::ViewSettings || button == ToolbarButton::ViewShadow) {
+                RECT prompt = rect;
+                InflateRect(&prompt, -UiScaled(4), 0);
+                if (vtsfloat::DrawFittedToolbarText(buffer, prompt, label,
+                        UiFontFace(), UiScaled(15), UiScaled(11))) return;
             }
             DrawTextW(buffer, label.c_str(), -1, &rect,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -13598,62 +16386,101 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
 
         const auto drawGithubButton = [&]() {
             drawButton(ToolbarButton::Github, L"");
-            if (!githubIcon_) {
-                return;
-            }
+            if (!githubGraphicsToken_) return;
             const RECT rect = ToolbarButtonRect(ToolbarButton::Github);
-            // The GitHub button is 32 logical pixels high.  Rendering the
-            // 32px resource at its native size avoids an extra HICON
-            // downsample (which made the white circle and cat look jagged).
-            const int iconWidth = UiScaled(32);
-            const int iconHeight = UiScaled(32);
-            DrawIconEx(
-                buffer,
-                rect.left + (rect.right - rect.left - iconWidth) / 2,
-                rect.top + (rect.bottom - rect.top - iconHeight) / 2,
-                githubIcon_, iconWidth, iconHeight, 0, nullptr, DI_NORMAL);
+            const LONG size = (std::min)({static_cast<LONG>(UiScaled(32)),
+                rect.right - rect.left, rect.bottom - rect.top});
+            if (size <= 0) return;
+            const LONG left = rect.left + (rect.right - rect.left - size) / 2;
+            const LONG top = rect.top + (rect.bottom - rect.top - size) / 2;
+            vtsfloat::DrawGithubMark(buffer, RECT{left, top, left + size, top + size});
         };
 
-        if (locked_) {
+        const RECT appTitle = ToolbarButtonRect(ToolbarButton::AppTitle);
+        if (!IsRectEmpty(&appTitle)) {
+            PanelText(buffer, kToolbarAppName, appTitle, RGB(91, 134, 190), UiScaled(kToolbarAppTitleFontHeight), true,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        }
+
+        if (viewEditing_) {
+            const auto label = [&](const std::wstring& text, RECT bounds, COLORREF color) {
+                SetTextColor(buffer, color);
+                DrawTextW(buffer, text.c_str(), -1, &bounds,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            };
+            const int warningHeight = ViewSettingsWarningHeight();
+            if (warningHeight > 0) {
+                PanelFill(buffer, RECT{1, 1, client.right - 1, warningHeight}, RGB(58, 36, 12));
+                const RECT action = ViewSettingsWarningActionRect(client.right);
+                PanelText(buffer, Tr(L"进行画面设置时可能会增加性能开销"),
+                    RECT{UiScaled(8), 0, action.left - UiScaled(4), warningHeight}, RGB(255, 198, 99),
+                    UiScaled(13), true, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                PanelText(buffer, Tr(L"[不再提示]"), action, RGB(255, 221, 160), UiScaled(13),
+                    false, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            }
+            RECT title = cropToolbarLayout_.title;
+            OffsetRect(&title, 0, warningHeight);
+            label(Tr(L"画面编辑菜单-"), title, RGB(240, 246, 255));
+            if (cropEditing_) {
+                drawButton(ToolbarButton::CropAspect, CropAspectLabel(cropAspectLocked_));
+                drawButton(ToolbarButton::CropRestore, Tr(L"重置"));
+                drawButton(ToolbarButton::CropCancel, Tr(L"取消"));
+                drawButton(ToolbarButton::CropSave, Tr(L"保存"));
+            } else {
+                drawButton(ToolbarButton::ViewCrop, Tr(L"裁剪"));
+                drawButton(ToolbarButton::ViewImage, Tr(L"图像"));
+                drawButton(ToolbarButton::ViewBlend, Tr(L"画面混合"));
+                drawButton(ToolbarButton::ViewShadow, Tr(L"阴影"));
+                drawButton(ToolbarButton::ViewSettings, Tr(L"羽化与旋转"));
+                drawButton(ToolbarButton::ViewDone, Tr(L"完成"));
+            }
+        } else if (locked_ && debugMode_) {
             drawButton(ToolbarButton::Unlock, Tr(L"解锁"));
-            if (debugMode_) {
-                RECT debugLabel{
-                    client.right - UiScaled(kLockedDebugLabelWidth),
-                    UiScaled(1),
-                    client.right - UiScaled(1),
-                    client.bottom - UiScaled(1) };
-                SetTextColor(buffer, RGB(157, 210, 255));
-                DrawTextW(
-                    buffer, Tr(L"调试模式已打开"), -1, &debugLabel,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            }
-        } else {
-            drawButton(ToolbarButton::GraphicsSettings, Tr(L"图形设置"));
-            drawButton(ToolbarButton::WindowMode, desktopMode_ ? Tr(L"桌面模式") : Tr(L"悬浮窗口"));
-            if (GetSystemMetrics(SM_CMONITORS) >= 2) {
-                drawButton(ToolbarButton::Monitor, Tr(L"切换屏幕"));
-            }
+            RECT debugLabel{
+                client.right - UiScaled(kLockedDebugLabelWidth),
+                UiScaled(1) + UpdateNotificationHeight(),
+                client.right - UiScaled(1),
+                client.bottom - UiScaled(1) };
+            SetTextColor(buffer, RGB(157, 210, 255));
+            DrawTextW(buffer, Tr(L"调试模式已打开"), -1, &debugLabel,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        } else if (!locked_) {
             drawButton(
                 ToolbarButton::Hotkey,
                 capturingHotkey_
                     ? Tr(L"请按组合键（Esc取消）")
-                    : std::wstring(Tr(L"锁定/解锁 ")) + HotkeyText());
-            drawButton(
-                ToolbarButton::Aspect,
-                aspectLocked_ ? Tr(L"比例 锁定") : Tr(L"比例 自由"));
+                    : std::wstring(Tr(L"快捷键")) + L" " + HotkeyText());
+            drawButton(ToolbarButton::Crop, Tr(L"画面设置"));
             drawButton(ToolbarButton::Border, Tr(L"个性化"));
-            drawButton(
-                ToolbarButton::Debug,
-                Tr(L"调试"));
-            drawButton(ToolbarButton::Language, L"Language");
+            const int toggleSize = UiScaled(20);
+            LoadToolbarToggleIcons(toggleSize);
+            const auto drawToggle = [&](ToolbarButton button, HICON icon) {
+                drawButton(button, L"");
+                const RECT rect = ToolbarButtonRect(button);
+                if (!icon || IsRectEmpty(&rect)) return;
+                const int size = (std::min)({toggleSize, static_cast<int>(rect.right - rect.left),
+                    static_cast<int>(rect.bottom - rect.top)});
+                DrawIconEx(buffer, (rect.left + rect.right - size) / 2, (rect.top + rect.bottom - size) / 2,
+                    icon, size, size, 0, nullptr, DI_NORMAL);
+            };
+            drawToggle(ToolbarButton::WindowMode, toolbarToggleIcons_[desktopMode_ ? 1 : 0]);
+            drawToggle(ToolbarButton::CropUiScale, toolbarToggleIcons_[4]);
+            drawToggle(ToolbarButton::Language, toolbarToggleIcons_[5]);
+            drawToggle(ToolbarButton::GraphicsSettings, toolbarToggleIcons_[6]);
+            drawToggle(ToolbarButton::Aspect, toolbarToggleIcons_[aspectLocked_ ? 2 : 3]);
+            RECT apiConnect = ToolbarButtonRect(ToolbarButton::ConnectApi);
+            if (!IsRectEmpty(&apiConnect)) {
+                PanelText(buffer, Tr(L"连接VTube Studio API"), apiConnect,
+                    toolbarHovered_ == ToolbarButton::ConnectApi ? RGB(255, 255, 255) : RGB(171, 183, 198),
+                    UiScaled(13), false, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            }
             drawButton(ToolbarButton::Lock, Tr(L"完成"));
             drawGithubButton();
             drawButton(ToolbarButton::Hide, L"—");
             drawButton(ToolbarButton::Close, L"×");
         }
 
-        if (!locked_) {
-            const bool compact = ToolbarUsesCompactLayout();
+        if (!locked_ && !viewEditing_) {
             HFONT debugFont = CreateFontW(
                 -UiFontSize(toolbarHwnd_, UiScaled(13)), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
@@ -13664,10 +16491,11 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 capturingFps_ ? RGB(255, 214, 102) : RGB(157, 210, 255));
             RECT debugRect{
                 UiScaled(8), ToolbarControlsHeight(),
-                client.right - UiScaled(8), client.bottom - UiScaled(2) };
+                (std::max)(static_cast<LONG>(UiScaled(8)), client.right - UiScaled(6)),
+                client.bottom - UiScaled(2) };
             const std::wstring status = capturingFps_
                 ? Tr(L"直接输入 1–240；Enter 确认，Esc 取消（确认前不会修改当前帧率）")
-                : DebugStatusText(compact);
+                : DebugStatusText(toolbarLayout_.rows > 1);
             DrawTextW(buffer, status.c_str(), -1, &debugRect,
                       DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS);
             SelectObject(buffer, font);
@@ -13753,6 +16581,13 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     }
 
     void ActivateToolbarButton(ToolbarButton button) {
+        if (button == ToolbarButton::Lock && spoutFrameAvailable_ && !toolbarGuideSeen_) {
+            if (toolbarGuideHwnd_) {
+                if (toolbarGuideStep_ == ToolbarGuideStep::Done) ContinueToolbarGuide();
+                return;
+            }
+            if (BeginToolbarGuide()) return;
+        }
         switch (button) {
         case ToolbarButton::GraphicsSettings:
             CancelFpsCapture();
@@ -13778,6 +16613,27 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             CancelFpsCapture();
             ToggleAspectLock();
             break;
+        case ToolbarButton::Crop:
+            BeginViewEdit();
+            break;
+        case ToolbarButton::ViewCrop:
+            BeginCropEdit();
+            break;
+        case ToolbarButton::CropAspect:
+                ToggleCropAspect();
+            break;
+        case ToolbarButton::CropRestore:
+                cropDraft_ = kFullCrop;
+            cropAspectSize_ = SIZE{static_cast<LONG>(sourceWidth_), static_cast<LONG>(sourceHeight_)};
+            UpdateCropEdits();
+            resetFrameSchedule_ = true;
+            break;
+        case ToolbarButton::CropCancel:
+            EndCropEdit(false);
+            break;
+        case ToolbarButton::CropSave:
+            EndCropEdit(true);
+            break;
         case ToolbarButton::Border:
             CancelFpsCapture();
             CancelHotkeyCapture();
@@ -13788,14 +16644,31 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             CancelFpsCapture();
             ToggleDesktopMode();
             break;
-        case ToolbarButton::Monitor:
-            CancelFpsCapture();
-            if (GetSystemMetrics(SM_CMONITORS) >= 2) {
-                Log("[toolbar] action=next_monitor");
-                MoveToNextMonitor();
-            }
+        case ToolbarButton::ViewImage:
+            ShowImagePanel();
+            break;
+        case ToolbarButton::ViewBlend:
+            ShowImagePanel(true);
+            break;
+        case ToolbarButton::ConnectApi:
+            SetApiOptOut(false);
+            break;
+        case ToolbarButton::ViewShadow:
+            ShowShadowPanel();
+            break;
+        case ToolbarButton::ViewDone:
+            EndViewEdit();
+            break;
+        case ToolbarButton::CropUiScale:
+            ShowUiScalePicker(toolbarHwnd_, ToolbarButtonRect(ToolbarButton::CropUiScale));
+            break;
+        case ToolbarButton::ViewSettings:
+            CloseShadowPanel(false);
+            CloseImagePanel(false);
+            ShowFeatherPanel();
             break;
         case ToolbarButton::Hotkey:
+            if (toolbarGuideHwnd_) FinishToolbarGuide(false);
             CancelFpsCapture();
             Log("[toolbar] action=capture_hotkey");
             if (capturingHotkey_) {
@@ -13804,11 +16677,6 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 BeginHotkeyCapture();
             }
             break;
-        case ToolbarButton::Debug:
-            CancelFpsCapture();
-            Log("[toolbar] action=debug_menu");
-            ShowDebugMenu();
-            break;
         case ToolbarButton::Language:
             CancelFpsCapture();
             CancelHotkeyCapture();
@@ -13816,6 +16684,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             ShowLanguageMenu();
             break;
         case ToolbarButton::Lock:
+            if (!spoutFrameAvailable_) break;
             Log("[toolbar] action=lock");
             CancelFpsCapture();
             CancelHotkeyCapture();
@@ -13867,6 +16736,10 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 toolbarHovered_ = hovered;
                 InvalidateRect(toolbarHwnd_, nullptr, FALSE);
             }
+            ShowToolbarHint(hovered);
+            if (hovered == ToolbarButton::Github && toolbarPressed_ == ToolbarButton::None) {
+                ShowGithubDropdown();
+            }
             TRACKMOUSEEVENT tracking{};
             tracking.cbSize = sizeof(tracking);
             tracking.dwFlags = TME_LEAVE;
@@ -13875,19 +16748,37 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             return 0;
         }
         case WM_MOUSELEAVE: {
+            HideToolbarHint();
             toolbarHovered_ = ToolbarButton::None;
             InvalidateRect(toolbarHwnd_, nullptr, FALSE);
             return 0;
         }
         case WM_LBUTTONDOWN: {
+            HideToolbarHint();
+            HideGithubDropdown();
             SetForegroundWindow(toolbarHwnd_);
             SetFocus(toolbarHwnd_);
             POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (point.y < ViewSettingsWarningHeight()) {
+                RECT client{};
+                GetClientRect(toolbarHwnd_, &client);
+                const RECT action = ViewSettingsWarningActionRect(client.right);
+                if (PtInRect(&action, point) && WriteConfigInt(L"warnings", L"suppress_view_settings", 1)) {
+                    viewSettingsWarningDismissed_ = true;
+                    PositionToolbar();
+                }
+                return 0;
+            }
+            if (point.y < UpdateNotificationHeight()) return 0;
             if (ShowApiNotification() && point.y < TotalNotificationOffset()) {
                 const bool authorizationDenied =
                     vtsApi_.WasAuthorizationDenied();
                 if (!authorizationDenied &&
                     (awaitingUserApproval_ || vtsApi_.IsAwaitingAuthorization())) {
+                    RECT client{};
+                    GetClientRect(toolbarHwnd_, &client);
+                    const RECT action = ApiOptOutRect(client.right);
+                    if (PtInRect(&action, point)) SetApiOptOut(true);
                     return 0;
                 }
                 RECT clientR{};
@@ -13956,6 +16847,11 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         }
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:
+            if (viewEditing_ && wParam == VK_ESCAPE) {
+                if (cropEditing_) EndCropEdit(false);
+                else EndViewEdit();
+                return 0;
+            }
             if (capturingFps_) {
                 CaptureFpsKey(static_cast<UINT>(wParam));
                 return 0;
@@ -13971,12 +16867,22 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             }
             break;
         case WM_TIMER:
+            if (wParam == kToolbarGuideTimer) {
+                PositionToolbarGuide();
+                return 0;
+            }
+            if (wParam == kGithubDropdownTimer) {
+                UpdateGithubDropdown();
+                return 0;
+            }
             if (wParam == 48) {
+                if (!vtsApi_.IsStopped()) return 0;
                 KillTimer(toolbarHwnd_, 48);
                 apiStartScheduled_ = false;
-                if (hasReceivedModel_ && !apiStartedAfterModel_) {
+                if (hasReceivedModel_ && !apiOptedOut_ && !apiStartedAfterModel_) {
                     apiStartedAfterModel_ = true;
                     vtsApi_.Start(instance_);
+                    PositionToolbar();
                     InvalidateRect(toolbarHwnd_, nullptr, FALSE);
                 }
                 return 0;
@@ -14066,7 +16972,12 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 GetCursorPos(&point);
                 ScreenToClient(toolbarHwnd_, &point);
                 LPCWSTR cursor = IDC_SIZEALL;
-                if (point.y < TotalNotificationOffset()) {
+                if (point.y < ViewSettingsWarningHeight()) {
+                    RECT client{};
+                    GetClientRect(toolbarHwnd_, &client);
+                    const RECT action = ViewSettingsWarningActionRect(client.right);
+                    cursor = PtInRect(&action, point) ? IDC_HAND : IDC_ARROW;
+                } else if (point.y < TotalNotificationOffset()) {
                     RECT clientR{};
                     GetClientRect(toolbarHwnd_, &clientR);
                     const auto [scanWidth, howWidth, resultWidth,
@@ -14080,7 +16991,12 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                     const int firstActionLeft = authorizationDenied
                         ? scanLeft - UiScaled(5) - retryAuthorizationWidth
                         : scanLeft;
-                    if (ShowApiNotification() &&
+                    const RECT optOut = ApiOptOutRect(clientR.right);
+                    if (ShowApiNotification() && !authorizationDenied &&
+                        (awaitingUserApproval_ || vtsApi_.IsAwaitingAuthorization()) &&
+                        PtInRect(&optOut, point)) {
+                        cursor = IDC_HAND;
+                    } else if (point.y >= UpdateNotificationHeight() && ShowApiNotification() &&
                         (authorizationDenied ||
                          (!awaitingUserApproval_ &&
                           !vtsApi_.IsAwaitingAuthorization())) &&
@@ -14104,6 +17020,12 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     }
 
     void SetLocked(bool locked) {
+        if (locked) {
+            CloseImagePanel(false);
+            CloseFeatherPanel();
+        }
+        if (locked) EndViewEdit();
+        if (locked && toolbarGuideHwnd_) FinishToolbarGuide(false);
         if (locked && capturingHotkey_) {
             CancelHotkeyCapture();
         }
@@ -14164,21 +17086,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         SetWindowPos(
             hwnd_, WindowZOrder(), 0, 0, 0, 0,
             overlayFlags);
-        if (toolbarHwnd_) {
-            PositionToolbar();
-            if (overlayVisible_ && (!locked_ || debugMode_)) {
-                ShowWindow(toolbarHwnd_, SW_SHOWNOACTIVATE);
-                SetWindowPos(
-                    toolbarHwnd_, WindowZOrder(), 0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-                InvalidateRect(toolbarHwnd_, nullptr, FALSE);
-            } else {
-                ShowWindow(toolbarHwnd_, SW_HIDE);
-                if (!overlayVisible_) {
-                    ShowWindow(hwnd_, SW_HIDE);
-                }
-            }
-        }
+        PositionToolbar();
+        if (!overlayVisible_) ShowWindow(hwnd_, SW_HIDE);
     }
 
     LRESULT OnMessage(UINT message, WPARAM wParam, LPARAM lParam) {
@@ -14188,9 +17097,43 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             return 0;
         }
         switch (message) {
+        case kActivateExistingMessage: {
+            if (IsIconic(hwnd_)) ShowWindow(hwnd_, SW_RESTORE);
+            UpdateDesktopPause();
+            if (!overlayVisible_) SetOverlayVisible(true);
+            const HWND target = IsWindowVisible(toolbarHwnd_) ? toolbarHwnd_ : hwnd_;
+            if (!SetForegroundWindow(target)) {
+                SetWindowPos(target, HWND_TOP, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+            return 0;
+        }
         case WM_TIMER:
             if (wParam == 67) { UpdateDesktopPause(); return 0; }
+            if (wParam == kUpdateTimer) { PollUpdate(); return 0; }
+            if (wParam == kUpdateNoticeDismissTimer) {
+                if (updateNoticeDismissAt_ == Clock::time_point{}) return 0;
+                const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(
+                    updateNoticeDismissAt_ - Clock::now());
+                if (remaining.count() <= 0) {
+                    ShowUpdateBanner({});
+                } else {
+                    SetTimer(hwnd_, kUpdateNoticeDismissTimer, static_cast<UINT>(remaining.count()), nullptr);
+                }
+                return 0;
+            }
             break;
+        case kUpdateStartupMessage:
+            if (updater_) {
+                updater_->OnStartup(updateStartupTask_, updateStartupToken_);
+                PollUpdate();
+                if (updater_->Poll().phase == vtsfloat::update::Phase::Idle) {
+                    KillTimer(hwnd_, kUpdateTimer);
+                }
+                updateStartupTask_.clear();
+                updateStartupToken_.clear();
+            }
+            return 0;
         case kSetLockedMessage:
             SetLocked(wParam != 0);
             return 0;
@@ -14227,6 +17170,13 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 return 0;
             }
             break;
+        case WM_KEYDOWN:
+            if (viewEditing_ && wParam == VK_ESCAPE) {
+                if (cropEditing_) EndCropEdit(false);
+                else EndViewEdit();
+                return 0;
+            }
+            break;
         case WM_SETCURSOR:
             {
                 // Layered windows may report HTCAPTION/HTTRANSPARENT while
@@ -14236,13 +17186,9 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 POINT p{};
                 GetCursorPos(&p);
                 ScreenToClient(hwnd_, &p);
-                if (statusMode_ != VtsStatusMode::Hidden && !statusDismissed_ &&
-                    (PtInRect(&statusExeRect_, p) ||
-                     PtInRect(&statusBatchRect_, p) ||
-                     PtInRect(&statusAddPathRect_, p) ||
-                     PtInRect(&statusManualPathRect_, p) ||
-                     PtInRect(&statusDocsRect_, p))) {
-                    SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                if (cropEditing_ && LOWORD(lParam) == HTCLIENT) {
+                    const unsigned action = cropDrag_ ? cropDrag_ : CropDragAt(p);
+                    SetCursor(LoadCursorW(nullptr, CropResizeCursor(action)));
                     return TRUE;
                 }
                 if ((opaqueBackgroundDetected_ && !bgWarningPermanentlyDismissed_ &&
@@ -14256,19 +17202,14 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             }
             break;
         case WM_LBUTTONDOWN:
-            if (statusMode_ != VtsStatusMode::Hidden && !statusDismissed_) {
-                POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-                statusPressedButton_ = PtInRect(&statusExeRect_, point) ? 1
-                    : (PtInRect(&statusBatchRect_, point) ? 2
-                    : ((PtInRect(&statusAddPathRect_, point) ||
-                        PtInRect(&statusManualPathRect_, point)) ? 3
-                    : (PtInRect(&statusDocsRect_, point) ? 4 : 0)));
-                if (statusPressedButton_ != 0) {
-                    SetCapture(hwnd_);
-                    statusFrameDirty_ = true;
-                    InvalidateRect(hwnd_, nullptr, FALSE);
-                    return 0;
-                }
+            if (cropEditing_) {
+                SetFocus(hwnd_);
+                const POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+                cropDrag_ = CropDragAt(point);
+                cropDragStart_ = NormalizedCropPoint(lParam);
+                cropDragStartRect_ = cropDraft_;
+                SetCapture(hwnd_);
+                return 0;
             }
             if (opaqueBackgroundDetected_ && !bgWarningPermanentlyDismissed_) {
                 POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
@@ -14297,52 +17238,30 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                 }
             }
             break;
-        case WM_LBUTTONUP:
-            if (statusPressedButton_ != 0) {
-                POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-                const int pressed = statusPressedButton_;
-                statusPressedButton_ = 0;
-                if (GetCapture() == hwnd_) ReleaseCapture();
-                statusFrameDirty_ = true;
-                InvalidateRect(hwnd_, nullptr, FALSE);
-                if ((pressed == 1 && PtInRect(&statusExeRect_, point)) ||
-                    (pressed == 2 && PtInRect(&statusBatchRect_, point))) {
-                    LaunchVtsFromStatus(pressed == 2);
-                } else if (pressed == 3 &&
-                    (PtInRect(&statusAddPathRect_, point) ||
-                     PtInRect(&statusManualPathRect_, point))) {
-                    ChooseVtsLaunchPath();
-                } else if (pressed == 4 && PtInRect(&statusDocsRect_, point)) {
-                    Log("[vts status] action=open_docs");
-                    const INT_PTR openResult = reinterpret_cast<INT_PTR>(
-                        ShellExecuteW(nullptr, L"open", kDocsUrl, nullptr, nullptr,
-                                      SW_SHOWNORMAL));
-                    if (openResult <= 32) {
-                        Log("[vts status] open_docs failed=" +
-                            std::to_string(openResult));
-                    }
-                }
+        case WM_MOUSEMOVE:
+            if (cropEditing_ && cropDrag_) {
+                UpdateCropDrag(lParam);
                 return 0;
             }
             break;
+        case WM_LBUTTONUP:
+            if (cropEditing_ && cropDrag_) {
+                UpdateCropDrag(lParam);
+                cropDrag_ = 0;
+                if (GetCapture() == hwnd_) ReleaseCapture();
+                return 0;
+            }
+            break;
+        case WM_CAPTURECHANGED:
+            cropDrag_ = 0;
+            break;
         case WM_NCHITTEST: {
+            if (cropEditing_) return HTCLIENT;
             const bool statusInteractive =
                 statusMode_ != VtsStatusMode::Hidden && !statusDismissed_;
-            if (locked_ && !statusInteractive) {
-                return HTTRANSPARENT;
-            }
+            if (locked_ || statusInteractive) return HTTRANSPARENT;
             POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             ScreenToClient(hwnd_, &point);
-            if (statusInteractive) {
-                if (PtInRect(&statusExeRect_, point) ||
-                    PtInRect(&statusBatchRect_, point) ||
-                    PtInRect(&statusAddPathRect_, point) ||
-                    PtInRect(&statusManualPathRect_, point) ||
-                    PtInRect(&statusDocsRect_, point)) {
-                    return HTCLIENT;
-                }
-                return HTTRANSPARENT;
-            }
             if (!locked_ &&
                 ((opaqueBackgroundDetected_ && !bgWarningPermanentlyDismissed_ &&
                   (PtInRect(&bgWarningCloseRect_, point) ||
@@ -14369,25 +17288,46 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         }
         case WM_GETMINMAXINFO: {
             auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
-            info->ptMinTrackSize.x = benchmarkActive_ ? 1 : kMinimumWidth;
-            info->ptMinTrackSize.y = 96;
+            const bool editedBounds = CropActive() || imageTransform_.active();
+            info->ptMinTrackSize.x = editedBounds ? 1 : kMinimumWidth;
+            info->ptMinTrackSize.y = editedBounds ? 1 : 96;
             return 0;
+        }
+        case WM_MOVING: {
+            if (!cropEditing_) break;
+            auto* proposed = reinterpret_cast<RECT*>(lParam);
+            MONITORINFO info{sizeof(MONITORINFO)};
+            if (GetMonitorInfoW(MonitorFromRect(proposed, MONITOR_DEFAULTTONEAREST), &info)) {
+                const RECT work = info.rcWork;
+                const auto readout = BuildCropReadoutLayout(proposed->right - proposed->left, work.right - work.left);
+                const LONG overflow = proposed->bottom + UiScaled(kCropReadoutGap) + readout.size.cy - work.bottom;
+                if (overflow > 0) OffsetRect(proposed, 0, -overflow);
+            }
+            return TRUE;
         }
         case WM_SIZING: {
             if (!aspectLocked_ || !sourceWidth_ || !sourceHeight_) {
                 break;
             }
             auto* rect = reinterpret_cast<RECT*>(lParam);
-            const double aspect = static_cast<double>(sourceWidth_) / sourceHeight_;
-            int width = (std::max)(
-                kMinimumWidth, static_cast<int>(rect->right - rect->left));
-            int height = rect->bottom - rect->top;
-            if (wParam == WMSZ_TOP || wParam == WMSZ_BOTTOM) {
-                width = (std::max)(
-                    kMinimumWidth, static_cast<int>(height * aspect + 0.5));
-                height = static_cast<int>(width / aspect + 0.5);
-            } else {
-                height = static_cast<int>(width / aspect + 0.5);
+            const RECT region = DisplayImageBounds();
+            const bool cropped = CropActive() || imageTransform_.active();
+            const int regionWidth = region.right - region.left;
+            const int regionHeight = region.bottom - region.top;
+            const double aspect = static_cast<double>(regionWidth) / regionHeight;
+            const int minimumWidth = cropped ? 1 : kMinimumWidth;
+            int width = (std::max)(minimumWidth, static_cast<int>(rect->right - rect->left));
+            const bool vertical = wParam == WMSZ_TOP || wParam == WMSZ_BOTTOM;
+            const int requestedHeight = (std::max)(1L, rect->bottom - rect->top);
+            if (vertical) width = (std::max)(minimumWidth, static_cast<int>(requestedHeight * aspect + 0.5));
+            int height = (std::max)(1, static_cast<int>(width / aspect + 0.5));
+            MONITORINFO info{sizeof(MONITORINFO)};
+            if (cropped && GetMonitorInfoW(MonitorFromRect(rect, MONITOR_DEFAULTTONEAREST), &info)) {
+                const double scale = vertical ? requestedHeight / static_cast<double>(regionHeight)
+                    : width / static_cast<double>(regionWidth);
+                const SIZE size = BoundedCropSize(region, info.rcWork, scale);
+                width = size.cx;
+                height = size.cy;
             }
             if (wParam == WMSZ_LEFT || wParam == WMSZ_TOPLEFT || wParam == WMSZ_BOTTOMLEFT) {
                 rect->left = rect->right - width;
@@ -14402,20 +17342,11 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             return TRUE;
         }
         case WM_ENTERSIZEMOVE:
-            // The panel is initially placed next to the model for convenience,
-            // but a user-initiated model move/resize detaches it immediately.
-            // From this point on, dragging either window cannot pull or repaint
-            // the other one for the remainder of this panel session.
-            if (borderDialogOpen_ && borderPanelHwnd_ &&
-                IsWindow(borderPanelHwnd_)) {
-                personalPanelManuallyPositioned_ = true;
-            }
             StartInteractiveRendering();
             return 0;
         case WM_WINDOWPOSCHANGED:
             UpdateMonitorRefreshRate();
             PositionToolbar();
-            PositionBorderPanel();
             break;
         case WM_DISPLAYCHANGE:
             UpdateMonitorRefreshRate(true);
@@ -14435,8 +17366,10 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
             SaveWindowPlacement();
             return 0;
         case WM_CLOSE:
-            FinishResolutionBenchmark(false, false);
-            SaveWindowPlacement();
+            if (!updateClosing_) {
+                SaveWindowPlacement();
+                exportDebugLogOnExit_ = debugMode_;
+            }
             RestoreExpressionsBeforeShutdown();
             DestroyWindow(hwnd_);
             return 0;
@@ -14475,65 +17408,163 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                        : DefWindowProcW(hwnd, message, wParam, lParam);
     }
 
+    int VtsStatusActionAt(POINT point) const {
+        if (PtInRect(&statusExeRect_, point)) return 1;
+        if (PtInRect(&statusBatchRect_, point)) return 2;
+        if (PtInRect(&statusAddPathRect_, point) || PtInRect(&statusManualPathRect_, point)) return 3;
+        if (PtInRect(&statusShortcutRect_, point)) return 5;
+        if (PtInRect(&statusRemoveShortcutRect_, point)) return 6;
+        if (!IsRectEmpty(&statusRemoveShortcutRect_) && point.x >= statusShortcutRect_.right &&
+            point.x < statusRemoveShortcutRect_.left && point.y >= statusShortcutRect_.top &&
+            point.y < statusShortcutRect_.bottom) return 7;
+        if (PtInRect(&statusDocsRect_, point)) return 4;
+        return 0;
+    }
+
     static LRESULT CALLBACK StatusWindowProc(
-        HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
-        LayeredOverlay* overlay = reinterpret_cast<LayeredOverlay*>(
-            GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+        auto* overlay = reinterpret_cast<LayeredOverlay*>(GetWindowLongPtrW(window, GWLP_USERDATA));
         if (message == WM_NCCREATE) {
             const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
             overlay = static_cast<LayeredOverlay*>(create->lpCreateParams);
-            overlay->statusHwnd_ = hwnd;
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(overlay));
+            SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(overlay));
         }
-        if (!overlay) return DefWindowProcW(hwnd, message, wParam, lParam);
+        if (!overlay) return DefWindowProcW(window, message, wParam, lParam);
         switch (message) {
-        case WM_COMMAND:
-            if (LOWORD(wParam) == kStatusLaunchExeCommand) {
-                overlay->LaunchVtsFromStatus(false);
-                return 0;
-            }
-            if (LOWORD(wParam) == kStatusLaunchBatchCommand) {
-                overlay->LaunchVtsFromStatus(true);
-                return 0;
+        case WM_MOUSEMOVE: {
+            const POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            const int action = overlay->VtsStatusActionAt(point);
+            const int hover = !overlay->shortcutApp_.empty() && action >= 5 ? (action == 6 ? 6 : 5) : 0;
+            if (std::exchange(overlay->shortcutHoverAction_, hover) != hover) overlay->statusFrameDirty_ = true;
+            TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, window, 0};
+            TrackMouseEvent(&track);
+            return 0;
+        }
+        case WM_MOUSELEAVE:
+            if (std::exchange(overlay->shortcutHoverAction_, 0)) overlay->statusFrameDirty_ = true;
+            return 0;
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
+        case WM_NCHITTEST: {
+            POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ScreenToClient(window, &point);
+            return overlay->VtsStatusActionAt(point) != 0 ? HTCLIENT : HTTRANSPARENT;
+        }
+        case WM_SETCURSOR:
+            if (LOWORD(lParam) == HTCLIENT) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
             }
             break;
+        case WM_LBUTTONDOWN: {
+            const POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            overlay->statusPressedButton_ = overlay->VtsStatusActionAt(point);
+            if (overlay->statusPressedButton_) {
+                SetCapture(window);
+                overlay->statusFrameDirty_ = true;
+            }
+            return 0;
+        }
+        case WM_CAPTURECHANGED:
+            overlay->statusPressedButton_ = 0;
+            overlay->statusFrameDirty_ = true;
+            return 0;
+        case WM_LBUTTONUP: {
+            const POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            const int pressed = std::exchange(overlay->statusPressedButton_, 0);
+            if (GetCapture() == window) ReleaseCapture();
+            overlay->statusFrameDirty_ = true;
+            if (pressed == 0 || pressed != overlay->VtsStatusActionAt(point)) return 0;
+            switch (pressed) {
+            case 1: overlay->LaunchVtsFromStatus(false); break;
+            case 2: overlay->LaunchVtsFromStatus(true); break;
+            case 3: overlay->ChooseVtsLaunchPath(); break;
+            case 5: overlay->ActivateShortcutApp(); break;
+            case 6: overlay->SaveShortcutApp({}); break;
+            case 4: {
+                Log("[vts status] action=open_docs");
+                const INT_PTR result = reinterpret_cast<INT_PTR>(
+                    ShellExecuteW(nullptr, L"open", kDocsUrl, nullptr, nullptr, SW_SHOWNORMAL));
+                if (result <= 32) Log("[vts status] open_docs failed=" + std::to_string(result));
+                break;
+            }
+            }
+            return 0;
+        }
         case WM_CLOSE:
             overlay->statusDismissed_ = true;
-            ShowWindow(hwnd, SW_HIDE);
+            ShowWindow(window, SW_HIDE);
             return 0;
-        case WM_CTLCOLORSTATIC: {
-            HDC dc = reinterpret_cast<HDC>(wParam);
-            SetBkMode(dc, TRANSPARENT);
-            return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
-        }
-        default:
+        case WM_NCDESTROY:
+            if (overlay->statusHwnd_ == window) overlay->statusHwnd_ = nullptr;
             break;
         }
-        return DefWindowProcW(hwnd, message, wParam, lParam);
+        return DefWindowProcW(window, message, wParam, lParam);
     }
 
     HINSTANCE instance_ = nullptr;
     HWND hwnd_ = nullptr;
     HWND toolbarHwnd_ = nullptr;
     HWND statusHwnd_ = nullptr;
-    HWND statusHeadline_ = nullptr;
-    HWND statusInstructions_ = nullptr;
-    HWND statusPath_ = nullptr;
-    HWND statusLaunchExe_ = nullptr;
-    HWND statusLaunchBatch_ = nullptr;
+    HWND debugReadoutHwnd_ = nullptr;
+    HWND toolbarGuideHwnd_ = nullptr;
+    HWND toolbarGuideTitle_ = nullptr;
+    HWND toolbarGuideText_ = nullptr;
+    HWND toolbarGuideNext_ = nullptr;
+    HWND toolbarGuideClose_ = nullptr;
+    HFONT toolbarGuideTitleFont_ = nullptr;
+    HFONT toolbarGuideBodyFont_ = nullptr;
+    int toolbarGuideWidth_ = 0;
+    int toolbarGuideHeight_ = 0;
+    bool toolbarGuideSeen_ = false;
+    ToolbarGuideStep toolbarGuideStep_ = ToolbarGuideStep::Done;
+    POINT toolbarGuideFrom_{};
+    Clock::time_point toolbarGuideAnimationStarted_{};
+    HWND githubDropdownHwnd_ = nullptr;
+    HWND githubVersionLabel_ = nullptr;
+    HWND githubUpdateButton_ = nullptr;
+    HWND githubDebugButton_ = nullptr;
+    HFONT githubDropdownFont_ = nullptr;
+    int githubDropdownWidth_ = 0;
+    Clock::time_point githubDropdownLastHover_{};
+    HWND githubHoveredButton_ = nullptr;
+    HWND updateBannerHwnd_ = nullptr;
+    HWND updateBannerLabel_ = nullptr;
+    HWND updateLaterButton_ = nullptr;
+    HWND updateInstallButton_ = nullptr;
+    HWND updateDismissButton_ = nullptr;
+    HFONT updateBannerFont_ = nullptr;
+    int updateBannerFontHeight_ = 0;
+    std::wstring updateBannerFontFace_;
+    std::wstring updateBannerText_;
+    std::filesystem::path updateStartupTask_;
+    std::wstring updateStartupToken_;
+    std::string updateLastDiagnostic_;
+    std::unique_ptr<vtsfloat::update::Updater> updater_;
+    std::uint64_t updateRevision_ = 0;
+    UpdateNoticeStyle updateNoticeStyle_ = UpdateNoticeStyle::Standard;
+    UpdateNoticeDismissal updateNoticeDismissal_ = UpdateNoticeDismissal::None;
+    Clock::time_point updateNoticeDismissAt_{};
+    bool updateDismissed_ = false;
+    bool updateClosing_ = false;
     RECT statusExeRect_{};
     RECT statusBatchRect_{};
     RECT statusAddPathRect_{};
     RECT statusManualPathRect_{};
     RECT statusDocsRect_{};
+    RECT statusShortcutRect_{}, statusRemoveShortcutRect_{};
+    std::filesystem::path shortcutApp_;
+    int shortcutHoverAction_ = 0;
     int statusPressedButton_ = 0;
     bool statusPathLookupFailed_ = false;
     bool statusFrameDirty_ = true;
-    int statusDrawWidth_ = 0;
-    int statusDrawHeight_ = 0;
     HICON appIconLarge_ = nullptr;
     HICON appIconSmall_ = nullptr;
-    HICON githubIcon_ = nullptr;
+    ULONG_PTR githubGraphicsToken_ = 0;
+    std::array<HICON, 7> toolbarToggleIcons_{};
+    int toolbarToggleIconSize_ = 0;
+    HWND toolbarHintHwnd_ = nullptr;
+    ToolbarButton toolbarHintButton_ = ToolbarButton::None;
     HANDLE instanceMutex_ = nullptr;
     DWORD uiThreadId_ = 0;
     Clock::time_point lastVtsStatusCheck_{};
@@ -14541,6 +17572,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     std::filesystem::path statusDirectory_;
     bool statusDismissed_ = false;
     bool hasReceivedModel_ = false;
+    bool apiOptedOut_ = false;
     bool apiStartScheduled_ = false;
     bool apiStartedAfterModel_ = false;
     bool lastApiNotificationVisible_ = false;
@@ -14551,7 +17583,9 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     bool capturingFps_ = false;
     bool fpsReplaceOnNextDigit_ = false;
     bool debugMode_ = false;
+    bool exportDebugLogOnExit_ = false;
     bool aspectLocked_ = true;
+    bool fadeShadowOnHover_ = false;
     bool hoverFadeEnabled_ = true;
     int hoverOpacityPercent_ = kDefaultHoverOpacityPercent;
     double hoverOpacityRestoreDelaySeconds_ =
@@ -14561,6 +17595,96 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     Clock::time_point hoverOpacityRestoreAt_{};
     int modelOpacityPercent_ = 100;
     int uiScalePercent_ = kDefaultUiScalePercent;
+    ToolbarLayout toolbarLayout_{};
+    CropToolbarLayout cropToolbarLayout_{};
+    CropReadoutLayout cropReadoutLayout_{};
+    HWND cropReadoutHwnd_ = nullptr;
+    HWND cropWidthHwnd_ = nullptr;
+    HWND cropHeightHwnd_ = nullptr;
+    HWND numericDragEdit_ = nullptr;
+    LONG numericDragStart_ = 0;
+    double numericDragBase_ = 0;
+    bool numericDragging_ = false;
+    HWND shadowPanelHwnd_ = nullptr;
+    HFONT shadowPanelFont_ = nullptr;
+    std::array<HWND, 6> shadowFields_{};
+    std::vector<std::uint32_t> shadowWheelPixels_;
+    double shadowHue_ = 0, shadowSaturation_ = 0;
+    int shadowColorValue_ = 0;
+    bool shadowColorOpen_ = false;
+    std::array<vtsfloat::ImageShadow, 2> shadow_{}, shadowDraft_{};
+    std::array<vtsfloat::ShadowMask, 2> shadowMasks_;
+    std::array<double, 2> shadowOffsetX_{}, shadowOffsetY_{};
+    std::array<bool, 2> shadowMaskReady_{};
+    size_t shadowTab_ = 1;
+    int shadowDrag_ = -1;
+    double shadowPanelScale_ = 1;
+    bool shadowUpdatingFields_ = false;
+    bool imagePanelDetached_ = false, shadowPanelDetached_ = false;
+    HWND imagePanelHwnd_ = nullptr;
+    HFONT imagePanelFont_ = nullptr;
+    std::array<HWND, 15> imagePanelEdits_{};
+    vtsfloat::ImageTransform imageTransform_{}, imageTransformDraft_{};
+    vtsfloat::ImageTone imageTone_{}, imageToneDraft_{};
+    vtsfloat::ImageMapping subjectImageMapping_{}, subjectOutlineMapping_{};
+    struct {
+        vtsfloat::ToneLut lut{};
+        vtsfloat::ColorGrade grade{};
+    } toneSettings_;
+    vtsfloat::ImageEffects imageEffects_{}, imageEffectsDraft_{};
+    vtsfloat::ImageBlend imageBlendMode_ = vtsfloat::ImageBlend::Normal;
+    vtsfloat::ImageBlendTable imageBlendTable_{};
+    vtsfloat::ImageBackdrop imageBackdrop_;
+    std::array<vtsfloat::Rgb, 100> imageBackdropColors_{};
+    Clock::time_point imageBackdropColorTime_{};
+    int imageBlendGrid_ = 3;
+    std::mutex imageBackdropMutex_;
+    int imageBlendStrengthHundredths_ = 10000;
+    bool imageBackdropUnavailable_ = false;
+    Clock::time_point nextImageBackdrop_{};
+    std::vector<uint8_t> imageSharpenBuffer_;
+    int imageClarity_ = 0, imageVignette_ = 0;
+    int imageSharpen_ = 0, imageEffectDrag_ = -1;
+    double imagePanelScale_ = 1;
+    bool colorGradeEnabled_ = false, imageEffectsTab_ = false;
+    RECT imagePreviewBounds_{};
+    int imageCurveChannel_ = 0, imageCurveKnot_ = -1, imagePanelHover_ = 0;
+    int imageLevelsDrag_ = -1;
+    bool imageUpdatingFields_ = false;
+    bool toneEnabled_ = false, toneGpuDirty_ = true;
+    HWND featherPanelHwnd_ = nullptr;
+    HWND cropAngleHwnd_ = nullptr;
+    HWND cropInputPressed_ = nullptr;
+    LONG cropInputStartX_ = 0;
+    double cropInputBase_ = 0;
+    bool cropInputDragging_ = false;
+    HWND featherScrubHwnd_ = nullptr;
+    HWND featherPressedEdit_ = nullptr;
+    std::array<HWND, FeatherSideCount> featherPanelEdits_{};
+    HFONT featherEditFont_ = nullptr;
+    HFONT cropReadoutFont_ = nullptr;
+    RECT cropSelection_ = kFullCrop;
+    RECT cropBeforeEditSelection_{};
+    bool cropNumericSaved_ = false;
+    RECT cropDraft_ = kFullCrop;
+    RECT cropBeforeEditBounds_{};
+    RECT cropDragStartRect_{};
+    POINT cropDragStart_{};
+    SIZE cropAspectSize_{};
+    FeatherEdges cropFeather_{};
+    FeatherEdges cropFeatherDraft_{};
+    FeatherEdge featherDragBase_{};
+    LONG featherPressX_ = 0;
+    std::array<FeatherRamp, FeatherSideCount> featherRamps_{};
+    int featherPanelHover_ = FeatherNoAction;
+    int featherPanelPressed_ = FeatherNoAction;
+    int featherScrubSide_ = FeatherNoAction;
+    bool featherDragging_ = false;
+    bool featherPanelDetached_ = false;
+    unsigned cropDrag_ = 0;
+    bool viewEditing_ = false;
+    bool cropEditing_ = false;
+    bool cropAspectLocked_ = false;
     int hoverExpandPx_ = 0;
     bool excludeEffectsFromHover_ = false;
     bool subjectHoverRegionConfigured_ = false;
@@ -14625,6 +17749,12 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     bool showHoverExpandPreview_ = false;
     bool hoverExpandEditing_ = false;
     bool showSubjectRegionPreview_ = false;
+    int subjectOutlineWidth_ = 0;
+    int subjectOutlineHeight_ = 0;
+    int subjectOutlineGridWidth_ = 0;
+    int subjectOutlineGridHeight_ = 0;
+    std::vector<std::uint8_t> subjectOutlineMask_;
+    std::vector<SubjectOutlinePixel> subjectOutlinePixels_;
     Clock::time_point hoverExpandPreviewUntil_{};
     Clock::time_point hoverExpandFadeStarted_ = Clock::now();
     double hoverExpandPreviewAlpha_ = 0.0;
@@ -14674,6 +17804,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     bool bgWarningPermanentlyDismissed_ = false;
     RECT bgWarningCloseRect_{};
     RECT bgWarningDontShowRect_{};
+    bool viewSettingsWarningDismissed_ = false;
     bool gpuWarningPermanentlyDismissed_ = false;
     bool gpuWarningShown_ = false;
     Clock::time_point gpuWarningStart_{};
@@ -14691,6 +17822,10 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
 
     spoutDX receiver_;
     bool spoutFrameSyncDisabled_ = false;
+    bool spoutFrameAvailable_ = false;
+    bool spoutNeedsChoice_ = false;
+    std::string spoutSender_, manualSpoutSender_;
+    Clock::time_point nextSpoutScan_{};
     bool spoutRebindInProgress_ = false;
     Clock::time_point lastSpoutRebindCheck_{};
     ComPtr<ID3D11Device> device_;
@@ -14728,6 +17863,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     ComPtr<ID3D11SamplerState> scaleSampler_;
     ComPtr<ID3D11SamplerState> scalePointSampler_;
     ComPtr<ID3D11Buffer> scaleSettingsBuffer_;
+    ComPtr<ID3D11Buffer> toneSettingsBuffer_;
     ComPtr<ID3D11RasterizerState> scaleRasterizer_;
     bool gpuScalerUnavailable_ = false;
     UINT scaleSourceWidth_ = 0;
@@ -14756,7 +17892,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     std::uint64_t requested_ = 0;
     std::uint64_t received_ = 0;
     std::uint64_t newFrames_ = 0;
-    std::uint64_t updated_ = 0;
+    std::uint64_t updated_ = 0, modelPresentations_ = 0;
+    Clock::time_point firstModelPresentation_{}, lastModelPresentation_{};
     std::uint64_t errors_ = 0;
     double receiveMs_ = 0.0;
     double mapMs_ = 0.0;
@@ -14774,61 +17911,44 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     double senderFps_ = 0.0;
     std::vector<double> debugFpsHistory_;
     std::vector<double> debugFrameMsHistory_;
-    std::vector<std::uint8_t> debugTextScratch_;
-    std::optional<vtsfloat::benchmark::CsvCapture> benchmarkWriter_;
-    std::vector<vtsfloat::benchmark::Sample> benchmarkSamples_;
-    std::vector<int> benchmarkGpuQueue_;
-    std::size_t benchmarkGpuCursor_ = 0;
-    bool benchmarkTestAllGpus_ = false;
-    bool benchmarkResumeChecked_ = false;
-    std::filesystem::path benchmarkCurrentRawFileName_;
-    std::size_t benchmarkTotalSampleCount_ = 0;
-    double benchmarkVtsFpsSum_ = 0.0;
-    double benchmarkVtsFpsMin_ = 0.0;
-    double benchmarkVtsFpsMax_ = 0.0;
-    double benchmarkVtsmFpsSum_ = 0.0;
-    double benchmarkVtsmFpsMin_ = 0.0;
-    double benchmarkVtsmFpsMax_ = 0.0;
-    bool benchmarkGpuSummaryWritten_ = false;
-    std::string benchmarkGpuStartTime_;
-    std::size_t benchmarkPairIndex_ = 0;
-    bool benchmarkActive_ = false;
-    bool benchmarkPairMatched_ = false;
-    bool benchmarkOriginalAspectLocked_ = false;
-    bool benchmarkOriginalDebugMode_ = false;
-    bool benchmarkOriginalRectValid_ = false;
-    RECT benchmarkOriginalRect_{};
-    Clock::time_point benchmarkWarmupUntil_{};
-    Clock::time_point benchmarkResolutionDeadline_{};
-    bool benchmarkManualFallbackShown_ = false;
-    HWND benchmarkVtsWindow_ = nullptr;
-    DWORD benchmarkVtsProcessId_ = 0;
-    bool benchmarkOriginalVtsPlacementValid_ = false;
-    WINDOWPLACEMENT benchmarkOriginalVtsPlacement_{};
+
 };
 
 }  // namespace
 
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     SetUnhandledExceptionFilter(&UnhandledExceptionHandler);
     AddVectoredExceptionHandler(0, &VectoredExceptionHandler);
     _set_purecall_handler(&PurecallHandler);
     _set_invalid_parameter_handler(&InvalidParamHandler);
     try {
-        if (commandLine) {
-            std::wistringstream arguments(commandLine);
-            std::wstring mode;
-            DWORD parentProcessId = 0;
-            arguments >> mode >> parentProcessId;
+        int argc = 0;
+        std::unique_ptr<LPWSTR, decltype(&LocalFree)> argv(
+            CommandLineToArgvW(GetCommandLineW(), &argc), LocalFree);
+        std::filesystem::path updateTask;
+        std::wstring updateToken;
+        if (argv && argc > 1) {
+            const std::wstring_view mode(argv.get()[1]);
             if (mode == L"--stop") {
                 return StopRunningOverlay();
             }
-            if (mode == L"--restart-after" && parentProcessId != 0) {
-                return RunDelayedRestart(parentProcessId);
+            if (mode == L"--restart-after" && argc > 2) {
+                wchar_t* end = nullptr;
+                const DWORD parentProcessId = wcstoul(argv.get()[2], &end, 10);
+                if (parentProcessId && end && !*end) return RunDelayedRestart(parentProcessId);
+            }
+            if (mode == L"--update-task" && argc == 5 &&
+                std::wstring_view(argv.get()[3]) == L"--update-token") {
+                updateTask = argv.get()[2];
+                updateToken = argv.get()[4];
             }
         }
+        struct Apartment {
+            HRESULT result = RoInitialize(RO_INIT_SINGLETHREADED);
+            ~Apartment() { if (SUCCEEDED(result)) RoUninitialize(); }
+        } apartment;
         LayeredOverlay overlay;
-        return overlay.Run(instance);
+        return overlay.Run(instance, std::move(updateTask), std::move(updateToken));
     } catch (const std::exception& error) {
         Log(std::string("[layered fatal] ") + error.what());
         CopyLogToDesktop(std::string("std::exception: ") + error.what());

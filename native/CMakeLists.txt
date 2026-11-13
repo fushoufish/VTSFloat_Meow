@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(VTSFloat_Meow LANGUAGES CXX RC)
+project(VTSFloat_Meow VERSION 1.3.0 LANGUAGES CXX RC)
+
+configure_file(update_version.h.in update_version.h @ONLY)
 
 set(SPOUT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/Spout2")
 set(SPOUT_GL "${SPOUT_ROOT}/SPOUTSDK/SpoutGL")
@@ -33,11 +35,14 @@ add_executable(vts_spout_test_sender
 
 add_executable(vts_overlay_layered WIN32
     overlay_layered.cpp
-    benchmark_capture.cpp
+    updater.cpp
     localization.cpp
     overlay_resources.rc
     ${SPOUT_DX11_SOURCES}
 )
+target_include_directories(vts_overlay_layered PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+set_property(SOURCE overlay_resources.rc APPEND PROPERTY OBJECT_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/updater.ps1")
 
 add_executable(vts_localization_audit
     localization_layout_audit.cpp
@@ -101,8 +106,8 @@ set(SPOUT_DX11_LIBRARIES
 target_link_libraries(vts_overlay_dx11 PRIVATE ${SPOUT_DX11_LIBRARIES})
 target_link_libraries(vts_spout_bridge PRIVATE ${SPOUT_DX11_LIBRARIES})
 target_link_libraries(vts_spout_test_sender PRIVATE ${SPOUT_DX11_LIBRARIES})
-target_link_libraries(vts_overlay_layered PRIVATE ${SPOUT_DX11_LIBRARIES} avrt winmm pdh winhttp gdiplus shlwapi iphlpapi dwmapi uxtheme dbghelp)
-target_link_libraries(vts_localization_audit PRIVATE user32 gdi32)
+target_link_libraries(vts_overlay_layered PRIVATE ${SPOUT_DX11_LIBRARIES} avrt winmm pdh winhttp gdiplus shlwapi iphlpapi dwmapi uxtheme dbghelp bcrypt windowsapp)
+target_link_libraries(vts_localization_audit PRIVATE user32 gdi32 shell32)
 
 set_target_properties(vts_overlay_dx11 PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/bin"
@@ -153,16 +158,17 @@ set_target_properties(vts_overlay_layered PROPERTIES
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(vts_updater_tests updater_tests.cpp updater.cpp)
+    target_compile_features(vts_updater_tests PRIVATE cxx_std_17)
+    target_compile_definitions(vts_updater_tests PRIVATE UNICODE _UNICODE NOMINMAX)
+    target_link_libraries(vts_updater_tests PRIVATE winhttp bcrypt windowsapp version)
+    if(MSVC)
+        target_compile_options(vts_updater_tests PRIVATE /W3 /EHsc /utf-8)
+    endif()
+    add_test(NAME updater_versions_and_routes COMMAND vts_updater_tests)
+
     add_executable(vts_desktop_mode_tests desktop_mode_tests.cpp)
     target_compile_features(vts_desktop_mode_tests PRIVATE cxx_std_17)
     add_test(NAME desktop_mode_bounds COMMAND vts_desktop_mode_tests)
 
-    add_executable(vts_benchmark_capture_tests
-        benchmark_capture_tests.cpp
-        benchmark_capture.cpp)
-    target_compile_features(vts_benchmark_capture_tests PRIVATE cxx_std_17)
-    if(MSVC)
-        target_compile_options(vts_benchmark_capture_tests PRIVATE /W3 /EHsc /utf-8)
-    endif()
-    add_test(NAME benchmark_capture COMMAND vts_benchmark_capture_tests)
 endif()

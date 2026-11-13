@@ -5,7 +5,9 @@ $NativeDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $UiSourcePath = Join-Path $NativeDir "overlay_layered.cpp"
 $TablePath = Join-Path $NativeDir "localization.cpp"
 
-$uiSource = Get-Content -Raw -Encoding UTF8 -LiteralPath $UiSourcePath
+$uiSource = (Get-Content -Raw -Encoding UTF8 -LiteralPath $UiSourcePath) + "`n" +
+    (Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $NativeDir "image_panel.inl")) + "`n" +
+    (Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $NativeDir "shadow_panel.inl"))
 $tableSource = Get-Content -Raw -Encoding UTF8 -LiteralPath $TablePath
 $tableMarker = 'constexpr Translation kTranslations[] = {'
 $tableStart = $tableSource.IndexOf($tableMarker)
@@ -61,6 +63,7 @@ if ($completeDefinitions.Count -ne $defined.Count) {
 # for raw Han literals. This catches a newly drawn Chinese label or prompt even
 # when the developer forgot to add Tr(...), which a table-only audit cannot.
 $runtimeSource = $trPattern.Replace($uiSource, '')
+$runtimeSource = [regex]::Replace($runtimeSource, 'kVtsApiPluginDeveloper\[\]\s*=\s*L"[^"]*"', '')
 $runtimeSource = [regex]::Replace(
     $runtimeSource, '#if\s+0.*?#endif', '', $regexOptions)
 $runtimeSource = [regex]::Replace(

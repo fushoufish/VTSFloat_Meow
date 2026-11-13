@@ -16,6 +16,7 @@
 #include <string>
 
 #include "SpoutDX.h"
+#include "cache_directory.h"
 
 using Microsoft::WRL::ComPtr;
 using Clock = std::chrono::steady_clock;
@@ -54,18 +55,18 @@ std::string WideToUtf8(const wchar_t* text) {
 std::filesystem::path LogPath() {
     wchar_t localAppData[MAX_PATH]{};
     if (!GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, ARRAYSIZE(localAppData))) {
-        return L"vts_spout_bridge.log";
+        return vtsfloat::CacheDirectory() / L"vts_spout_bridge.log";
     }
 
     UINT32 familyLength = 0;
     const LONG familyResult = GetCurrentPackageFamilyName(&familyLength, nullptr);
     if (familyResult != ERROR_INSUFFICIENT_BUFFER || familyLength == 0) {
-        return std::filesystem::path(localAppData) / L"vts_spout_bridge.log";
+        return vtsfloat::CacheDirectory() / L"vts_spout_bridge.log";
     }
 
     std::wstring family(familyLength, L'\0');
     if (GetCurrentPackageFamilyName(&familyLength, family.data()) != ERROR_SUCCESS) {
-        return std::filesystem::path(localAppData) / L"vts_spout_bridge.log";
+        return vtsfloat::CacheDirectory() / L"vts_spout_bridge.log";
     }
     family.resize(wcslen(family.c_str()));
 
