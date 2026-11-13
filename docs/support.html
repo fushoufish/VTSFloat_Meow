@@ -9,7 +9,8 @@
 .presets button{position:relative;padding:10px 3px 25px;white-space:nowrap}.presets small{position:absolute;right:5px;bottom:4px;font-size:.65rem;font-weight:500}
 .paypal-switch{width:calc(100% - 2 * (var(--card-padding) + 1px));margin:16px calc(var(--card-padding) + 1px) 0;background:#003087}
 .paypal-switch:hover{background:#00256a}
-.paypal-switch img{width:24px;height:24px;padding:3px;margin-right:8px;vertical-align:-6px;}
+#show-paypal:not([hidden]){display:flex;align-items:center;justify-content:center;gap:8px}
+.paypal-switch img{display:block;width:24px;height:24px;padding:3px;flex:none}
 .paypal-active #mode,.paypal-active #status,.paypal-active #payment-note{display:none}
 #paypal-panel:focus-visible{outline:3px solid #baace2;outline-offset:4px}
 #pay{min-height:64px;text-align:center}
