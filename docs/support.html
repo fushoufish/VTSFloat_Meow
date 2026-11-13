@@ -9,14 +9,14 @@
 .presets button{position:relative;padding:10px 3px 25px;white-space:nowrap}.presets small{position:absolute;right:5px;bottom:4px;font-size:.65rem;font-weight:500}
 .paypal-switch{margin-top:12px;background:#003087}
 .paypal-switch:hover{background:#00256a}
-.paypal-switch img{width:24px;height:24px;padding:3px;margin-right:8px;vertical-align:-6px;background:#fff;border-radius:5px}
+.paypal-switch img{width:24px;height:24px;padding:3px;margin-right:8px;vertical-align:-6px;}
 .paypal-active #mode,.paypal-active #status,.paypal-active #payment-note{display:none}
 #paypal-panel:focus-visible{outline:3px solid #baace2;outline-offset:4px}
 #pay{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left}
 .stripe-action{display:flex;align-items:center;gap:9px}
 .stripe-action img{flex:none;width:46px;height:auto}
 .stripe-methods{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px;max-width:57%;font-size:11px;line-height:1.3}
-.stripe-methods img{display:block;width:33px;height:22px;object-fit:contain;background:#fff;border-radius:4px}
+.stripe-methods img{display:block;width:33px;height:22px;object-fit:contain}
 @media(max-width:480px){#pay{align-items:flex-start;flex-direction:column}.stripe-methods{max-width:100%;align-self:flex-end}}
 </style>
 </head>
@@ -29,15 +29,15 @@
 <label for="amount">Custom amount (CNY)</label><input id="amount" name="amount" type="number" inputmode="decimal" min="10" max="2000" step="0.01" value="20" required>
 <label for="nickname">Nickname <span class="hint">(optional)</span></label><input id="nickname" name="nickname" maxlength="60" autocomplete="nickname" aria-describedby="nickname-hint"><p class="hint" id="nickname-hint">You can leave this blank. Your nickname won’t be shown on this site.</p>
 <button id="pay" class="pay" type="submit">
-  <span class="stripe-action"><img src="assets/payment-stripe.svg" alt="" width="46" height="19"><span id="stripe-label">Continue to Stripe</span></span>
+  <span class="stripe-action"><img src="assets/payment-stripe.svg?v=transparent-1" alt="" width="46" height="19"><span id="stripe-label">Support with Stripe</span></span>
   <span class="stripe-methods">
-    <img src="assets/payment-apple-pay.svg" alt="Apple Pay" width="33" height="22">
-    <img src="assets/payment-link.svg" alt="Link" width="33" height="22">
-    <img src="assets/payment-wechat-pay.svg" alt="WeChat Pay" width="33" height="22">
-    <img src="assets/payment-jcb.svg" alt="JCB" width="33" height="22">
-    <img src="assets/payment-visa.svg" alt="Visa" width="33" height="22">
-    <img src="assets/payment-mastercard.svg" alt="Mastercard" width="33" height="22">
-    <img src="assets/payment-unionpay.svg" alt="UnionPay" width="33" height="22">
+    <img src="assets/payment-apple-pay.svg?v=transparent-1" alt="Apple Pay" width="33" height="22">
+    <img src="assets/payment-link.svg?v=transparent-1" alt="Link" width="33" height="22">
+    <img src="assets/payment-wechat-pay.svg?v=transparent-1" alt="WeChat Pay" width="33" height="22">
+    <img src="assets/payment-jcb.svg?v=transparent-1" alt="JCB" width="33" height="22">
+    <img src="assets/payment-visa.svg?v=transparent-1" alt="Visa" width="33" height="22">
+    <img src="assets/payment-mastercard.svg?v=transparent-1" alt="Mastercard" width="33" height="22">
+    <img src="assets/payment-unionpay.svg?v=transparent-1" alt="UnionPay" width="33" height="22">
   </span>
 </button>
 </fieldset></form><noscript>Enable JavaScript to use this form.</noscript>
@@ -47,13 +47,13 @@
 <p class="hint" id="paypal-error" role="status" hidden>PayPal is unavailable. Please reload the page to try again.</p>
 </div>
 <button id="paypal-switch" class="pay paypal-switch" type="button" aria-controls="paypal-panel" aria-expanded="false" hidden>
-<span id="show-paypal"><img src="assets/paypal-mark.svg" alt="" width="24" height="24">Support with PayPal</span>
+<span id="show-paypal"><img src="assets/paypal-mark.svg?v=transparent-1" alt="" width="24" height="24">Support with PayPal</span>
 <span id="show-stripe" hidden>Back to Stripe</span>
 </button>
 <noscript>Enable JavaScript to use PayPal.</noscript>
 </section>
 <p class="foot">Donating is optional. All features are free for everyone.<span id="payment-note" hidden></span></p>
-</main><script src="i18n.js?v=20261113-support-stripe-1"></script><script src="donation.js?v=20261113-support-stripe-1"></script>
+</main><script src="i18n.js?v=20261114-support-stripe-2"></script><script src="donation.js?v=20261114-support-stripe-2"></script>
 <script>
 const paypalSwitch = document.querySelector('#paypal-switch');
 const paypalPanel = document.querySelector('#paypal-panel');

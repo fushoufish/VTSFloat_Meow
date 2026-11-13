@@ -27,7 +27,6 @@
   if(config.currency!=='cny')throw Error(unavailable);
   mode.textContent=translate(config.live?'One-time donation':config.mock?'Local demo':'Stripe test mode');
   mode.hidden=false;
-  document.querySelector('#stripe-label').textContent=translate(config.live?'Continue to Stripe':config.mock?'Continue to demo checkout':'Continue to Stripe test checkout');
   if(!config.live){
    paymentNote.textContent=translate('You won’t be charged in this preview.');
    paymentNote.hidden=false;

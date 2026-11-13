@@ -278,6 +278,7 @@
     ["Enable JavaScript to use this form.", "请启用 JavaScript 后再使用捐赠表单。", "請啟用 JavaScript 後再使用捐款表單。", "フォームを利用するには JavaScript を有効にしてください。", "후원 양식을 사용하려면 JavaScript를 켜 주세요.", "Чтобы заполнить форму, включите JavaScript."],
     ["One-time donation", "单次捐赠", "單次捐款", "今回のみの支援", "일회성 후원", "Разовое пожертвование"],
     ["Continue to checkout →", "前往付款 →", "前往付款 →", "支払いに進む →", "결제하기 →", "Перейти к оплате →"],
+    ["Support with Stripe", "用 Stripe 支持", "用 Stripe 支持", "Stripe で支援する", "Stripe로 후원하기", "Поддержать через Stripe"],
     ["Continue to Stripe", "前往 Stripe 付款", "前往 Stripe 付款", "Stripe で支払う", "Stripe에서 결제하기", "Перейти к оплате в Stripe"],
     ["PayPal is unavailable. Please reload the page to try again.", "PayPal 暂时无法加载，请刷新页面重试。", "PayPal 暫時無法載入，請重新整理頁面再試一次。", "PayPal を読み込めません。ページを再読み込みしてください。", "PayPal을 불러올 수 없습니다. 페이지를 새로고침해 주세요.", "PayPal недоступен. Обновите страницу и попробуйте снова."],
     ["Support with PayPal", "用 PayPal 支持", "用 PayPal 支持", "PayPal で支援する", "PayPal로 후원하기", "Поддержать через PayPal"],
