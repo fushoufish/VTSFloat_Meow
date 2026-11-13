@@ -15,7 +15,7 @@ test('both production origins pass CORS; unlisted and missing origins are reject
  for(const [origin] of sites){
   const config=await worker.fetch(new Request(workerOrigin+'/api/config',{headers:{Origin:origin}}),env);
   assert.equal(config.headers.get('access-control-allow-origin'),origin);
-  assert.deepEqual(await config.json(),{live:false,ready:true,currency:'hkd'});
+  assert.deepEqual(await config.json(),{live:false,ready:true,currency:'cny'});
   const preflight=await worker.fetch(new Request(workerOrigin+'/api/checkout',{method:'OPTIONS',headers:{Origin:origin,'Access-Control-Request-Method':'POST'}}),env);
   assert.equal(preflight.status,204);
   assert.equal(preflight.headers.get('access-control-allow-origin'),origin);
@@ -34,7 +34,7 @@ test('both sites create a USD checkout and return to their own page; cached page
     assert.equal(url,'https://api.stripe.com/v1/checkout/sessions');
     assert.equal(options.body.get('line_items[0][price_data][currency]'),currency);
     assert.equal(options.body.get('line_items[0][price_data][unit_amount]'),currency==='usd'?'100':'2001');
-    assert.equal(options.body.get('adaptive_pricing[enabled]'),currency==='cny'?null:'false');
+    assert.equal(options.body.get('adaptive_pricing[enabled]'),'false');
     assert.equal(options.body.get('success_url'),returnUrl+'?session_id={CHECKOUT_SESSION_ID}');
     assert.equal(options.body.get('cancel_url'),returnUrl+'?status=cancel');
     assert.equal(options.headers['Idempotency-Key'],'vts-support-'+valid.requestId);

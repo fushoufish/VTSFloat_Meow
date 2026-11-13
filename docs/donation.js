@@ -24,7 +24,7 @@
   const r=await fetch(apiBase+'/api/config',{signal:AbortSignal.timeout(10000)});if(!r.ok)throw Error(unavailable);
   config=await r.json();
   if(local ? config.live : !config.live||!config.ready)throw Error(closed);
-  if(config.currency!=='hkd')throw Error(unavailable);
+  if(config.currency!=='cny')throw Error(unavailable);
   mode.textContent=translate(config.live?'One-time donation':config.mock?'Local demo':'Stripe test mode');
   mode.hidden=false;
   document.querySelector('#pay').textContent=translate(config.live?'Continue to Stripe →':config.mock?'Continue to demo checkout →':'Continue to Stripe test checkout →');
@@ -44,7 +44,7 @@
   e.preventDefault();if(busy||!form.reportValidity())return;
   busy=true;field.disabled=true;show(config.live?'Creating your live checkout…':config.mock?'Opening demo checkout…':'Opening Stripe test checkout…');
   try{
-   const data=await api('/api/checkout',{currency:'hkd',amount:amount.value,nickname:document.querySelector('#nickname').value,requestId});
+   const data=await api('/api/checkout',{currency:'cny',amount:amount.value,nickname:document.querySelector('#nickname').value,requestId});
    const url=new URL(data.url);
    if(!(url.protocol==='https:'&&url.hostname==='checkout.stripe.com')&&!(url.origin===location.origin&&url.pathname==='/mock-checkout'))throw Error('Unexpected checkout address.');
    location.assign(url.href);
