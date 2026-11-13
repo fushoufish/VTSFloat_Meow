@@ -1420,15 +1420,6 @@ html:lang(zh) [data-download-region="domestic"] .download-recommendation { displ
 .download-actions-row > a { flex: 1; justify-content: center; text-align: center; }
 .download-actions-row .download-project-link { margin-top: 0; }
 .download-project-link:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: -2px; border-radius: 7px; }
-.download-password { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; padding: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
-.download-password > span, .download-password code { display: inline-flex; align-items: center; min-height: 28px; line-height: 1; }
-.download-password code { padding: 3px 8px; border: 1px solid var(--line); border-radius: 5px; color: var(--text); background: var(--bg); user-select: all; }
-.download-url { min-width: 0; margin-left: auto; overflow: hidden; color: var(--accent-ink); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.download-url:hover { text-decoration: underline; }
-.download-url:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
-.download-password > span, .download-password code { flex-shrink: 0; }
-.download-copy-status { margin: 10px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
-.download-copy-status:empty { display: none; }
 .download-close:focus-visible, .download-link:focus-visible, #download-button:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 3px; }
 .download-option:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: -4px; border-radius: 9px; }
 @keyframes download-expand { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }

@@ -276,14 +276,3 @@ document.querySelectorAll('.download-option[aria-controls]').forEach((toggle) =>
     };
   });
 });
-
-document.querySelector('[data-copy-password]')?.addEventListener('click', async (event) => {
-  const link = event.currentTarget;
-  const status = document.querySelector('.download-copy-status');
-  status.textContent = '';
-  try {
-    await navigator.clipboard.writeText(link.dataset.copyPassword);
-  } catch (_) {
-    status.textContent = window.VTSFloatI18n.translate('复制失败，请手动复制密码 cici。');
-  }
-});
