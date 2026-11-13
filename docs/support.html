@@ -14,9 +14,9 @@
 #paypal-panel:focus-visible{outline:3px solid #baace2;outline-offset:4px}
 #pay{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left}
 .stripe-action{display:flex;align-items:center;gap:9px}
-.stripe-action img{flex:none;border-radius:5px}
+.stripe-action img{flex:none;width:46px;height:auto}
 .stripe-methods{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px;max-width:57%;font-size:11px;line-height:1.3}
-.stripe-methods span{padding:3px 5px;border:1px solid #ffffff66;border-radius:5px;white-space:nowrap}
+.stripe-methods img{display:block;width:33px;height:22px;object-fit:contain;background:#fff;border-radius:4px}
 @media(max-width:480px){#pay{align-items:flex-start;flex-direction:column}.stripe-methods{max-width:100%;align-self:flex-end}}
 </style>
 </head>
@@ -29,8 +29,16 @@
 <label for="amount">Custom amount (CNY)</label><input id="amount" name="amount" type="number" inputmode="decimal" min="10" max="2000" step="0.01" value="20" required>
 <label for="nickname">Nickname <span class="hint">(optional)</span></label><input id="nickname" name="nickname" maxlength="60" autocomplete="nickname" aria-describedby="nickname-hint"><p class="hint" id="nickname-hint">You can leave this blank. Your nickname won’t be shown on this site.</p>
 <button id="pay" class="pay" type="submit">
-  <span class="stripe-action"><img src="assets/stripe-mark.png" alt="" width="24" height="24"><span id="stripe-label">Continue to Stripe</span></span>
-  <span class="stripe-methods"><span>Apple Pay</span><span>Link</span><span>WeChat Pay</span><span>JCB</span><span>Visa</span><span>Mastercard</span><span>UnionPay</span></span>
+  <span class="stripe-action"><img src="assets/payment-stripe.svg" alt="" width="46" height="19"><span id="stripe-label">Continue to Stripe</span></span>
+  <span class="stripe-methods">
+    <img src="assets/payment-apple-pay.svg" alt="Apple Pay" width="33" height="22">
+    <img src="assets/payment-link.svg" alt="Link" width="33" height="22">
+    <img src="assets/payment-wechat-pay.svg" alt="WeChat Pay" width="33" height="22">
+    <img src="assets/payment-jcb.svg" alt="JCB" width="33" height="22">
+    <img src="assets/payment-visa.svg" alt="Visa" width="33" height="22">
+    <img src="assets/payment-mastercard.svg" alt="Mastercard" width="33" height="22">
+    <img src="assets/payment-unionpay.svg" alt="UnionPay" width="33" height="22">
+  </span>
 </button>
 </fieldset></form><noscript>Enable JavaScript to use this form.</noscript>
 <div id="paypal-panel" role="region" aria-label="PayPal" tabindex="-1" hidden>
