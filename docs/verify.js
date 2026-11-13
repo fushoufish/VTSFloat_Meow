@@ -9,6 +9,7 @@
   const prompt = document.getElementById('verify-prompt');
   const result = document.getElementById('verify-result');
   const reveal = result.closest('.verify-reveal');
+  const faq = reveal.querySelector('.verify-faq');
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const status = document.getElementById('verify-status');
   const detail = document.getElementById('verify-detail');
@@ -31,12 +32,13 @@
     const { state, title, description, file, digest, tag, provenance } = view;
     const previousHeight = reveal.getBoundingClientRect().height;
     revealAnimation?.cancel();
-    prompt.textContent = translate(state === 'loading' ? title : '或点击选择文件');
+    prompt.textContent = translate(state === 'loading' ? title : '点击选择文件');
     result.hidden = state === 'loading';
     result.dataset.state = state;
     status.textContent = translate(title);
     detail.textContent = translate(description).replace('{version}', () => tag ?? '');
     facts.hidden = !digest;
+    faq.hidden = !digest;
     name.textContent = file?.name ?? '';
     hash.textContent = digest ?? '';
     source.textContent = provenance ? translate(provenance) : '—';
