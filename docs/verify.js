@@ -3,6 +3,8 @@
   const api = 'https://api.github.com/repos/' + repository;
   const releases = 'https://github.com/' + repository + '/releases';
   const exeName = 'VTSFloat_Meow.exe';
+  const githubProof = 'GitHub 已记录构建证明';
+  const backupProof = '官网备份已记录构建证明';
   const drop = document.getElementById('verify-drop');
   if (!drop) return;
   const input = document.getElementById('verify-file');
@@ -45,7 +47,11 @@
     source.textContent = provenance ? translate(provenance) : '—';
     release.hidden = !tag;
     updateNotice.hidden = !updateAvailable;
-    proof.hidden = provenance !== 'GitHub 已记录构建证明';
+    const fromBackup = provenance === backupProof;
+    proof.hidden = provenance !== githubProof && !fromBackup;
+    proof.href = fromBackup ? proofPath(digest) : 'https://github.com/' + repository + '/attestations';
+    proof.textContent = translate(fromBackup ? '下载构建证明' : '查看 GitHub 证明');
+    proof.toggleAttribute('download', fromBackup);
     if (tag) release.href = releases + '/tag/' + encodeURIComponent(tag);
 
     if (reducedMotion.matches || result.hidden) return;
@@ -60,7 +66,7 @@
     });
   }
 
-  async function getJson(url, signal) {
+  async function get(url, signal, read) {
     const controller = new AbortController();
     const abort = () => controller.abort();
     const timeout = setTimeout(abort, 6500);
@@ -72,12 +78,21 @@
         credentials: 'omit',
         referrerPolicy: 'no-referrer'
       });
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      return await response.json();
+      if (!response.ok) {
+        const error = new Error('HTTP ' + response.status);
+        error.status = response.status;
+        error.retryAfter = response.headers.has('retry-after');
+        throw error;
+      }
+      return await read(response);
     } finally {
       clearTimeout(timeout);
       signal.removeEventListener('abort', abort);
     }
+  }
+
+  function getJson(url, signal) {
+    return get(url, signal, (response) => response.json());
   }
 
   async function lookupRelease(file, digest, signal) {
@@ -106,14 +121,58 @@
     }
   }
 
-  async function checkProvenance(digest, signal) {
-    try {
-      const entry = await getJson(api + '/attestations/sha256:' + digest + '?predicate_type=provenance', signal);
-      if (!Array.isArray(entry.attestations)) return '暂时无法查询构建证明';
-      return entry.attestations.length ? 'GitHub 已记录构建证明' : '未找到构建证明';
-    } catch (error) {
-      return error.message === 'HTTP 404' ? '未找到构建证明' : '暂时无法查询构建证明';
+  function proofPath(digest) {
+    return 'build-proofs/sha256-' + digest + '.jsonl';
+  }
+
+  function waitForRetry(ms, signal) {
+    return new Promise((resolve) => {
+      if (signal.aborted) return resolve();
+      const done = () => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', done);
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      signal.addEventListener('abort', done, { once: true });
+    });
+  }
+
+  async function checkProvenance(digest, tag, signal) {
+    const url = api + '/attestations/sha256:' + digest + '?predicate_type=provenance';
+    for (const delay of [0, 400, 800, 1600]) {
+      if (delay) await waitForRetry(delay, signal);
+      if (signal.aborted) return;
+      try {
+        const entry = await getJson(url, signal);
+        if (!Array.isArray(entry.attestations)) throw new Error('Invalid attestation list');
+        return entry.attestations.length ? githubProof : '未找到构建证明';
+      } catch (error) {
+        if (error.status === 404) return '未找到构建证明';
+        // Respect rate limits and server-specified retry times by using the backup.
+        if (error.retryAfter || (error.status >= 400 && error.status < 500 && error.status !== 408)) break;
+      }
     }
+
+    if (signal.aborted) return;
+    try {
+      const record = await get(proofPath(digest), signal, (response) => response.text());
+      const bundle = JSON.parse(record.trim());
+      const statement = JSON.parse(new TextDecoder().decode(Uint8Array.from(
+        atob(bundle.dsseEnvelope.payload), (byte) => byte.charCodeAt(0)
+      )));
+      const workflow = statement.predicate.buildDefinition.externalParameters.workflow;
+      if (statement.predicateType === 'https://slsa.dev/provenance/v1' &&
+          workflow.repository === 'https://github.com/' + repository &&
+          workflow.path === '.github/workflows/build.yml' &&
+          workflow.ref === 'refs/tags/' + tag &&
+          statement.subject.some((subject) => subject.name === exeName && subject.digest.sha256 === digest)) {
+        return backupProof;
+      }
+    } catch {
+      // Older releases and unarchived builds may have no backup.
+    }
+    return '暂时无法查询构建证明';
   }
 
   function compareVersions(left, right) {
@@ -193,7 +252,7 @@
       show(matched);
       if (signal.aborted) return;
       await Promise.all([
-        checkProvenance(digest, signal).then((provenance) => {
+        checkProvenance(digest, matched.tag, signal).then((provenance) => {
           matched.provenance = provenance;
           show(matched);
         }),
