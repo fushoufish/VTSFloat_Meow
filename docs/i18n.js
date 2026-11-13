@@ -268,6 +268,42 @@
     });
   });
 
+  const supportTranslations = [
+    ["Support VTSFloat_Meow", "支持 VTSFloat_Meow", "支持 VTSFloat_Meow", "VTSFloat_Meow を支援", "VTSFloat_Meow 후원", "Поддержать VTSFloat_Meow"],
+    ["← Back to project", "← 返回项目", "← 返回專案", "← プロジェクトへ戻る", "← 프로젝트로 돌아가기", "← К проекту"],
+    ["A little support.", "一点支持，", "一點支持，", "小さな応援が、", "작은 후원이", "Немного поддержки."],
+    ["A little more possibility.", "多一点可能。", "多一點可能。", "新しい可能性に。", "더 많은 가능성으로.", "Чуть больше возможностей."],
+    ["Enjoying VTSFloat_Meow? Help keep this free, open-source project growing.", "喜欢 VTSFloat_Meow？欢迎支持这个免费开源项目继续发展。", "喜歡 VTSFloat_Meow？歡迎支持這個免費開源專案持續發展。", "VTSFloat_Meow を気に入ったら、無料のオープンソースプロジェクトの継続を応援してください。", "VTSFloat_Meow가 마음에 드시나요? 무료 오픈 소스 프로젝트의 성장을 도와주세요.", "Нравится VTSFloat_Meow? Помогите развивать этот бесплатный проект с открытым кодом."],
+    ["Support the author", "支持作者", "支持作者", "作者を支援", "개발자 후원", "Поддержать автора"],
+    ["Suggested amounts", "推荐金额", "建議金額", "おすすめの金額", "추천 금액", "Предлагаемые суммы"],
+    ["Choose an amount · CNY", "选择金额（人民币）", "選擇金額（人民幣）", "金額を選択（人民元）", "금액 선택 (위안)", "Выберите сумму (CNY)"],
+    ["Custom amount (CNY)", "自定义金额（人民币）", "自訂金額（人民幣）", "任意の金額（人民元）", "직접 입력 (위안)", "Другая сумма (CNY)"],
+    ["CNY 10–2,000 · One-time support", "人民币 10–2,000 元 · 单次支持", "人民幣 10–2,000 元 · 單次支持", "10〜2,000 人民元 · 1 回限り", "10~2,000위안 · 일회성 후원", "10–2 000 CNY · Разовая поддержка"],
+    ["Nickname", "昵称", "暱稱", "ニックネーム", "닉네임", "Псевдоним"],
+    ["(optional)", "（选填）", "（選填）", "（任意）", "(선택)", "（необязательно）"],
+    ["How should we thank you?", "怎么称呼你？", "怎麼稱呼你？", "お名前は？", "어떻게 불러 드릴까요?", "Как к вам обращаться?"],
+    ["Leave blank to stay anonymous. Not published on this website.", "留空即匿名。昵称不会公开。", "留空即匿名。暱稱不會公開。", "空欄で匿名になります。名前は公開されません。", "비워 두면 익명입니다. 닉네임은 공개되지 않습니다.", "Оставьте пустым для анонимности. Имя не публикуется."],
+    ["ONE-TIME SUPPORT", "单次支持", "單次支持", "1 回限りの支援", "일회성 후원", "Разовая поддержка"],
+    ["Continue to Stripe live checkout →", "前往 Stripe 付款 →", "前往 Stripe 付款 →", "Stripe で支払う →", "Stripe에서 결제하기 →", "Перейти к оплате Stripe →"],
+    ["Support is optional. All features remain free.", "支持完全自愿，所有功能仍然免费。", "支持完全自願，所有功能仍然免費。", "支援は任意です。全機能を無料で使えます。", "후원은 선택 사항이며 모든 기능은 무료입니다.", "Поддержка добровольная. Все функции бесплатны."],
+    ["Payments are not open yet. Thank you for your support!", "付款暂未开放，感谢支持！", "付款暫未開放，感謝支持！", "お支払いは準備中です。応援ありがとうございます！", "아직 결제를 시작할 수 없습니다. 응원해 주셔서 감사합니다!", "Оплата пока недоступна. Спасибо за поддержку!"],
+    ["Checkout cancelled. No payment was confirmed.", "已取消付款。", "已取消付款。", "支払いをキャンセルしました。", "결제가 취소되었습니다.", "Оплата отменена."],
+    ["Checking payment result…", "正在核对付款结果…", "正在核對付款結果…", "支払い結果を確認中…", "결제 결과 확인 중…", "Проверяем оплату…"],
+    ["Payment confirmed. Thank you for your support!", "付款成功，感谢你的支持！", "付款成功，感謝你的支持！", "お支払いを確認しました。ご支援ありがとうございます！", "결제가 완료되었습니다. 후원해 주셔서 감사합니다!", "Оплата подтверждена. Спасибо за поддержку!"],
+    ["Payment is not confirmed yet. Check again later.", "付款尚未确认，请稍后再查看。", "付款尚未確認，請稍後再查看。", "支払いはまだ確認されていません。後ほどご確認ください。", "아직 결제가 확인되지 않았습니다. 나중에 다시 확인해 주세요.", "Оплата пока не подтверждена. Проверьте позже."],
+    ["Creating your live checkout…", "正在打开 Stripe 付款页…", "正在開啟 Stripe 付款頁…", "Stripe の支払いページを開いています…", "Stripe 결제 페이지를 여는 중…", "Открываем страницу оплаты Stripe…"],
+    ["Payment service unavailable. Please try again.", "付款服务暂不可用，请重试。", "付款服務暫時無法使用，請重試。", "支払いサービスに接続できません。もう一度お試しください。", "결제 서비스를 이용할 수 없습니다. 다시 시도해 주세요.", "Сервис оплаты недоступен. Попробуйте ещё раз."],
+    ["Request timed out. Please retry.", "请求超时，请重试。", "請求逾時，請重試。", "タイムアウトしました。もう一度お試しください。", "요청 시간이 초과되었습니다. 다시 시도해 주세요.", "Время ожидания истекло. Попробуйте ещё раз."],
+    ["LOCAL PREVIEW", "本地预览", "本機預覽", "ローカルプレビュー", "로컬 미리보기", "Локальный просмотр"],
+    ["Continue to test checkout →", "前往测试收银台 →", "前往測試結帳頁 →", "テスト決済へ進む →", "테스트 결제하기 →", "Перейти к тестовой оплате →"],
+    ["This preview does not accept real payments.", "预览不会收取真实款项。", "預覽不會收取真實款項。", "プレビューでは実際の支払いは発生しません。", "미리보기에서는 실제 결제가 발생하지 않습니다.", "В режиме просмотра деньги не списываются."]
+  ];
+  for (const [source, ...labels] of supportTranslations) {
+    supported.filter(locale => locale !== 'en').forEach((locale, index) => {
+      translations[locale][source] = labels[index];
+    });
+  }
+
   const textNodes = [];
   const attributes = [];
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
@@ -288,6 +324,10 @@
 
   const applyMeta = (locale) => {
     const meta = localeMeta[locale];
+    if (document.querySelector('#support-form')) {
+      document.title = lookup('Support VTSFloat_Meow', locale);
+      return;
+    }
     document.title = meta.title;
     const setMeta = (selector, value) => document.querySelector(selector)?.setAttribute('content', value);
     setMeta('meta[name="description"]', meta.description);
