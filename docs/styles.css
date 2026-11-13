@@ -1435,3 +1435,24 @@ html:lang(zh) [data-download-region="domestic"] .download-recommendation { displ
   text-decoration: underline;
   text-underline-offset: 4px;
 }
+
+.top-donation {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: 1px solid var(--line-dark);
+  border-radius: 12px;
+  color: var(--accent-ink);
+  white-space: nowrap;
+}
+.top-donation:hover { background: rgba(243, 241, 253, .72); }
+
+@media (max-width: 650px) {
+  .topbar { gap: 8px; }
+  .topbar-actions { gap: 6px; }
+  .brand { min-width: 0; }
+  .brand span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .top-donation { padding-inline: 5px; font-size: 12px; }
+  .top-donation span { display: none; }
+}
