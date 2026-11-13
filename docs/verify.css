@@ -61,9 +61,12 @@
   gap: 3px;
   min-width: 0;
 }
-.verify-inline-copy strong {
+.verify-inline-copy > strong {
   color: #423963;
   font-size: 16px;
+}
+.verify-inline-copy > span strong {
+  font-size: inherit;
 }
 .verify-inline-copy > span, .verify-inline-action {
   font-size: 13px;
