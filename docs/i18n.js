@@ -92,8 +92,8 @@
 
   const releaseHistoryTranslations = {
     '版本足迹': { 'zh-TW':'版本足跡', en:'Release journey', ja:'これまでの歩み', ko:'버전 발자취', ru:'История версий' },
-    '当前版本 v1.2.1 正式版': { 'zh-TW':'目前版本：v1.2.1 正式版', en:'Current release: v1.2.1', ja:'現在のリリース：v1.2.1', ko:'현재 릴리스: v1.2.1', ru:'Текущая версия: v1.2.1' },
-    'v1.2.1 已进入正式发布阶段': { 'zh-TW':'v1.2.1 已進入正式發布階段', en:'v1.2.1 is a stable release', ja:'v1.2.1は正式リリース版です', ko:'v1.2.1 정식 릴리스', ru:'v1.2.1 — стабильный релиз' },
+    '当前版本 v1.3.0 正式版': { 'zh-TW':'目前版本：v1.3.0 正式版', en:'Current release: v1.3.0', ja:'現在のリリース：v1.3.0', ko:'현재 릴리스: v1.3.0', ru:'Текущая версия: v1.3.0' },
+    'v1.3.0 已进入正式发布阶段': { 'zh-TW':'v1.3.0 已進入正式發布階段', en:'v1.3.0 is a stable release', ja:'v1.3.0は正式リリース版です', ko:'v1.3.0 정식 릴리스', ru:'v1.3.0 — стабильный релиз' },
     '修正 VTube Studio 未启动时，悬停边界扩展导致 GUI 出现红色遮罩残留的问题': { 'zh-TW':'修正 VTube Studio 未啟動時，游標停留邊界擴展導致 GUI 殘留紅色遮罩的問題', en:'Fixed a red overlay artifact in the GUI when hover-boundary expansion was enabled while VTube Studio was not running', ja:'VTube Studio未起動時にホバー範囲の拡張を有効にすると、GUIに赤いオーバーレイが残る問題を修正', ko:'VTube Studio가 실행되지 않은 상태에서 마우스 오버 경계 확장을 사용하면 GUI에 빨간 오버레이가 남는 문제를 수정', ru:'Исправлен красный след маски в интерфейсе при включённом расширении области наведения, когда VTube Studio не запущена' },
     '桌面模式、全屏暂停、UI 缩放、添加透明延时设置、多国语言与自定义语言、DOCS 页面装修、修复错误': { 'zh-TW':'桌面模式、全螢幕暫停、UI 縮放、加入透明延遲設定、多國語言與自訂語言、DOCS 頁面改版、錯誤修正', en:'Desktop mode, fullscreen pausing, UI scaling, transparency delay controls, multilingual and custom-language support, a redesigned docs page, and bug fixes', ja:'デスクトップモード、全画面時の一時停止、UI拡大率、透明化の遅延設定、多言語・カスタム言語、DOCSページの刷新、不具合修正', ko:'데스크톱 모드, 전체 화면 일시 정지, UI 배율, 투명도 전환 지연 설정, 다국어 및 사용자 언어, DOCS 페이지 개편, 오류 수정', ru:'Режим рабочего стола, пауза при полноэкранных приложениях, масштаб UI, задержка прозрачности, несколько языков и своя локализация, обновление страницы DOCS и исправления ошибок' },
     '支持多选表情、播放时长、状态恢复、修复错误': { 'zh-TW':'支援多選表情、播放時長、狀態還原與錯誤修正', en:'Added multi-expression selection, playback duration, state restoration, and bug fixes', ja:'複数表情の選択、再生時間、状態復元に対応し、不具合を修正', ko:'여러 표정 선택, 재생 시간, 상태 복원 지원 및 오류 수정', ru:'Добавлены выбор нескольких выражений, длительность воспроизведения, восстановление состояния и исправления ошибок' },
@@ -222,6 +222,7 @@
   "推荐": ["推薦", "Recommended", "おすすめ", "추천", "Рекомендуем"]
 };
   Object.assign(additionalTranslations, {
+  "新增画面编辑、扩展 Spout2 兼容、内置检查更新与首次使用引导": ["新增畫面編輯、擴充 Spout2 相容性、內建更新檢查與首次使用導覽", "Image editing, broader Spout2 compatibility, a built-in update checker, and a first-run tutorial", "画像編集、Spout2 対応の拡張、更新確認、初回チュートリアルを追加", "이미지 편집, Spout2 호환성 확대, 업데이트 확인 및 첫 실행 가이드 추가", "Редактирование изображения, расширенная поддержка Spout2, проверка обновлений и руководство при первом запуске"],
   "验证你下载的程序是否安全/可溯源的-GitHub Artifact Attestation 校验": ["驗證你下載的程式是否安全／可溯源－GitHub Artifact Attestation 驗證", "Check download safety and provenance with GitHub Artifact Attestation", "ダウンロードしたアプリの安全性と出所を確認 — GitHub Artifact Attestation", "다운로드한 앱의 안전성과 출처 확인 — GitHub Artifact Attestation", "Проверка безопасности и происхождения файла — GitHub Artifact Attestation"],
   "拖入你的": ["拖入你的", "Drop your ", "お手元の", "", "Перетащите "],
   "进行校验": ["進行驗證", " here to verify it", "をドロップして確認", " 파일을 끌어 놓아 확인하세요", " для проверки"],

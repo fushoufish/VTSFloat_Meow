@@ -1,5 +1,10 @@
 [
   {
+    "tag": "v1.3.0",
+    "size": 2437120,
+    "sha256": "e944e510dba3cdd241fac146eeee6d3457978dc600c5e6117fdd2d59287ae9ac"
+  },
+  {
     "tag": "v1.2.1",
     "size": 2082816,
     "sha256": "fd7f68930ce8e2bdbac0c9d53d0bf7e3f1fde4630feaa9bc9181c158b007b7f6"
