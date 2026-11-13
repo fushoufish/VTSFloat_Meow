@@ -28,8 +28,10 @@
   mode.textContent=translate(config.live?'One-time donation':config.mock?'Local demo':'Stripe test mode');
   mode.hidden=false;
   document.querySelector('#pay').textContent=translate(config.live?'Continue to Stripe →':config.mock?'Continue to demo checkout →':'Continue to Stripe test checkout →');
-  paymentNote.textContent=translate(config.live?'Payments are processed by Stripe.':'You won’t be charged in this preview.');
-  paymentNote.hidden=false;
+  if(!config.live){
+   paymentNote.textContent=translate('You won’t be charged in this preview.');
+   paymentNote.hidden=false;
+  }
   field.disabled=false;status.hidden=true;
  }catch(e){showError(e);return;}
  document.querySelectorAll('[data-amount]').forEach(b=>b.addEventListener('click',()=>{amount.value=b.dataset.amount;amount.dispatchEvent(new Event('input',{bubbles:true}));}));

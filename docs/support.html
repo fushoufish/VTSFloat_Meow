@@ -4,9 +4,14 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
 <title>Support VTSFloat_Meow</title><link rel="icon" href="assets/VTSFloat_Meow_small.webp">
 <style>
-*{box-sizing:border-box}body{margin:0;background:#f9f8fc;color:#302c40;font:16px/1.65 system-ui,sans-serif}main{max-width:640px;margin:48px auto;padding:0 20px 40px}a{color:#6d5bb3;text-decoration:none}.intro{text-align:center;margin:38px 0 26px}.logo{width:72px;height:72px;border-radius:20px}h1{font-size:32px;letter-spacing:-1px;line-height:1.2;margin:18px 0 12px}.intro p{color:#777185;max-width:440px;margin:auto}.badge{display:inline-block;font-size:11px;letter-spacing:1.4px;font-weight:700;color:#715ca8;background:#eee9fa;border-radius:30px;padding:7px 12px;margin-top:20px}.card{padding:32px;border:1px solid #e6e1ee;border-radius:24px;background:white;box-shadow:0 12px 50px #49366f08}fieldset{border:0;padding:0;margin:0;min-width:0}label{display:block;font-weight:600;font-size:14px;margin:22px 0 8px}.presets{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}button,input{font:inherit}button{cursor:pointer;border:1px solid #ded7eb;background:#fff;color:#514565;border-radius:12px;padding:12px;font-weight:600}button[aria-pressed=true]{background:#f0eafa;border-color:#9a82cb;color:#6a4a9a}input{width:100%;border:1px solid #ded7eb;border-radius:12px;padding:14px;background:#fcfbfd;color:#302c40}input:focus-visible,button:focus-visible,a:focus-visible{outline:3px solid #baace2;outline-offset:3px}.hint{font-size:12px;color:#81798e;margin:7px 0}.pay{margin-top:26px;width:100%;background:#8270b3;border:0;color:white;padding:16px}fieldset:disabled{opacity:.55}button:disabled,fieldset:disabled button{cursor:not-allowed}#status{font-size:14px;min-height:46px;margin:20px 0 0;color:#6b5b85}.result{padding:16px 20px;border-radius:14px;background:#eee9fa;color:#514078;font-weight:600;text-align:center}.result[hidden]{display:none}.foot{text-align:center;font-size:12px;color:#8d859b;margin-top:22px}@media(max-width:480px){main{margin-top:24px}.card{padding:22px}h1{font-size:28px}.presets{gap:6px}}
+*{box-sizing:border-box}body{margin:0;background:#f9f8fc;color:#302c40;font:16px/1.65 system-ui,sans-serif}main{max-width:640px;margin:48px auto;padding:0 20px 40px}a{color:#6d5bb3;text-decoration:none}.intro{text-align:center;margin:38px 0 26px}.logo{width:72px;height:72px;border-radius:20px}h1{font-size:32px;letter-spacing:-1px;line-height:1.2;margin:18px 0 12px}.intro p{color:#777185;max-width:440px;margin:auto}.badge{display:inline-block;font-size:11px;letter-spacing:1.4px;font-weight:700;color:#715ca8;background:#eee9fa;border-radius:30px;padding:7px 12px;margin-top:20px}.card{padding:32px;border:1px solid #e6e1ee;border-radius:24px;background:white;box-shadow:0 12px 50px #49366f08}fieldset{border:0;padding:0;margin:0;min-width:0}label{display:block;font-weight:600;font-size:14px;margin:22px 0 8px}.presets{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}button,input{font:inherit}button{cursor:pointer;border:1px solid #ded7eb;background:#fff;color:#514565;border-radius:12px;padding:12px;font-weight:600}button[aria-pressed=true]{background:#f0eafa;border-color:#9a82cb;color:#6a4a9a}input{width:100%;border:1px solid #ded7eb;border-radius:12px;padding:14px;background:#fcfbfd;color:#302c40}input:focus-visible,button:focus-visible,a:focus-visible{outline:3px solid #baace2;outline-offset:3px}.hint{font-size:12px;color:#81798e;margin:7px 0}.pay{margin-top:26px;width:100%;background:#533AFD;border:0;color:white;padding:16px}fieldset:disabled{opacity:.55}button:disabled,fieldset:disabled button{cursor:not-allowed}#status{font-size:14px;min-height:46px;margin:20px 0 0;color:#6b5b85}.result{padding:16px 20px;border-radius:14px;background:#eee9fa;color:#514078;font-weight:600;text-align:center}.result[hidden]{display:none}.foot{text-align:center;font-size:12px;color:#8d859b;margin-top:22px}@media(max-width:480px){main{margin-top:24px}.card{padding:22px}h1{font-size:28px}.presets{gap:6px}}
 .badge[hidden]{display:none}#payment-note:not([hidden]){display:block}
 .presets button{position:relative;padding:10px 3px 25px;white-space:nowrap}.presets small{position:absolute;right:5px;bottom:4px;font-size:.65rem;font-weight:500}
+.paypal-switch{margin-top:12px;background:#003087}
+.paypal-switch:hover{background:#00256a}
+.paypal-switch img{width:24px;height:24px;padding:3px;margin-right:8px;vertical-align:-6px;background:#fff;border-radius:5px}
+.paypal-active #mode,.paypal-active #status,.paypal-active #payment-note{display:none}
+#paypal-panel:focus-visible{outline:3px solid #baace2;outline-offset:4px}
 </style>
 </head>
 <body><main>
@@ -18,6 +23,55 @@
 <label for="amount">Custom amount (CNY)</label><input id="amount" name="amount" type="number" inputmode="decimal" min="10" max="2000" step="0.01" value="20" required>
 <label for="nickname">Nickname <span class="hint">(optional)</span></label><input id="nickname" name="nickname" maxlength="60" autocomplete="nickname" aria-describedby="nickname-hint"><p class="hint" id="nickname-hint">You can leave this blank. Your nickname won’t be shown on this site.</p>
 <button id="pay" class="pay" type="submit">Continue to checkout →</button>
-</fieldset></form><noscript>Enable JavaScript to use this form.</noscript></section>
+</fieldset></form><noscript>Enable JavaScript to use this form.</noscript>
+<div id="paypal-panel" role="region" aria-label="PayPal" tabindex="-1" hidden>
+<div id="paypal-container-ZLKQJ3ZMTA3J8"></div>
+<p class="hint" id="paypal-loading" role="status">Loading PayPal…</p>
+<p class="hint" id="paypal-error" role="status" hidden>PayPal is unavailable. Please reload the page to try again.</p>
+</div>
+<button id="paypal-switch" class="pay paypal-switch" type="button" aria-controls="paypal-panel" aria-expanded="false" hidden>
+<span id="show-paypal"><img src="assets/paypal-mark.svg" alt="" width="24" height="24">Support with PayPal</span>
+<span id="show-stripe" hidden>Back to Stripe</span>
+</button>
+<noscript>Enable JavaScript to use PayPal.</noscript>
+</section>
 <p class="foot">Donating is optional. All features are free for everyone.<span id="payment-note" hidden></span></p>
-</main><script src="i18n.js?v=20261113-support-cny-1"></script><script src="donation.js?v=20261113-support-cny-1"></script></body></html>
+</main><script src="i18n.js?v=20261113-support-paypal-3"></script><script src="donation.js?v=20261113-support-paypal-1"></script>
+<script>
+const paypalSwitch = document.querySelector('#paypal-switch');
+const paypalPanel = document.querySelector('#paypal-panel');
+const stripeForm = document.querySelector('#support-form');
+const showPayPal = document.querySelector('#show-paypal');
+const showStripe = document.querySelector('#show-stripe');
+
+paypalSwitch.hidden = false;
+paypalSwitch.addEventListener('click', () => {
+  const usePayPal = paypalPanel.hidden;
+  paypalPanel.hidden = !usePayPal;
+  stripeForm.hidden = usePayPal;
+  showPayPal.hidden = usePayPal;
+  showStripe.hidden = !usePayPal;
+  paypalSwitch.setAttribute('aria-expanded', String(usePayPal));
+  paypalSwitch.closest('main').classList.toggle('paypal-active', usePayPal);
+  if (usePayPal) paypalPanel.focus();
+});
+
+paypalSwitch.addEventListener('click', async () => {
+  try {
+    await new Promise((resolve, reject) => {
+      const sdk = document.createElement('script');
+      sdk.src = 'https://www.paypal.com/sdk/js?client-id=BAAXmYYApZCUUgipJrL2Qp-LPgO2LE61cPjlJpgT56napX7pe1bmDEscZhdWfR7sCZgm9mAKeT4nLcT0jU&components=hosted-buttons&disable-funding=venmo&currency=HKD';
+      sdk.onload = resolve;
+      sdk.onerror = reject;
+      document.head.append(sdk);
+    });
+    await window.paypal.HostedButtons({
+      hostedButtonId: 'ZLKQJ3ZMTA3J8'
+    }).render('#paypal-container-ZLKQJ3ZMTA3J8');
+  } catch {
+    document.querySelector('#paypal-error').hidden = false;
+  } finally {
+    document.querySelector('#paypal-loading').hidden = true;
+  }
+}, { once: true });
+</script></body></html>
