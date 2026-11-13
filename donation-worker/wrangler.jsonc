@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "vtsfloat-meow-support",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-11-13",
+  "workers_dev": true,
+  "vars": {
+    "STRIPE_MODE": "live",
+    "SITE_ORIGIN": "https://fushoufish.github.io",
+    "RETURN_URL": "https://fushoufish.github.io/VTSFloat_Meow/support.html"
+  },
+  "ratelimits": [
+    {
+      "name": "RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 30, "period": 60 }
+    }
+  ]
+}

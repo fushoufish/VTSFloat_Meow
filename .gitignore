@@ -30,3 +30,11 @@ private_project.md
 
 # Local validation profiles, screenshots, and benchmark captures
 output/
+
+# Payment development secrets
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+donation-worker/.wrangler/
+donation-worker/live-trial-temp.mjs

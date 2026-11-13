@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+<title>Support VTSFloat_Meow</title><link rel="icon" href="assets/VTSFloat_Meow_small.webp">
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f9f8fc;color:#302c40;font:16px/1.65 system-ui,sans-serif}main{max-width:640px;margin:48px auto;padding:0 20px 40px}a{color:#6d5bb3;text-decoration:none}.intro{text-align:center;margin:38px 0 26px}.logo{width:72px;height:72px;border-radius:20px}h1{font-size:32px;letter-spacing:-1px;line-height:1.2;margin:18px 0 12px}.intro p{color:#777185;max-width:440px;margin:auto}.badge{display:inline-block;font-size:11px;letter-spacing:1.4px;font-weight:700;color:#715ca8;background:#eee9fa;border-radius:30px;padding:7px 12px;margin-top:20px}.card{padding:32px;border:1px solid #e6e1ee;border-radius:24px;background:white;box-shadow:0 12px 50px #49366f08}fieldset{border:0;padding:0;margin:0;min-width:0}label{display:block;font-weight:600;font-size:14px;margin:22px 0 8px}.presets{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}button,input{font:inherit}button{cursor:pointer;border:1px solid #ded7eb;background:#fff;color:#514565;border-radius:12px;padding:12px;font-weight:600}button[aria-pressed=true]{background:#f0eafa;border-color:#9a82cb;color:#6a4a9a}input{width:100%;border:1px solid #ded7eb;border-radius:12px;padding:14px;background:#fcfbfd;color:#302c40}input:focus-visible,button:focus-visible,a:focus-visible{outline:3px solid #baace2;outline-offset:3px}.hint{font-size:12px;color:#81798e;margin:7px 0}.pay{margin-top:26px;width:100%;background:#8270b3;border:0;color:white;padding:16px}fieldset:disabled{opacity:.55}button:disabled,fieldset:disabled button{cursor:not-allowed}#status{font-size:14px;min-height:46px;margin:20px 0 0;color:#6b5b85}.result{padding:16px 20px;border-radius:14px;background:#eee9fa;color:#514078;font-weight:600;text-align:center}.result[hidden]{display:none}.foot{text-align:center;font-size:12px;color:#8d859b;margin-top:22px}@media(max-width:480px){main{margin-top:24px}.card{padding:22px}h1{font-size:28px}.presets{gap:6px}}
+</style>
+</head>
+<body><main>
+<a href="./">← Back to project</a>
+<header class="intro"><img class="logo" src="assets/VTSFloat_Meow_small.webp" alt=""><h1>A little support.<br>A little more possibility.</h1><p>Enjoying VTSFloat_Meow? Help keep this free, open-source project growing.</p><span class="badge" id="mode">LOCAL PREVIEW</span></header>
+<p id="status" role="status" aria-live="polite" class="result" hidden></p>
+<section class="card" aria-label="Support the author"><form id="support-form"><fieldset disabled>
+<label style="margin-top:0">Choose an amount · CNY</label><div class="presets" role="group" aria-label="Suggested amounts"><button type="button" data-amount="10" aria-pressed="false">¥10</button><button type="button" data-amount="20" aria-pressed="true">¥20</button><button type="button" data-amount="50" aria-pressed="false">¥50</button><button type="button" data-amount="100" aria-pressed="false">¥100</button></div>
+<label for="amount">Custom amount (CNY)</label><input id="amount" name="amount" type="number" inputmode="decimal" min="10" max="2000" step="0.01" value="20" required aria-describedby="amount-hint"><p class="hint" id="amount-hint">CNY 10–2,000 · One-time support</p>
+<label for="nickname">Nickname <span class="hint">(optional)</span></label><input id="nickname" name="nickname" maxlength="60" autocomplete="nickname" placeholder="How should we thank you?"><p class="hint">Leave blank to stay anonymous. Not published on this website.</p>
+<button id="pay" class="pay" type="submit">Continue to test checkout →</button>
+</fieldset></form><noscript>Enable JavaScript to preview this form.</noscript></section>
+<p class="foot">Support is optional. All features remain free.<br>This preview does not accept real payments.</p>
+</main><script src="donation.js?v=20261113-3"></script></body></html>
