@@ -187,7 +187,7 @@
       const matched = {
         state: 'match',
         title: '与VTSFloat_Meow的Github发布的开源版本一致',
-        description: '结果：校验无误，版本为{version} （如有新版本建议更新）',
+        description: '结果：校验无误，版本为{version}',
         file, digest, tag: lookup.tag, provenance: '正在查询构建证明…'
       };
       show(matched);
@@ -214,7 +214,7 @@
     }
   }
 
-  document.getElementById('verify-download-update').addEventListener('click', () => {
+  updateNotice.addEventListener('click', () => {
     window.scrollTo({ top: 0, behavior: 'instant' });
     document.getElementById('download-button').click();
   });

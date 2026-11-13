@@ -92,7 +92,7 @@
   </script>
   <link rel="stylesheet" href="vendor/viewerjs/viewer.min.css">
   <link rel="stylesheet" href="styles.css?v=20261113-1">
-  <link rel="stylesheet" href="verify.css?v=20261113-7">
+  <link rel="stylesheet" href="verify.css?v=20261113-8">
 </head>
 <body>
   <div class="resource-loader" id="resource-loader" data-stage="checking" role="status" aria-label="页面资源加载进度">
@@ -205,10 +205,7 @@
           <section class="verify-result" id="verify-result" aria-live="polite" aria-atomic="true" hidden>
             <h2 id="verify-status"></h2>
             <p id="verify-detail"></p>
-            <div class="verify-update" id="verify-update" hidden>
-              <span>存在新的版本可以更新</span>
-              <button class="button button-primary" id="verify-download-update" type="button" aria-haspopup="dialog" aria-controls="download-dialog">前往更新</button>
-            </div>
+            <button class="button button-primary verify-update" id="verify-update" type="button" aria-haspopup="dialog" aria-controls="download-dialog" hidden>存在新版本</button>
             <dl id="verify-facts" hidden>
               <dt>文件名</dt><dd id="verify-name"></dd>
               <dt>SHA-256</dt><dd><code id="verify-hash"></code></dd>
@@ -445,9 +442,9 @@
   </dialog>
   <script src="preloader.js?v=20261111-7" defer></script>
   <script src="vendor/viewerjs/viewer.min.js"></script>
-  <script src="i18n.js?v=20261113-7"></script>
+  <script src="i18n.js?v=20261113-8"></script>
   <script src="benchmark-charts.js?v=20260910-1"></script>
   <script src="script.js?v=20261113-2"></script>
-  <script src="verify.js?v=20261113-7" defer></script>
+  <script src="verify.js?v=20261113-8" defer></script>
 </body>
 </html>
