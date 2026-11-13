@@ -29,12 +29,10 @@
   function render() {
     if (!view) return;
     const { state, title, description, file, digest, tag, provenance } = view;
-    const previousHeight = reveal?.getBoundingClientRect().height;
+    const previousHeight = reveal.getBoundingClientRect().height;
     revealAnimation?.cancel();
-    if (prompt) {
-      prompt.textContent = translate(state === 'loading' ? title : '或点击选择文件');
-    }
-    result.hidden = Boolean(prompt && state === 'loading');
+    prompt.textContent = translate(state === 'loading' ? title : '或点击选择文件');
+    result.hidden = state === 'loading';
     result.dataset.state = state;
     status.textContent = translate(title);
     detail.textContent = translate(description).replace('{version}', () => tag ?? '');
@@ -46,7 +44,7 @@
     proof.hidden = provenance !== 'GitHub 已记录构建证明';
     if (tag) release.href = releases + '/tag/' + encodeURIComponent(tag);
 
-    if (!reveal || reducedMotion.matches || result.hidden) return;
+    if (reducedMotion.matches || result.hidden) return;
     const nextHeight = reveal.getBoundingClientRect().height;
     if (Math.abs(nextHeight - previousHeight) < 1) return;
     revealAnimation = reveal.animate([
@@ -195,11 +193,10 @@
     dragDepth = Math.max(0, dragDepth - 1);
     if (!dragDepth) delete drop.dataset.dragging;
   });
-  const dropTarget = prompt ? drop : window;
-  dropTarget.addEventListener('dragover', (event) => {
+  drop.addEventListener('dragover', (event) => {
     if (event.dataTransfer?.types.includes('Files')) event.preventDefault();
   });
-  dropTarget.addEventListener('drop', (event) => {
+  drop.addEventListener('drop', (event) => {
     if (!event.dataTransfer?.files.length) return;
     event.preventDefault();
     dragDepth = 0;

@@ -222,20 +222,20 @@
   "推荐": ["推薦", "Recommended", "おすすめ", "추천", "Рекомендуем"]
 };
   Object.assign(additionalTranslations, {
-  "验证你下载的程序是否是正确的": ["驗證你下載的程式是否正確", "Check if you downloaded the official app", "ダウンロードしたアプリが公式版か確認", "다운로드한 앱이 공식 버전인지 확인", "Проверьте, официальную ли версию вы скачали"],
+  "验证你下载的程序是否安全/可溯源的-GitHub Artifact Attestation 校验": ["驗證你下載的程式是否安全／可溯源－GitHub Artifact Attestation 驗證", "Check download safety and provenance with GitHub Artifact Attestation", "ダウンロードしたアプリの安全性と出所を確認 — GitHub Artifact Attestation", "다운로드한 앱의 안전성과 출처 확인 — GitHub Artifact Attestation", "Проверка безопасности и происхождения файла — GitHub Artifact Attestation"],
   "拖入你的": ["拖入你的", "Drop your ", "お手元の", "", "Перетащите "],
   "进行校验": ["進行驗證", " here to verify it", "をドロップして確認", " 파일을 끌어 놓아 확인하세요", " для проверки"],
   "验证 EXE": ["驗證 EXE", "Verify EXE", "EXE を確認", "EXE 확인", "Проверить EXE"],
-  "返回首页": ["返回首頁", "Back to home", "ホームに戻る", "홈으로 돌아가기", "На главную"],
-  "检查你手里的文件是否与 GitHub 上的官方发布一致。文件只在浏览器中读取，不会上传或运行。": ["檢查你手上的檔案是否與 GitHub 上的官方版本相符。檔案只會在瀏覽器中讀取，不會上傳或執行。", "Check if your file matches an official GitHub release. Your browser reads the file locally without uploading or running it.", "ファイルが GitHub の公式リリースと一致するか確認します。ファイルはブラウザー内で読み取られ、アップロードも実行もされません。", "파일이 GitHub 공식 릴리스와 일치하는지 확인합니다. 브라우저에서만 파일을 읽으며 업로드하거나 실행하지 않습니다.", "Проверьте, совпадает ли файл с официальным релизом GitHub. Браузер читает файл локально, без отправки и запуска."],
-  "拖入 Windows EXE": ["拖入 Windows EXE", "Drop a Windows EXE", "Windows の EXE をドロップ", "Windows EXE 파일 끌어놓기", "Перетащите Windows EXE"],
   "或点击选择文件": ["或點選檔案", "or click to choose a file", "またはクリックしてファイルを選択", "또는 클릭하여 파일 선택", "или нажмите, чтобы выбрать файл"],
   "文件名": ["檔案名稱", "Filename", "ファイル名", "파일 이름", "Имя файла"],
   "构建来源": ["建置來源", "Build provenance", "ビルドの来歴", "빌드 출처", "Происхождение сборки"],
   "查看对应发布": ["查看對應版本", "View matching release", "該当リリースを表示", "일치하는 릴리스 보기", "Открыть релиз"],
   "查看 GitHub 证明": ["查看 GitHub 證明", "View GitHub attestations", "GitHub の証明を表示", "GitHub 증명 보기", "Аттестации на GitHub"],
+  "为什么要这样做？": ["為什麼要這樣做？", "Why verify the download?", "なぜ確認が必要ですか？", "왜 확인해야 하나요?", "Зачем проверять файл?"],
+  "使用该软件有精准的用户画像，防止有人恶意修改并分发该开源项目进行非法行为。": ["這套軟體的使用族群相當明確。驗證可防止有人惡意修改並散布這個開源專案，用於非法行為。", "This software serves a specific group of users. Verification helps prevent maliciously modified copies of this open-source project from being distributed for illegal purposes.", "このソフトウェアの利用者層は明確です。確認することで、このオープンソースプロジェクトが悪意を持って改変・配布され、違法行為に悪用されるのを防ぎます。", "이 소프트웨어는 특정 사용자층을 대상으로 합니다. 검증은 이 오픈 소스 프로젝트를 악의적으로 수정한 파일이 불법 행위에 사용될 목적으로 배포되는 것을 막는 데 도움이 됩니다.", "У этой программы конкретная аудитория. Проверка помогает предотвратить распространение вредоносных модификаций этого проекта с открытым исходным кодом для незаконных целей."],
   "如何独立验证构建来源？": ["如何獨立驗證建置來源？", "How do I verify build provenance independently?", "ビルドの来歴を独立して確認するには？", "빌드 출처를 직접 확인하는 방법", "Как независимо проверить происхождение сборки?"],
   "校验页比对 Release 的文件摘要，并查询 GitHub 是否有对应的构建证明。使用 GitHub CLI 可以独立验证证明的签名和工作流。": ["驗證頁會比對 Release 的檔案雜湊，並查詢 GitHub 是否有對應的建置證明。可用 GitHub CLI 獨立驗證證明的簽章與工作流程。", "This page compares release checksums and looks up matching build attestations on GitHub. Use GitHub CLI to independently verify the signature and workflow.", "このページはリリースのハッシュを比較し、GitHub で対応するビルド証明を検索します。署名とワークフローは GitHub CLI で独立して検証できます。", "릴리스 체크섬을 비교하고 GitHub에서 빌드 증명을 조회합니다. GitHub CLI로 서명과 워크플로를 직접 검증할 수 있습니다.", "Страница сравнивает хеши релизов и ищет аттестации на GitHub. Подпись и рабочий процесс можно независимо проверить через GitHub CLI."],
+  "校验用于确认文件与官方发布是否一致及其构建来源。软件安全性需另行评估。": ["驗證用於確認檔案是否與官方版本相符及其建置來源。軟體安全性須另行評估。", "Verification checks whether the file matches an official release and looks up its build provenance. Software safety must be assessed separately.", "公式リリースとの一致とビルドの出所を確認できます。ソフトウェアの安全性は別途評価してください。", "검증을 통해 공식 릴리스 일치 여부와 빌드 출처를 확인할 수 있습니다. 소프트웨어의 안전성은 별도로 평가해야 합니다.", "Проверка подтверждает совпадение с официальным релизом и ищет сведения о происхождении сборки. Безопасность программы оценивается отдельно."],
   "自行编译或修改的文件可能无法匹配官方发布。匹配结果仅用于识别发布文件。": ["自行編譯或修改的檔案可能不符合官方版本。比對結果僅用於辨識發布檔案。", "Self-built or modified files may not match an official release. A match identifies the published file.", "自分でビルドまたは変更したファイルは公式リリースと一致しない場合があります。一致は公開ファイルの識別を示します。", "직접 빌드하거나 수정한 파일은 공식 릴리스와 다를 수 있습니다. 일치 여부는 배포 파일을 식별하는 데 사용됩니다.", "Самостоятельно собранные или изменённые файлы могут отличаться от официальных. Совпадение определяет опубликованный файл."],
   "请选择一个 EXE 文件": ["請選擇一個 EXE 檔案", "Choose one EXE file", "EXE ファイルを 1 つ選択", "EXE 파일 하나를 선택하세요", "Выберите один EXE"],
   "每次可以校验一个 Windows EXE 文件。": ["每次可驗證一個 Windows EXE 檔案。", "Verify one Windows EXE at a time.", "Windows の EXE を 1 つずつ確認できます。", "Windows EXE는 한 번에 하나씩 확인할 수 있습니다.", "За один раз можно проверить один Windows EXE."],
@@ -282,10 +282,6 @@
   const lookup = (source, locale = currentLocale) => translations[locale]?.[source] ?? source;
 
   const applyMeta = (locale) => {
-    if (document.body.classList.contains('verify-page')) {
-      document.title = lookup('验证 EXE', locale) + ' · VTSFloat_Meow';
-      return;
-    }
     const meta = localeMeta[locale];
     document.title = meta.title;
     const setMeta = (selector, value) => document.querySelector(selector)?.setAttribute('content', value);
