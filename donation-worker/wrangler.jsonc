@@ -6,8 +6,10 @@
   "workers_dev": true,
   "vars": {
     "STRIPE_MODE": "live",
-    "SITE_ORIGIN": "https://fushoufish.github.io",
-    "RETURN_URL": "https://fushoufish.github.io/VTSFloat_Meow/support.html"
+    "RETURN_URLS": {
+      "https://fushoufish.github.io": "https://fushoufish.github.io/VTSFloat_Meow/support.html",
+      "https://vtsfloatmeow.edgeone.dev": "https://vtsfloatmeow.edgeone.dev/docs/support.html"
+    }
   },
   "ratelimits": [
     {
