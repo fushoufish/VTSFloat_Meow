@@ -19,6 +19,7 @@
   const source = document.getElementById('verify-source');
   const release = document.getElementById('verify-release');
   const proof = document.getElementById('verify-proof');
+  const updateNotice = document.getElementById('verify-update');
 
   const translate = (key) => window.VTSFloatI18n?.translate(key) ?? key;
   let selection = 0;
@@ -29,7 +30,7 @@
 
   function render() {
     if (!view) return;
-    const { state, title, description, file, digest, tag, provenance } = view;
+    const { state, title, description, file, digest, tag, provenance, updateAvailable } = view;
     const previousHeight = reveal.getBoundingClientRect().height;
     revealAnimation?.cancel();
     prompt.textContent = translate(state === 'loading' ? title : '点击选择文件');
@@ -43,6 +44,7 @@
     hash.textContent = digest ?? '';
     source.textContent = provenance ? translate(provenance) : '—';
     release.hidden = !tag;
+    updateNotice.hidden = !updateAvailable;
     proof.hidden = provenance !== 'GitHub 已记录构建证明';
     if (tag) release.href = releases + '/tag/' + encodeURIComponent(tag);
 
@@ -114,6 +116,30 @@
     }
   }
 
+  function compareVersions(left, right) {
+    const pattern = /^(v|beta)?(\d+)\.(\d+)(?:\.(\d+))?$/i;
+    const a = pattern.exec(left);
+    const b = pattern.exec(right);
+    if (!a || !b) return 0;
+    for (let i = 2; i <= 4; i++) {
+      const difference = Number(a[i] ?? 0) - Number(b[i] ?? 0);
+      if (difference) return difference;
+    }
+    return Number(b[1]?.toLowerCase() === 'beta') - Number(a[1]?.toLowerCase() === 'beta');
+  }
+
+  async function hasReleaseUpdate(currentTag, signal) {
+    try {
+      const latest = await getJson(api + '/releases/latest', signal);
+      return typeof latest.tag_name === 'string' &&
+        compareVersions(latest.tag_name, currentTag) > 0 &&
+        Array.isArray(latest.assets) &&
+        latest.assets.some((asset) => asset.name === exeName && asset.state === 'uploaded');
+    } catch {
+      return false;
+    }
+  }
+
   async function verify(files) {
     const id = ++selection;
     pending?.abort();
@@ -153,21 +179,29 @@
       try {
         const snapshot = await getJson('release-checksums.json', signal);
         const match = snapshot.find((entry) => entry.size === file.size && entry.sha256 === digest);
-        if (match) lookup = { tag: match.tag, cached: true };
+        if (match) lookup = { tag: match.tag };
       } catch {}
     }
 
     if (lookup.tag) {
       const matched = {
         state: 'match',
-        title: '与官方发布一致',
-        description: lookup.cached ? '文件与本站记录的官方 {version} EXE 一致。' : '文件与 GitHub Release {version} 的官方 EXE 一致。',
+        title: '与VTSFloat_Meow的Github发布的开源版本一致',
+        description: '结果：校验无误，版本为{version} （如有新版本建议更新）',
         file, digest, tag: lookup.tag, provenance: '正在查询构建证明…'
       };
       show(matched);
       if (signal.aborted) return;
-      const provenance = await checkProvenance(digest, signal);
-      show({ ...matched, provenance });
+      await Promise.all([
+        checkProvenance(digest, signal).then((provenance) => {
+          matched.provenance = provenance;
+          show(matched);
+        }),
+        hasReleaseUpdate(matched.tag, signal).then((updateAvailable) => {
+          matched.updateAvailable = updateAvailable;
+          show(matched);
+        })
+      ]);
     } else {
       show({
         state: lookup.complete ? 'mismatch' : 'error',
@@ -179,6 +213,11 @@
       });
     }
   }
+
+  document.getElementById('verify-download-update').addEventListener('click', () => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    document.getElementById('download-button').click();
+  });
 
   drop.addEventListener('click', () => input.click());
   input.addEventListener('change', () => {

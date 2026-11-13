@@ -22,6 +22,16 @@
 .verify-result dd { margin: 0; overflow-wrap: anywhere; }
 .verify-result dt { color: var(--muted); }
 .verify-links { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.verify-update {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+}
 .verify-faq { margin-top: 10px; }
 .verify-help { color: var(--muted); }
 .verify-help + .verify-help { border-top: 1px solid var(--line); }
