@@ -12,13 +12,10 @@
 .paypal-switch img{width:24px;height:24px;padding:3px;margin-right:8px;vertical-align:-6px;}
 .paypal-active #mode,.paypal-active #status,.paypal-active #payment-note{display:none}
 #paypal-panel:focus-visible{outline:3px solid #baace2;outline-offset:4px}
-#pay{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left}
-.stripe-action{display:flex;align-items:center;gap:9px}
-.stripe-action img{flex:none;width:46px;height:auto}
-.stripe-methods{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px;max-width:57%;font-size:11px;line-height:1.3}
-.stripe-methods{align-items:center}
+#pay{min-height:64px;text-align:center}
+.stripe-methods{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:6px;margin-top:10px}
 .stripe-methods img{display:block;object-fit:contain}
-@media(max-width:480px){#pay{align-items:flex-start;flex-direction:column}.stripe-methods{max-width:100%;align-self:flex-end}}
+.stripe-methods img[alt="Apple Pay"],.stripe-methods img[alt="Visa"]{filter:brightness(0)}
 </style>
 </head>
 <body><main>
@@ -29,18 +26,16 @@
 <div style="font-size:14px;font-weight:600;margin-bottom:8px" id="presets-label">Choose an amount (CNY)</div><div class="presets" role="group" aria-labelledby="presets-label"><button type="button" data-amount="10" aria-pressed="false">CN¥10<small>≈ US$1.39</small></button><button type="button" data-amount="20" aria-pressed="true">CN¥20<small>≈ US$2.78</small></button><button type="button" data-amount="50" aria-pressed="false">CN¥50<small>≈ US$6.94</small></button><button type="button" data-amount="100" aria-pressed="false">CN¥100<small>≈ US$13.89</small></button></div>
 <label for="amount">Custom amount (CNY)</label><input id="amount" name="amount" type="number" inputmode="decimal" min="10" max="2000" step="0.01" value="20" required>
 <label for="nickname">Nickname <span class="hint">(optional)</span></label><input id="nickname" name="nickname" maxlength="60" autocomplete="nickname" aria-describedby="nickname-hint"><p class="hint" id="nickname-hint">You can leave this blank. Your nickname won’t be shown on this site.</p>
-<button id="pay" class="pay" type="submit">
-  <span class="stripe-action"><img src="assets/payment-stripe.svg?v=transparent-1" alt="" width="46" height="19"><span id="stripe-label">Support with Stripe</span></span>
-  <span class="stripe-methods">
+<button id="pay" class="pay" type="submit">Support with Stripe</button>
+<span class="stripe-methods">
     <img src="assets/payment-apple-pay.svg?v=wallet-size-1" alt="Apple Pay" width="42" height="22">
-    <img src="assets/payment-link.svg?v=wallet-size-1" alt="Link" width="46" height="22">
+    <img src="assets/payment-link.svg?v=light-surface-1" alt="Link" width="46" height="22">
     <img src="assets/payment-wechat-pay.svg?v=wallet-size-1" alt="WeChat Pay" width="24" height="22">
     <img src="assets/payment-jcb.svg?v=transparent-1" alt="JCB" width="33" height="22">
     <img src="assets/payment-visa.svg?v=transparent-1" alt="Visa" width="33" height="22">
     <img src="assets/payment-mastercard.svg?v=transparent-1" alt="Mastercard" width="33" height="22">
     <img src="assets/payment-unionpay.svg?v=transparent-1" alt="UnionPay" width="33" height="22">
-  </span>
-</button>
+</span>
 </fieldset></form><noscript>Enable JavaScript to use this form.</noscript>
 <div id="paypal-panel" role="region" aria-label="PayPal" tabindex="-1" hidden>
 <div id="paypal-container-ZLKQJ3ZMTA3J8"></div>
