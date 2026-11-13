@@ -188,7 +188,7 @@
   };
 
 
-  const downloadTranslations = {
+  const additionalTranslations = {
   "直接下载": ["直接下載", "Direct download", "直接ダウンロード", "직접 다운로드", "Скачать напрямую"],
   "前往该项目主页": ["前往該專案首頁", "Visit project homepage", "プロジェクトのホームページへ", "프로젝트 홈페이지로 이동", "Перейти на страницу проекта"],
   "国内下载网站": ["國內下載網站", "Download sites in China", "中国国内のダウンロードサイト", "중국 내 다운로드 사이트", "Сайты для загрузки в Китае"],
@@ -221,8 +221,41 @@
   ],
   "推荐": ["推薦", "Recommended", "おすすめ", "추천", "Рекомендуем"]
 };
+  Object.assign(additionalTranslations, {
+  "验证 EXE": ["驗證 EXE", "Verify EXE", "EXE を確認", "EXE 확인", "Проверить EXE"],
+  "返回首页": ["返回首頁", "Back to home", "ホームに戻る", "홈으로 돌아가기", "На главную"],
+  "检查你手里的文件是否与 GitHub 上的官方发布一致。文件只在浏览器中读取，不会上传或运行。": ["檢查你手上的檔案是否與 GitHub 上的官方版本相符。檔案只會在瀏覽器中讀取，不會上傳或執行。", "Check if your file matches an official GitHub release. Your browser reads the file locally without uploading or running it.", "ファイルが GitHub の公式リリースと一致するか確認します。ファイルはブラウザー内で読み取られ、アップロードも実行もされません。", "파일이 GitHub 공식 릴리스와 일치하는지 확인합니다. 브라우저에서만 파일을 읽으며 업로드하거나 실행하지 않습니다.", "Проверьте, совпадает ли файл с официальным релизом GitHub. Браузер читает файл локально, без отправки и запуска."],
+  "拖入 Windows EXE": ["拖入 Windows EXE", "Drop a Windows EXE", "Windows の EXE をドロップ", "Windows EXE 파일 끌어놓기", "Перетащите Windows EXE"],
+  "或点击选择文件": ["或點選檔案", "or click to choose a file", "またはクリックしてファイルを選択", "또는 클릭하여 파일 선택", "или нажмите, чтобы выбрать файл"],
+  "文件名": ["檔案名稱", "Filename", "ファイル名", "파일 이름", "Имя файла"],
+  "构建来源": ["建置來源", "Build provenance", "ビルドの来歴", "빌드 출처", "Происхождение сборки"],
+  "查看对应发布": ["查看對應版本", "View matching release", "該当リリースを表示", "일치하는 릴리스 보기", "Открыть релиз"],
+  "查看 GitHub 证明": ["查看 GitHub 證明", "View GitHub attestations", "GitHub の証明を表示", "GitHub 증명 보기", "Аттестации на GitHub"],
+  "如何独立验证构建来源？": ["如何獨立驗證建置來源？", "How do I verify build provenance independently?", "ビルドの来歴を独立して確認するには？", "빌드 출처를 직접 확인하는 방법", "Как независимо проверить происхождение сборки?"],
+  "校验页比对 Release 的文件摘要，并查询 GitHub 是否有对应的构建证明。使用 GitHub CLI 可以独立验证证明的签名和工作流。": ["驗證頁會比對 Release 的檔案雜湊，並查詢 GitHub 是否有對應的建置證明。可用 GitHub CLI 獨立驗證證明的簽章與工作流程。", "This page compares release checksums and looks up matching build attestations on GitHub. Use GitHub CLI to independently verify the signature and workflow.", "このページはリリースのハッシュを比較し、GitHub で対応するビルド証明を検索します。署名とワークフローは GitHub CLI で独立して検証できます。", "릴리스 체크섬을 비교하고 GitHub에서 빌드 증명을 조회합니다. GitHub CLI로 서명과 워크플로를 직접 검증할 수 있습니다.", "Страница сравнивает хеши релизов и ищет аттестации на GitHub. Подпись и рабочий процесс можно независимо проверить через GitHub CLI."],
+  "自行编译或修改的文件可能无法匹配官方发布。匹配结果仅用于识别发布文件。": ["自行編譯或修改的檔案可能不符合官方版本。比對結果僅用於辨識發布檔案。", "Self-built or modified files may not match an official release. A match identifies the published file.", "自分でビルドまたは変更したファイルは公式リリースと一致しない場合があります。一致は公開ファイルの識別を示します。", "직접 빌드하거나 수정한 파일은 공식 릴리스와 다를 수 있습니다. 일치 여부는 배포 파일을 식별하는 데 사용됩니다.", "Самостоятельно собранные или изменённые файлы могут отличаться от официальных. Совпадение определяет опубликованный файл."],
+  "请选择一个 EXE 文件": ["請選擇一個 EXE 檔案", "Choose one EXE file", "EXE ファイルを 1 つ選択", "EXE 파일 하나를 선택하세요", "Выберите один EXE"],
+  "每次可以校验一个 Windows EXE 文件。": ["每次可驗證一個 Windows EXE 檔案。", "Verify one Windows EXE at a time.", "Windows の EXE を 1 つずつ確認できます。", "Windows EXE는 한 번에 하나씩 확인할 수 있습니다.", "За один раз можно проверить один Windows EXE."],
+  "文件过大": ["檔案過大", "File too large", "ファイルが大きすぎます", "파일이 너무 큽니다", "Файл слишком большой"],
+  "请选择不超过 128 MB 的 EXE 文件。": ["請選擇不超過 128 MB 的 EXE 檔案。", "Choose an EXE no larger than 128 MB.", "128 MB 以下の EXE を選択してください。", "128 MB 이하의 EXE를 선택하세요.", "Выберите EXE размером до 128 МБ."],
+  "正在校验文件…": ["正在驗證檔案…", "Verifying file…", "ファイルを確認中…", "파일 확인 중…", "Проверка файла…"],
+  "正在本地计算 SHA-256 并比对官方发布。": ["正在本機計算 SHA-256，並比對官方版本。", "Calculating SHA-256 locally and comparing it with official releases.", "SHA-256 をローカルで計算し、公式リリースと比較しています。", "SHA-256을 로컬에서 계산하고 공식 릴리스와 비교하고 있습니다.", "Вычисляем SHA-256 локально и сравниваем с официальными релизами."],
+  "无法读取文件": ["無法讀取檔案", "Unable to read the file", "ファイルを読み取れません", "파일을 읽을 수 없습니다", "Не удалось прочитать файл"],
+  "请在 HTTPS 页面中重新选择文件。": ["請在 HTTPS 頁面中重新選擇檔案。", "Choose the file again on the HTTPS page.", "HTTPS ページでファイルを選び直してください。", "HTTPS 페이지에서 파일을 다시 선택하세요.", "Выберите файл снова на HTTPS-странице."],
+  "与官方发布一致": ["與官方版本相符", "Matches an official release", "公式リリースと一致", "공식 릴리스와 일치", "Совпадает с официальным релизом"],
+  "文件与本站记录的官方 {version} EXE 一致。": ["檔案與本站記錄的官方 {version} EXE 相符。", "The file matches the official {version} EXE recorded on this site.", "このサイトに記録されている公式 {version} EXE と一致します。", "사이트에 기록된 공식 {version} EXE와 일치합니다.", "Файл совпадает с официальным EXE {version} из списка сайта."],
+  "文件与 GitHub Release {version} 的官方 EXE 一致。": ["檔案與 GitHub Release {version} 的官方 EXE 相符。", "The file matches the official EXE in GitHub Release {version}.", "GitHub Release {version} の公式 EXE と一致します。", "GitHub Release {version}의 공식 EXE와 일치합니다.", "Файл совпадает с официальным EXE из GitHub Release {version}."],
+  "正在查询构建证明…": ["正在查詢建置證明…", "Looking up build attestations…", "ビルド証明を検索中…", "빌드 증명 조회 중…", "Поиск аттестаций сборки…"],
+  "GitHub 已记录构建证明": ["GitHub 已記錄建置證明", "Build attestation listed on GitHub", "GitHub にビルド証明あり", "GitHub에 빌드 증명이 등록됨", "GitHub содержит аттестацию сборки"],
+  "未找到构建证明": ["找不到建置證明", "No build attestation found", "ビルド証明が見つかりません", "빌드 증명을 찾을 수 없음", "Аттестация сборки не найдена"],
+  "暂时无法查询构建证明": ["暫時無法查詢建置證明", "Build attestation lookup unavailable", "現在ビルド証明を取得できません", "빌드 증명을 일시적으로 조회할 수 없음", "Аттестации сборки временно недоступны"],
+  "未匹配到官方发布": ["未比對到官方版本", "No official release match", "一致する公式リリースがありません", "일치하는 공식 릴리스 없음", "Совпадений с официальными релизами нет"],
+  "暂时无法确认": ["暫時無法確認", "Unable to verify right now", "現在確認できません", "현재 확인할 수 없음", "Сейчас проверить не удалось"],
+  "没有找到相同的官方 EXE。自编译版或修改版也可能显示此结果。": ["找不到相符的官方 EXE。自行編譯版或修改版也可能顯示此結果。", "No identical official EXE was found. This also happens with self-built or modified versions.", "同一の公式 EXE が見つかりませんでした。自分でビルドした版や変更した版でもこの結果が表示されます。", "동일한 공식 EXE를 찾지 못했습니다. 직접 빌드하거나 수정한 파일에도 이 결과가 표시될 수 있습니다.", "Идентичный официальный EXE не найден. Такой результат возможен для самостоятельных или изменённых сборок."],
+  "官方发布列表暂时无法完整查询，请稍后重试。": ["暫時無法完整查詢官方版本清單，請稍後再試。", "The full list of official releases is unavailable. Try again later.", "公式リリースの全一覧を取得できません。後でもう一度お試しください。", "공식 릴리스 전체 목록을 조회할 수 없습니다. 나중에 다시 시도하세요.", "Полный список официальных релизов недоступен. Повторите попытку позже."]
+});
   ['zh-TW', 'en', 'ja', 'ko', 'ru'].forEach((locale, index) => {
-    Object.entries(downloadTranslations).forEach(([text, labels]) => {
+    Object.entries(additionalTranslations).forEach(([text, labels]) => {
       translations[locale][text] = labels[index];
     });
   });
@@ -246,6 +279,10 @@
   const lookup = (source, locale = currentLocale) => translations[locale]?.[source] ?? source;
 
   const applyMeta = (locale) => {
+    if (document.body.classList.contains('verify-page')) {
+      document.title = lookup('验证 EXE', locale) + ' · VTSFloat_Meow';
+      return;
+    }
     const meta = localeMeta[locale];
     document.title = meta.title;
     const setMeta = (selector, value) => document.querySelector(selector)?.setAttribute('content', value);

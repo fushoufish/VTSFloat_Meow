@@ -1436,3 +1436,11 @@ html:lang(zh) [data-download-region="domestic"] .download-recommendation { displ
 @media (prefers-reduced-motion: reduce) { .download-dialog[open], .download-source[open] .download-panel { animation: none; } .download-option-arrow { transition: none; } }
 
 .download-region-note { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+.download-verify-link {
+  display: inline-block;
+  margin-top: 16px;
+  color: #514885;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}

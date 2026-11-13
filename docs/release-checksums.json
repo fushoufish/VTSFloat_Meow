@@ -1,0 +1,32 @@
+[
+  {
+    "tag": "v1.2.1",
+    "size": 2082816,
+    "sha256": "fd7f68930ce8e2bdbac0c9d53d0bf7e3f1fde4630feaa9bc9181c158b007b7f6"
+  },
+  {
+    "tag": "v1.2",
+    "size": 2082816,
+    "sha256": "679ab0aa3ad6cec9a93217574f12494552e49221c46da98785cbff1c95977671"
+  },
+  {
+    "tag": "v1.1",
+    "size": 1881088,
+    "sha256": "ef53fe0f05ff36f14943fae80776385b4522ccbbc8898af1274f60de007985b9"
+  },
+  {
+    "tag": "beta1.0.3",
+    "size": 1856512,
+    "sha256": "5412936f96e5af82985a76f759a562403bd51f766cc2fd765b3fe007ac70cbbb"
+  },
+  {
+    "tag": "beta1.0.1",
+    "size": 543744,
+    "sha256": "e1fc2e288546d41b6d6827262101ba7d489aaa7a4484ea9c4be2b66bd8588ef0"
+  },
+  {
+    "tag": "beta1.0.0",
+    "size": 519168,
+    "sha256": "00eb6383174c3f26508eed457772e25b50d660c06c6fba3747d091d468104051"
+  }
+]
