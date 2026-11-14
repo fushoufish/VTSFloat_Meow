@@ -22,7 +22,7 @@
 
 ---
 
-中国用户建议通过腾讯托管的 EdgeOne 访问介绍页：[https://vtsfloatmeow.edgeone.dev/](https://vtsfloatmeow.edgeone.dev/)
+也可通过 EdgeOne 访问介绍页（默认域名在中国大陆有访问限制）：[https://vtsfloatmeow.edgeone.dev/](https://vtsfloatmeow.edgeone.dev/)
 
 ## 1. 前话
 
