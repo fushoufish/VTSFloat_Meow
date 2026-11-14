@@ -12,6 +12,7 @@
   <a href="https://fushoufish.github.io/VTSFloat_Meow/">Visit the VTSFloat_Meow Tutorials &amp; Documentation</a>
 </p>
 
+
 <p align="center">
   <a href="https://github.com/fushoufish/VTSFloat_Meow/releases/latest"><img src="https://img.shields.io/github/v/release/fushoufish/VTSFloat_Meow?style=flat-square&amp;label=Release&amp;color=0078D4" alt="Release"></a>
   <img src="https://img.shields.io/badge/C%2B%2B-0078D4?style=flat-square&amp;logo=cplusplus&amp;logoColor=white" alt="C++">
@@ -22,7 +23,6 @@
 
 ---
 
-也可通过 EdgeOne 访问介绍页（默认域名在中国大陆有访问限制）：[https://vtsfloatmeow.edgeone.dev/](https://vtsfloatmeow.edgeone.dev/)
 
 ## 1. 前话
 
