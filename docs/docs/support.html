@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Return to the donation page</title>
+  <script>
+    const donationPage = new URL('/support.html', location.origin);
+    donationPage.search = location.search;
+    location.replace(donationPage);
+  </script>
+</head>
+<body>
+  <a href="/support.html">Return to the donation page</a>
+</body>
+</html>
