@@ -26,7 +26,7 @@
 <section class="card" aria-label="Donation form"><form id="support-form"><fieldset disabled>
 <div style="font-size:14px;font-weight:600;margin-bottom:8px" id="presets-label">Choose an amount (CNY)</div><div class="presets" role="group" aria-labelledby="presets-label"><button type="button" data-amount="10" aria-pressed="false">CN¥10<small>≈ US$1.39</small></button><button type="button" data-amount="20" aria-pressed="true">CN¥20<small>≈ US$2.78</small></button><button type="button" data-amount="50" aria-pressed="false">CN¥50<small>≈ US$6.94</small></button><button type="button" data-amount="100" aria-pressed="false">CN¥100<small>≈ US$13.89</small></button></div>
 <label for="amount">Custom amount (CNY)</label><input id="amount" name="amount" type="number" inputmode="decimal" min="10" max="2000" step="0.01" value="20" required>
-<label for="nickname">Nickname <span class="hint">(optional)</span></label><input id="nickname" name="nickname" maxlength="60" autocomplete="nickname" aria-describedby="nickname-hint"><p class="hint" id="nickname-hint">You can leave this blank. Your nickname won’t be shown on this site.</p>
+<label for="nickname">Nickname <span class="hint">(optional)</span></label><input id="nickname" name="nickname" maxlength="60" autocomplete="nickname" aria-describedby="nickname-hint"><p class="hint" id="nickname-hint">Your nickname will appear in the donor acknowledgments.</p>
 <button id="pay" class="pay" type="submit">Support with Stripe</button>
 <span class="stripe-methods">
     <img src="assets/payment-apple-pay.svg?v=wallet-size-1" alt="Apple Pay" width="38" height="20">
@@ -51,7 +51,7 @@
 </button>
 <noscript>Enable JavaScript to use PayPal.</noscript>
 <p class="foot">Donating is optional. All features are free for everyone.<span id="payment-note" hidden></span></p>
-</main><script src="i18n.js?v=20261114-support-stripe-2"></script><script src="donation.js?v=20261114-support-stripe-2"></script>
+</main><script src="i18n.js?v=20261114-support-nickname"></script><script src="donation.js?v=20261114-support-stripe-2"></script>
 <script>
 const paypalSwitch = document.querySelector('#paypal-switch');
 const paypalPanel = document.querySelector('#paypal-panel');
