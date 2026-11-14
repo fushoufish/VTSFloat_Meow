@@ -55,7 +55,8 @@
   const urls = new Set();
   document.querySelectorAll('img[src], video[src], video[data-src], source[src]').forEach((element) => {
     const url = toAbsoluteUrl(element.getAttribute('src') || element.getAttribute('data-src'));
-    if (url) urls.add(url);
+    // The browser loads routed media directly, including any fallback.
+    if (url && !element.hasAttribute('data-media-src')) urls.add(url);
   });
   document.querySelectorAll('img[srcset], source[srcset]').forEach((element) => {
     element.getAttribute('srcset').split(',').forEach((candidate) => {

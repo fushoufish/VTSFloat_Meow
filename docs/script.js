@@ -66,7 +66,8 @@ previewImages.forEach((image) => {
 if (previewRoot && previewImages.length && window.Viewer) {
   new Viewer(previewRoot, {
     filter: (image) => image.classList.contains('previewable-image'),
-    url: (image) => image.dataset.previewUrl || image.currentSrc || image.src,
+    url: (image) => image.hasAttribute('data-media-src')
+      ? image.src : image.dataset.previewUrl || image.currentSrc || image.src,
     backdrop: true,
     button: true,
     focus: true,
