@@ -5,9 +5,24 @@
 <h1 align="center">VTSFloat_Meow</h1>
 <p align="center">将 VTube Studio 的透明模型不借助其他工具直接悬浮到桌面、游戏或其他应用上方。</p>
 <p align="center">高性能，轻量，开源</p>
-<p align="center"><a href="https://fushoufish.github.io/VTSFloat_Meow/">前往 VTSFloat_Meow 的介绍页查看教程与说明细节</a></p>
-<p align="center">Read the guide for more details.<a href="https://fushoufish.github.io/VTSFloat_Meow/"> VTSFloat_Meow DOCS</a></p>
 <p align="center">支援简体、繁體中文、English、日本語、한국어、Русский与自定义语言。</p>
+
+<p align="center">
+  <a href="https://fushoufish.github.io/VTSFloat_Meow/">前往 VTSFloat_Meow 的介绍页查看教程与说明细节</a><br>
+  <a href="https://fushoufish.github.io/VTSFloat_Meow/">Visit the VTSFloat_Meow Tutorials &amp; Documentation</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/fushoufish/VTSFloat_Meow/releases/latest"><img src="https://img.shields.io/github/v/release/fushoufish/VTSFloat_Meow?style=flat-square&amp;label=Release&amp;color=0078D4" alt="Release"></a>
+  <img src="https://img.shields.io/badge/C%2B%2B-0078D4?style=flat-square&amp;logo=cplusplus&amp;logoColor=white" alt="C++">
+  <img src="https://img.shields.io/badge/Windows%2010%2F11%20x64-0078D4?style=flat-square" alt="Windows 10/11 x64">
+  <a href="https://github.com/leadedge/Spout2"><img src="https://img.shields.io/badge/Spout2-0078D4?style=flat-square" alt="Spout2"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/GPL--3.0-0078D4?style=flat-square" alt="GPL-3.0"></a>
+</p>
+
+---
+
+中国用户建议通过腾讯托管的 EdgeOne 访问介绍页：[https://vtsfloatmeow.edgeone.dev/](https://vtsfloatmeow.edgeone.dev/)
 
 ## 1. 前话
 
