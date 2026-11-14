@@ -2,6 +2,14 @@
   <img src="docs/assets/VTSFloat_Meow.webp" alt="VTSFloat_Meow Logo" width="240">
 </p>
 
+<p align="center">
+  <a href="https://github.com/fushoufish/VTSFloat_Meow/releases/latest"><img src="https://img.shields.io/github/v/release/fushoufish/VTSFloat_Meow?style=flat-square&amp;label=Release&amp;color=0078D4" alt="Release"></a>
+  <img src="https://img.shields.io/badge/C%2B%2B-0078D4?style=flat-square&amp;logo=cplusplus&amp;logoColor=white" alt="C++">
+  <img src="https://img.shields.io/badge/Windows%2010%2F11%20x64-0078D4?style=flat-square" alt="Windows 10/11 x64">
+  <a href="https://github.com/leadedge/Spout2"><img src="https://img.shields.io/badge/Spout2-0078D4?style=flat-square" alt="Spout2"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/GPL--3.0-0078D4?style=flat-square" alt="GPL-3.0"></a>
+</p>
+
 <h1 align="center">VTSFloat_Meow</h1>
 <p align="center">将 VTube Studio 的透明模型不借助其他工具直接悬浮到桌面、游戏或其他应用上方。</p>
 <p align="center">高性能，轻量，开源</p>
@@ -12,14 +20,6 @@
   <a href="https://fushoufish.github.io/VTSFloat_Meow/">Visit the VTSFloat_Meow Tutorials &amp; Documentation</a>
 </p>
 
-
-<p align="center">
-  <a href="https://github.com/fushoufish/VTSFloat_Meow/releases/latest"><img src="https://img.shields.io/github/v/release/fushoufish/VTSFloat_Meow?style=flat-square&amp;label=Release&amp;color=0078D4" alt="Release"></a>
-  <img src="https://img.shields.io/badge/C%2B%2B-0078D4?style=flat-square&amp;logo=cplusplus&amp;logoColor=white" alt="C++">
-  <img src="https://img.shields.io/badge/Windows%2010%2F11%20x64-0078D4?style=flat-square" alt="Windows 10/11 x64">
-  <a href="https://github.com/leadedge/Spout2"><img src="https://img.shields.io/badge/Spout2-0078D4?style=flat-square" alt="Spout2"></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/GPL--3.0-0078D4?style=flat-square" alt="GPL-3.0"></a>
-</p>
 
 ---
 
