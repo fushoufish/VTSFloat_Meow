@@ -8,7 +8,7 @@
     "STRIPE_MODE": "live",
     "RETURN_URLS": {
       "https://fushoufish.github.io": "https://fushoufish.github.io/VTSFloat_Meow/support.html",
-      "https://vtsfloatmeow.edgeone.dev": "https://vtsfloatmeow.edgeone.dev/docs/support.html"
+      "https://vtsfloatmeow.edgeone.dev": "https://vtsfloatmeow.edgeone.dev/support.html"
     }
   },
   "ratelimits": [
