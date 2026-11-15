@@ -266,7 +266,7 @@
         state: lookup.complete ? 'mismatch' : 'error',
         title: lookup.complete ? '未匹配到官方发布' : '暂时无法确认',
         description: lookup.complete
-          ? '没有找到相同的官方 EXE。自编译版或修改版也可能显示此结果。'
+          ? '无法匹配github中的任意版本，自编译版本也会出现此结果，否则你的程序可能是经过他人修改或编译的版本。'
           : '官方发布列表暂时无法完整查询，请稍后重试。',
         file, digest
       });
