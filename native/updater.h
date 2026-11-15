@@ -28,6 +28,11 @@ struct Release {
 std::optional<Release> ParseRelease(std::string_view json);
 std::wstring RouteUrl(std::wstring_view githubUrl, bool proxy);
 
+void DownloadVerifiedAsset(std::wstring_view url, const std::filesystem::path& destination,
+                           std::uint64_t expectedSize, const std::string& sha256,
+                           const std::atomic<bool>& cancelled, bool proxy,
+                           const std::function<void(std::uint64_t)>& progress);
+
 struct ReleaseLookup {
     std::optional<Release> release;
     bool proxy = false;

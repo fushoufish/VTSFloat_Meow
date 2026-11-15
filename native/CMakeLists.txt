@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(VTSFloat_Meow VERSION 1.3.0 LANGUAGES CXX RC)
+project(VTSFloat_Meow VERSION 1.3.1 LANGUAGES CXX RC)
 
 configure_file(update_version.h.in update_version.h @ONLY)
 
@@ -35,12 +35,22 @@ add_executable(vts_spout_test_sender
 
 add_executable(vts_overlay_layered WIN32
     overlay_layered.cpp
+    anr_frame_generation.cpp
+    anr_package.cpp
     updater.cpp
     localization.cpp
     overlay_resources.rc
     ${SPOUT_DX11_SOURCES}
 )
 target_include_directories(vts_overlay_layered PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+set(VTSFLOAT_ANR_NGX_INCLUDE "" CACHE PATH "NVIDIA DLSS SDK include directory for experimental ANR FG")
+if(VTSFLOAT_ANR_NGX_INCLUDE)
+    if(NOT EXISTS "${VTSFLOAT_ANR_NGX_INCLUDE}/nvsdk_ngx_defs_dlssg.h")
+        message(FATAL_ERROR "VTSFLOAT_ANR_NGX_INCLUDE must point to the DLSS SDK include directory")
+    endif()
+    target_include_directories(vts_overlay_layered PRIVATE "${VTSFLOAT_ANR_NGX_INCLUDE}")
+    target_compile_definitions(vts_overlay_layered PRIVATE VTSFLOAT_ANR_NGX=1)
+endif()
 set_property(SOURCE overlay_resources.rc APPEND PROPERTY OBJECT_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/updater.ps1")
 
@@ -106,7 +116,7 @@ set(SPOUT_DX11_LIBRARIES
 target_link_libraries(vts_overlay_dx11 PRIVATE ${SPOUT_DX11_LIBRARIES})
 target_link_libraries(vts_spout_bridge PRIVATE ${SPOUT_DX11_LIBRARIES})
 target_link_libraries(vts_spout_test_sender PRIVATE ${SPOUT_DX11_LIBRARIES})
-target_link_libraries(vts_overlay_layered PRIVATE ${SPOUT_DX11_LIBRARIES} avrt winmm pdh winhttp gdiplus shlwapi iphlpapi dwmapi uxtheme dbghelp bcrypt windowsapp)
+target_link_libraries(vts_overlay_layered PRIVATE ${SPOUT_DX11_LIBRARIES} d3d12 avrt winmm pdh winhttp gdiplus shlwapi iphlpapi dwmapi uxtheme dbghelp bcrypt windowsapp)
 target_link_libraries(vts_localization_audit PRIVATE user32 gdi32 shell32)
 
 set_target_properties(vts_overlay_dx11 PROPERTIES

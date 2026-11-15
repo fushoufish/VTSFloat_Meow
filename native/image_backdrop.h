@@ -94,10 +94,18 @@ public:
             monitor.bottom = (std::min)(monitor.bottom, monitor.top + frameSize_.Height);
             RECT overlap{};
             if (!IntersectRect(&overlap, &monitor, &output)) return;
-            if (!updated && EqualRect(&overlap, &previous) && EqualRect(&monitor, &sourceBounds_)) {
+            if (EqualRect(&overlap, &previous) && EqualRect(&monitor, &sourceBounds_)) {
                 rect_ = previous;
-                return;
             }
+            if (grid_.pending) {
+                const bool matches = EqualRect(&overlap, &grid_.bounds) && EqualRect(&monitor, &grid_.monitor);
+                if (!ResolveSampleGrid(context, matches)) return;
+                if (matches) {
+                    rect_ = overlap;
+                    sourceBounds_ = monitor;
+                }
+            }
+            if (!updated && !IsRectEmpty(&rect_)) return;
 
             using Access = ::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess;
             const auto access = frame_.Surface().as<Access>();
@@ -105,9 +113,10 @@ public:
             winrt::check_hresult(access->GetInterface(__uuidof(ID3D11Texture2D), source.put_void()));
             const D3D11_BOX sourceRect{UINT(overlap.left - monitor.left), UINT(overlap.top - monitor.top), 0,
                 UINT(overlap.right - monitor.left), UINT(overlap.bottom - monitor.top), 1};
-            ReadSampleGrid(source.get(), sourceRect, graphics, context);
-            rect_ = overlap;
-            sourceBounds_ = monitor;
+            QueueSampleGrid(source.get(), sourceRect, graphics, context);
+            grid_.pending = true;
+            grid_.bounds = overlap;
+            grid_.monitor = monitor;
         } catch (const winrt::hresult_error&) {
             Stop();
         }
@@ -117,7 +126,7 @@ public:
     const BackdropSamples& Samples() const { return samples_; }
 
 private:
-    void ReadSampleGrid(ID3D11Texture2D* source, const D3D11_BOX& box,
+    void QueueSampleGrid(ID3D11Texture2D* source, const D3D11_BOX& box,
                          ID3D11Device* graphics, ID3D11DeviceContext* context) {
         if (!grid_.shader) {
             static constexpr char shader[] = R"(
@@ -183,14 +192,23 @@ private:
         context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
         context->CSSetShader(nullptr, nullptr, 0);
         context->CopyResource(grid_.readback.get(), grid_.grid.get());
+    }
+
+    bool ResolveSampleGrid(ID3D11DeviceContext* context, bool matches) {
         constexpr size_t rowSize = kBackdropSampleSize * 4;
         D3D11_MAPPED_SUBRESOURCE mapped{};
-        winrt::check_hresult(context->Map(grid_.readback.get(), 0, D3D11_MAP_READ, 0, &mapped));
+        const auto result = context->Map(grid_.readback.get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
+        if (result == DXGI_ERROR_WAS_STILL_DRAWING) return false;
+        winrt::check_hresult(result);
         const auto* bits = static_cast<const uint8_t*>(mapped.pData);
-        for (UINT y = 0; y < kBackdropSampleSize; ++y) {
-            std::memcpy(samples_.data() + y * rowSize, bits + size_t(y) * mapped.RowPitch, rowSize);
+        if (matches) {
+            for (UINT y = 0; y < kBackdropSampleSize; ++y) {
+                std::memcpy(samples_.data() + y * rowSize, bits + size_t(y) * mapped.RowPitch, rowSize);
+            }
         }
         context->Unmap(grid_.readback.get(), 0);
+        grid_.pending = false;
+        return true;
     }
 
     struct SampleGrid {
@@ -199,6 +217,8 @@ private:
         winrt::com_ptr<ID3D11ShaderResourceView> view;
         winrt::com_ptr<ID3D11UnorderedAccessView> gridView;
         UINT width = 0, height = 0;
+        RECT bounds{}, monitor{};
+        bool pending = false;
     } grid_;
     static constexpr auto kFormat = winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized;
     winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice device_{nullptr};

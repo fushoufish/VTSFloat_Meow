@@ -18,6 +18,7 @@
 
     void LoadShadowSettings() {
         const auto legacy = [](const wchar_t* key, int fallback) { return ReadConfigInt(L"shadow", key, fallback); };
+        const bool legacyHoverFade = ReadConfigInt(L"opacity", L"fade_shadow_on_hover", 0) != 0;
         const bool legacyEnabled = legacy(L"enabled", 0) != 0;
         const bool legacyInside = legacy(L"inside", 0) != 0;
         for (size_t i = 0; i < shadow_.size(); ++i) {
@@ -29,6 +30,7 @@
             const bool enabled = legacy(i == 0 ? L"inner_enabled" : L"outer_enabled",
                 legacyEnabled && (legacyInside == (i == 0))) != 0;
             shadow.enabled = ReadConfigInt(kShadowSections[i], L"enabled", enabled) != 0;
+            shadow.fadeOnHover = ReadConfigInt(kShadowSections[i], L"fade_on_hover", legacyHoverFade) != 0;
             shadow.angle = read(L"angle", defaults.angle, 0, 359);
             shadow.distance = read(L"distance_hundredths", (std::clamp)(legacy(L"distance_tenths", defaults.distance / 10), 0, 5000) * 10, 0, 50000);
             shadow.spread = read(L"spread", defaults.spread, 0, 100);
@@ -45,6 +47,7 @@
             const auto& shadow = shadow_[i];
             const auto* section = kShadowSections[i];
             WriteConfigInt(section, L"enabled", shadow.enabled);
+            WriteConfigInt(section, L"fade_on_hover", shadow.fadeOnHover);
             WriteConfigInt(section, L"angle", shadow.angle);
             WriteConfigInt(section, L"distance_hundredths", shadow.distance);
             WriteConfigInt(section, L"spread", shadow.spread);
@@ -56,17 +59,36 @@
         }
     }
 
+    void ResetShadowHistory() { shadowMaskTimes_.fill({}); }
+
     void PrepareShadow(int width, int height) {
         const auto* model = static_cast<const uint8_t*>(dibBits_);
         const auto& shadows = ActiveShadows();
+        const auto now = Clock::now();
         for (size_t i = 0; i < shadows.size(); ++i) {
             const auto& shadow = shadows[i];
             shadowMaskReady_[i] = shadow.enabled && shadow.opacity;
-            if (!shadowMaskReady_[i]) continue;
+            if (!shadowMaskReady_[i]) {
+                shadowMaskTimes_[i] = {};
+                continue;
+            }
             const double angle = shadow.angle * 3.14159265358979323846 / 180;
             shadowOffsetX_[i] = std::cos(angle) * shadow.distance / 100;
             shadowOffsetY_[i] = std::sin(angle) * shadow.distance / 100;
             shadowMasks_[i].Build(model, width, height, shadow.spread, shadow.blur, i == 0);
+
+            // Sharp masks need more smoothing, while soft shadows can follow
+            // the model more closely without showing frame-to-frame shimmer.
+            const bool reset = shadowMaskTimes_[i] == Clock::time_point{} ||
+                shadowMaskBlur_[i] != shadow.blur || shadowMaskSpread_[i] != shadow.spread;
+            const double elapsedMs = reset ? 0.0 :
+                std::chrono::duration<double, std::milli>(now - shadowMaskTimes_[i]).count();
+            const double timeConstantMs = 16.0 + 24.0 * (std::max)(0, 8 - shadow.blur) / 8.0;
+            shadowMasks_[i].Stabilize(reset ? 1.0f :
+                static_cast<float>(-std::expm1(-elapsedMs / timeConstantMs)));
+            shadowMaskTimes_[i] = now;
+            shadowMaskBlur_[i] = shadow.blur;
+            shadowMaskSpread_[i] = shadow.spread;
         }
     }
 
@@ -83,7 +105,11 @@
         const auto& shadowMask = shadowMasks_[index];
         const bool inside = index == 0;
         const int baseAlpha = modelOpacityPercent_ * 255 / 100;
-        const int shadowAlpha = fadeShadowOnHover_ && hoverFadeEnabled_ ? currentOverlayAlpha_ : baseAlpha;
+        const bool fadeOnHover = shadow.fadeOnHover && hoverFadeEnabled_;
+        const int shadowAlpha = fadeOnHover ? currentOverlayAlpha_ : baseAlpha;
+        const unsigned innerStrength = fadeOnHover
+            ? static_cast<unsigned>((std::min)(255, (shadowAlpha * 255 + baseAlpha / 2) / (std::max)(1, baseAlpha)))
+            : 255u;
         const unsigned color[]{GetBValue(shadow.color), GetGValue(shadow.color), GetRValue(shadow.color)};
         const bool sampled = ShadowUsesBackdrop(shadow) && imageBackdropColorTime_ != Clock::time_point{};
         // Adjacent output pixels alternate between two sampling phases.
@@ -98,18 +124,24 @@
         };
         const auto columns = phases(shadowOffsetX_[index]);
         const auto rows = phases(shadowOffsetY_[index]);
-        auto* pixel = static_cast<uint8_t*>(dibBits_);
-        for (int y = 0; y < height; ++y) {
+        auto* pixels = static_cast<uint8_t*>(dibBits_);
+        const auto* originalAlpha = modelAlpha_.data();
+        const auto compositeRow = [&](int y) {
+            auto* pixel = pixels + size_t(y) * width * 4;
+            const auto* alphaRow = inside ? nullptr : originalAlpha + size_t(y) * width;
             const auto [top, fy] = rows[y & 1];
             for (int x = 0; x < width; ++x, pixel += 4) {
                 const unsigned alpha = pixel[3];
-                if (inside ? alpha == 0 : alpha == 255) continue;
+                // Keep the outer shadow behind the original silhouette even
+                // when the displayed model has already faded on hover.
+                const unsigned visibleArea = inside ? alpha : 255 - alphaRow[x];
+                if (!visibleArea) continue;
                 const auto [left, fx] = columns[x & 1];
                 const unsigned mask = shadowMask.Sample(left + x / 2, top + y / 2, fx, fy);
                 if (!mask) continue;
-                const unsigned coverage = inside ? (mask * shadow.opacity + 50) / 100 :
+                const unsigned coverage = inside ? (mask * shadow.opacity * innerStrength + 12750) / 25500 :
                     (mask * shadow.opacity * shadowAlpha + 12750) / 25500;
-                const unsigned applied = (coverage * (inside ? alpha : 255 - alpha) + 127) / 255;
+                const unsigned applied = (coverage * visibleArea + 127) / 255;
                 if (!applied) continue;
                 const auto backdrop = sampled ? ImageBackdropColorAt(x, y, width, height) : vtsfloat::Rgb{};
                 for (int c = 0; c < 3; ++c) {
@@ -120,6 +152,15 @@
                 }
                 if (!inside) pixel[3] = static_cast<uint8_t>(alpha + applied);
             }
+        };
+        if (size_t(width) * height >= 1024 * 1024) {
+            constexpr int bands = 4;
+            concurrency::parallel_for(0, bands, [&](int band) {
+                const int end = height * (band + 1) / bands;
+                for (int y = height * band / bands; y < end; ++y) compositeRow(y);
+            });
+        } else {
+            for (int y = 0; y < height; ++y) compositeRow(y);
         }
     }
 
@@ -141,27 +182,39 @@
             {Tr(L"加深程度"), &S::darkness, 100, 1, L"%"}}};
     }
 
-    enum ShadowAction { ShadowClose = 1, ShadowInside, ShadowOutside, ShadowToggle,
+    enum ShadowAction { ShadowClose = 1, ShadowBack, ShadowInside, ShadowOutside, ShadowToggle,
         ShadowColor, ShadowSample, ShadowHoverFade, ShadowReset, ShadowCancel, ShadowSave };
-    static constexpr int kShadowWidth = 440, kShadowHeight = 448, kShadowFirstField = 4350;
+    static constexpr int kShadowOptionsHeight = 72;
+    static constexpr int kShadowWidth = 440;
+    static constexpr int kShadowHeight = 448 + kShadowOptionsHeight;
+    static constexpr int kShadowSettingsLeft = 143;
+    static constexpr int kShadowInputRight = 397;
+    static constexpr int kShadowFirstField = 4350;
 
     int ShadowPx(int px) const { return static_cast<int>(std::lround(px * shadowPanelScale_)); }
     RECT ShadowRect(int left, int top, int right, int bottom) const {
         return {ShadowPx(left), ShadowPx(top), ShadowPx(right), ShadowPx(bottom)};
     }
 
+    RECT ShadowSettingsRect(int left, int top, int right, int bottom) const {
+        return ShadowRect(left, top + kShadowOptionsHeight, right, bottom + kShadowOptionsHeight);
+    }
+
     struct ShadowButton { ShadowAction action; RECT bounds; const wchar_t* label; bool selected = false; };
-    std::array<ShadowButton, 10> ShadowButtons() const {
+    std::array<ShadowButton, 11> ShadowButtons() const {
         return {{{ShadowClose, ShadowRect(394, 2, 438, 38), L"×"},
-            {ShadowHoverFade, ShadowRect(124, 6, 384, 34), Tr(L"悬停时同时淡化阴影"), fadeShadowOnHover_},
-            {ShadowInside, ShadowRect(14, 48, 143, 86), Tr(L"内部阴影"), shadowTab_ == 0},
-            {ShadowOutside, ShadowRect(149, 48, 278, 86), Tr(L"外部阴影"), shadowTab_ == 1},
-            {ShadowToggle, ShadowRect(286, 48, 426, 86), Tr(L"启用阴影"), EditedShadow().enabled},
-            {ShadowColor, ShadowRect(14, 314, 145, 347), Tr(L"阴影颜色"), shadowColorOpen_},
-            {ShadowSample, ShadowRect(153, 314, 426, 347), Tr(L"参考背景像素"), EditedShadow().sampleBackground},
-            {ShadowReset, ShadowRect(14, 402, 144, 434), Tr(L"重置")},
-            {ShadowCancel, ShadowRect(152, 402, 284, 434), Tr(L"取消")},
-            {ShadowSave, ShadowRect(292, 402, 426, 434), Tr(L"保存"), true}}};
+            {ShadowBack, ShadowRect(224, 5, 392, 35), Tr(L"返回个性化")},
+            {ShadowInside, ShadowRect(14, 48, 217, 86), Tr(L"内部阴影"), shadowTab_ == 0},
+            {ShadowOutside, ShadowRect(223, 48, 426, 86), Tr(L"外部阴影"), shadowTab_ == 1},
+            {ShadowToggle, ShadowRect(kShadowSettingsLeft, 92, kShadowInputRight, 124),
+                shadowTab_ == 0 ? Tr(L"启用内部阴影") : Tr(L"启用外部阴影"), EditedShadow().enabled},
+            {ShadowHoverFade, ShadowRect(kShadowSettingsLeft, 128, kShadowInputRight, 160),
+                Tr(L"悬停时同时淡化阴影"), EditedShadow().fadeOnHover},
+            {ShadowColor, ShadowSettingsRect(kShadowSettingsLeft, 276, kShadowInputRight, 309), Tr(L"阴影颜色"), shadowColorOpen_},
+            {ShadowSample, ShadowSettingsRect(kShadowSettingsLeft, 313, 426, 345), Tr(L"参考背景像素"), EditedShadow().sampleBackground},
+            {ShadowReset, ShadowSettingsRect(14, 402, 144, 434), Tr(L"重置")},
+            {ShadowCancel, ShadowSettingsRect(152, 402, 284, 434), Tr(L"取消")},
+            {ShadowSave, ShadowSettingsRect(292, 402, 426, 434), Tr(L"保存"), true}}};
     }
 
     int ShadowActionAt(POINT point) const {
@@ -171,7 +224,17 @@
         return 0;
     }
 
-    static int ShadowRow(size_t index) { return index == 5 ? 369 : 112 + 43 * static_cast<int>(index); }
+    static int ShadowRow(size_t index) {
+        if (index == 0) return kShadowOptionsHeight + 112;
+        if (index == 5) return kShadowOptionsHeight + 369;
+        return kShadowOptionsHeight + 117 + 43 * static_cast<int>(index - 1);
+    }
+
+    RECT ShadowInputRect(size_t index) const {
+        if (index == 0) return ShadowSettingsRect(41, 250, 98, 272);
+        const int row = ShadowRow(index);
+        return ShadowRect(340, row + 2, kShadowInputRight, row + 24);
+    }
 
     void RefreshShadowPanel(bool fields) {
         if (!shadowPanelHwnd_) return;
@@ -190,13 +253,13 @@
             ShowWindow(shadowFields_.back(), EditedShadow().sampleBackground ? SW_SHOWNA : SW_HIDE);
         }
         if (!ScreenImageBlendActive()) StopImageBackdrop();
-        PositionBorderPanel();
         InvalidateRect(shadowPanelHwnd_, nullptr, FALSE);
         resetFrameSchedule_ = true;
     }
 
-    RECT ShadowColorWheel() const { return ShadowRect(32, 206, 116, 290); }
-    RECT ShadowColorBrightness() const { return ShadowRect(31, 301, 117, 307); }
+    RECT ShadowAngleDialRect() const { return ShadowSettingsRect(30, 144, 118, 232); }
+    RECT ShadowColorWheel() const { return ShadowSettingsRect(32, 282, 116, 366); }
+    RECT ShadowColorBrightness() const { return ShadowSettingsRect(31, 385, 117, 391); }
     static constexpr int kShadowColorWheelDrag = 6, kShadowColorBrightnessDrag = 7;
 
     void PaintShadowColor(HDC dc) const {
@@ -220,7 +283,7 @@
         Ellipse(dc, x - marker, y - marker, x + marker, y + marker);
         SelectObject(dc, oldBrush);
         SelectObject(dc, oldPen);
-        PanelText(dc, Tr(L"亮度"), ShadowRect(16, 284, 132, 299), RGB(184, 207, 231),
+        PanelText(dc, Tr(L"亮度"), ShadowSettingsRect(16, 368, 132, 383), RGB(184, 207, 231),
             ShadowPx(11), false, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         PanelSlider(dc, ShadowColorBrightness(), shadowColorValue_, 0, 100,
             shadowDrag_ == kShadowColorBrightnessDrag);
@@ -246,21 +309,39 @@
         RefreshShadowPanel(false);
     }
 
+    void PaintShadowHeader(HDC dc, int width) const {
+        PanelFill(dc, RECT{0, 0, width, ShadowPx(40)}, RGB(27, 45, 68));
+        constexpr UINT line = DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
+        PanelText(dc, Tr(L"阴影"), ShadowRect(14, 0, 214, 40), RGB(227, 239, 252), ShadowPx(14), true,
+            DT_LEFT | line);
+        for (const auto& button : ShadowButtons()) {
+            if (button.action == ShadowBack) {
+                PaintPageNavigationButton(dc, button.bounds, button.label, shadowBackHovered_, ShadowPx(13));
+            } else if (button.action == ShadowClose) {
+                PanelFill(dc, button.bounds, RGB(24, 42, 64));
+                PanelText(dc, button.label, button.bounds, RGB(227, 239, 252), ShadowPx(14), true, DT_CENTER | line);
+            }
+        }
+    }
+
     void PaintShadowPanel(HWND panel) const {
         PAINTSTRUCT paint{};
-        HDC dc = BeginPaint(panel, &paint);
+        HDC target = BeginPaint(panel, &paint);
         RECT client{};
         GetClientRect(panel, &client);
+        HDC buffer = CreateCompatibleDC(target);
+        HBITMAP bitmap = buffer ? CreateCompatibleBitmap(target, client.right, client.bottom) : nullptr;
+        HDC dc = bitmap ? buffer : target;
+        const HGDIOBJ oldBitmap = bitmap ? SelectObject(dc, bitmap) : nullptr;
         PanelFill(dc, client, RGB(16, 25, 39));
-        PanelFill(dc, ShadowRect(0, 0, 440, 40), RGB(27, 45, 68));
         constexpr UINT line = DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
         const auto text = [&](const wchar_t* label, RECT rect, bool center = false, bool bold = false) {
             PanelText(dc, label, rect, RGB(227, 239, 252), ShadowPx(14), bold,
                 line | (center ? DT_CENTER : DT_LEFT));
         };
-        text(Tr(L"阴影"), ShadowRect(14, 0, 117, 40), false, true);
-        PanelFill(dc, ShadowRect(14, 85, 278, 86), RGB(48, 71, 97));
+        PanelFill(dc, ShadowRect(14, 85, 426, 86), RGB(48, 71, 97));
         for (const auto& button : ShadowButtons()) {
+            if (button.action == ShadowBack || button.action == ShadowClose) continue;
             if (button.action == ShadowInside || button.action == ShadowOutside) {
                 if (button.selected) {
                     PanelFill(dc, button.bounds, RGB(32, 57, 85));
@@ -273,38 +354,44 @@
                     ShadowPx(13), button.selected, line | DT_CENTER);
                 continue;
             }
-            if (button.action == ShadowToggle) {
+            if (button.action == ShadowToggle || button.action == ShadowHoverFade ||
+                button.action == ShadowSample) {
+                const LONG centerY = (button.bounds.top + button.bounds.bottom) / 2;
+                const LONG left = button.bounds.left;
+                const RECT box{left, centerY - ShadowPx(9), left + ShadowPx(18), centerY + ShadowPx(9)};
                 RECT label = button.bounds;
-                label.right = ShadowPx(381);
-                PanelText(dc, button.label, label, RGB(197, 217, 238),
-                    ShadowPx(12), false, line | DT_RIGHT);
-                const RECT track = ShadowRect(389, 59, 423, 76);
-                SetDCBrushColor(dc, button.selected ? RGB(50, 124, 193) : RGB(50, 68, 89));
-                const HGDIOBJ brush = SelectObject(dc, GetStockObject(DC_BRUSH));
-                const HGDIOBJ pen = SelectObject(dc, GetStockObject(NULL_PEN));
-                RoundRect(dc, track.left, track.top, track.right, track.bottom, ShadowPx(17), ShadowPx(17));
-                SetDCBrushColor(dc, button.selected ? RGB(241, 249, 255) : RGB(165, 184, 203));
-                const RECT knob = button.selected ? ShadowRect(408, 61, 421, 74) : ShadowRect(391, 61, 404, 74);
-                Ellipse(dc, knob.left, knob.top, knob.right, knob.bottom);
-                SelectObject(dc, pen);
-                SelectObject(dc, brush);
+                label.left = box.right + ShadowPx(7);
+                PaintSettingCheckbox(dc, box, button.selected, ShadowPx(14));
+                SetTextColor(dc, RGB(220, 232, 248));
+                SetBkMode(dc, TRANSPARENT);
+                if (!vtsfloat::DrawFittedToolbarText(dc, label, button.label, UiFontFace(),
+                        ShadowPx(13), ShadowPx(11), true, DT_LEFT)) {
+                    PanelText(dc, button.label, label, RGB(220, 232, 248), ShadowPx(13), false, line | DT_LEFT);
+                }
                 continue;
             }
             PanelFill(dc, button.bounds, button.selected ? RGB(31, 85, 141) : RGB(24, 42, 64));
             RECT label = button.bounds;
             if (button.action == ShadowColor) {
-                label.right -= ShadowPx(27);
-                PanelFill(dc, ShadowRect(119, 320, 138, 341), RGB(131, 161, 192));
-                PanelFill(dc, ShadowRect(121, 322, 136, 339), EditedShadow().color);
+                label.left += ShadowPx(10);
+                label.right = ShadowPx(340);
+                const RECT swatch{ShadowPx(351), button.bounds.top + ShadowPx(6),
+                    ShadowPx(386), button.bounds.bottom - ShadowPx(6)};
+                PanelFill(dc, swatch, RGB(131, 161, 192));
+                RECT fill = swatch;
+                InflateRect(&fill, -ShadowPx(2), -ShadowPx(2));
+                PanelFill(dc, fill, EditedShadow().color);
             }
-            text(button.label, label, true, true);
+            text(button.label, label, button.action != ShadowColor, true);
         }
 
-        const int cx = ShadowPx(74), cy = ShadowPx(153), radius = ShadowPx(46);
+        const RECT dial = ShadowAngleDialRect();
+        const int cx = (dial.left + dial.right) / 2, cy = (dial.top + dial.bottom) / 2;
+        const int radius = (dial.right - dial.left) / 2;
         const HPEN rim = CreatePen(PS_SOLID, (std::max)(1, ShadowPx(1)), RGB(77, 111, 151));
         const HGDIOBJ previousPen = SelectObject(dc, rim);
         const HGDIOBJ previousBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
-        Ellipse(dc, cx - radius, cy - radius, cx + radius, cy + radius);
+        Ellipse(dc, dial.left, dial.top, dial.right, dial.bottom);
         const double angle = EditedShadow().angle * 3.14159265358979323846 / 180;
         const HPEN needle = CreatePen(PS_SOLID, (std::max)(1, ShadowPx(3)), RGB(108, 188, 255));
         SelectObject(dc, needle);
@@ -322,8 +409,12 @@
             if (i == 5 && !EditedShadow().sampleBackground) continue;
             const int y = ShadowRow(i);
             const auto& field = controls[i];
-            text(field.label, ShadowRect(143, y - 17, 346, y + 2));
-            text(field.unit, ShadowRect(399, y + 1, 428, y + 25));
+            const RECT input = ShadowInputRect(i);
+            const RECT label = i == 0 ? RECT{dial.left, ShadowPx(y + 2), dial.right, ShadowPx(y + 24)}
+                : ShadowRect(kShadowSettingsLeft, y - 17, 346, y + 2);
+            text(field.label, label, i == 0);
+            text(field.unit, RECT{input.right + ShadowPx(2), input.top,
+                input.right + ShadowPx(31), input.bottom});
             if (i > 0) {
                 const int value = EditedShadow().*field.member;
                 const int position = i == 1 ? DistanceTrackPosition(value) : value;
@@ -331,6 +422,12 @@
                     0, i == 1 ? 10000 : field.limit, shadowDrag_ == static_cast<int>(i));
             }
         }
+        if (bitmap) {
+            BitBlt(target, 0, 0, client.right, client.bottom, buffer, 0, 0, SRCCOPY);
+            SelectObject(buffer, oldBitmap);
+            DeleteObject(bitmap);
+        }
+        if (buffer) DeleteDC(buffer);
         EndPaint(panel, &paint);
     }
 
@@ -350,7 +447,9 @@
             return;
         }
         if (shadowDrag_ == 0) {
-            const double angle = std::atan2(point.y - ShadowPx(153), point.x - ShadowPx(74));
+            const RECT dial = ShadowAngleDialRect();
+            const int cx = (dial.left + dial.right) / 2, cy = (dial.top + dial.bottom) / 2;
+            const double angle = std::atan2(point.y - cy, point.x - cx);
             EditedShadow().angle = (static_cast<int>(std::lround(angle * 180 / 3.14159265358979323846)) + 360) % 360;
         } else {
             const auto field = ShadowFields()[shadowDrag_];
@@ -374,30 +473,51 @@
             shadow_ = shadowDraft_;
             SaveShadowSettings();
         }
-        DestroyWindow(std::exchange(shadowPanelHwnd_, nullptr));
-        PositionBorderPanel();
+        const HWND personalParent = std::exchange(shadowPersonalParent_, nullptr);
+        DestroyWindow(vtsfloat::SidePanelViewport::Host(std::exchange(shadowPanelHwnd_, nullptr)));
+        ResetShadowHistory();
+        if (personalParent && IsWindow(personalParent)) {
+            personalPanelManuallyPositioned_ = false;
+            PositionBorderPanel();
+            SetForegroundWindow(vtsfloat::SidePanelViewport::Host(personalParent));
+        }
         if (!ScreenImageBlendActive()) StopImageBackdrop();
         resetFrameSchedule_ = true;
         if (toolbarHwnd_) InvalidateRect(toolbarHwnd_, nullptr, FALSE);
     }
 
-    void ShowShadowPanel() {
+    void ShowShadowPanel(HWND personalParent = nullptr) {
+        if (cropEditing_) return;
         if (shadowPanelHwnd_) {
-            SetForegroundWindow(shadowPanelHwnd_);
+            if (personalParent && !shadowPersonalParent_) {
+                shadowPersonalParent_ = personalParent;
+                shadowPanelDetached_ = false;
+                ShowWindow(vtsfloat::SidePanelViewport::Host(personalParent), SW_HIDE);
+                PositionToolbar();
+            }
+            SetForegroundWindow(vtsfloat::SidePanelViewport::Host(shadowPanelHwnd_));
             return;
         }
-        if (!viewEditing_ || cropEditing_ || !CropAvailable()) return;
+        if (!personalParent && (!viewEditing_ || !CropAvailable())) return;
         CloseImagePanel(false);
         CloseFeatherPanel();
         RECT toolbar{};
         MONITORINFO monitor{sizeof(MONITORINFO)};
+        const HWND anchor = personalParent ? hwnd_ : toolbarHwnd_;
+        RECT model{};
         if (!GetWindowRect(toolbarHwnd_, &toolbar) ||
-            !GetMonitorInfoW(MonitorFromWindow(toolbarHwnd_, MONITOR_DEFAULTTONEAREST), &monitor)) return;
+            (personalParent && !GetWindowRect(hwnd_, &model)) ||
+            !GetMonitorInfoW(MonitorFromWindow(anchor, MONITOR_DEFAULTTONEAREST), &monitor)) return;
         shadowPanelScale_ = (std::min)({uiScalePercent_ / 100.0,
-            (monitor.rcWork.right - monitor.rcWork.left) / double(kShadowWidth),
+            vtsfloat::SidePanelViewport::ContentWidthLimit(monitor.rcWork) / double(kShadowWidth),
             (monitor.rcWork.bottom - monitor.rcWork.top) / double(kShadowHeight)});
         const SIZE size{ShadowPx(kShadowWidth), ShadowPx(kShadowHeight)};
-        const POINT position = SidePanelPosition(toolbar, monitor.rcWork, nullptr, size, UiScaled(8), toolbar.top);
+        const int heightLimit = SidePanelHeightLimit();
+        const SIZE window = vtsfloat::SidePanelViewport::WindowSize(size, heightLimit);
+        const RECT work = monitor.rcWork;
+        const POINT position = personalParent
+            ? PersonalPanelPosition(model, work, IsWindowVisible(toolbarHwnd_) ? &toolbar : nullptr, window)
+            : SidePanelPosition(toolbar, work, nullptr, window, UiScaled(8), toolbar.top);
         WNDCLASSW windowClass{};
         windowClass.lpfnWndProc = &LayeredOverlay::ShadowPanelProc;
         windowClass.hInstance = instance_;
@@ -406,29 +526,47 @@
         if (!RegisterClassW(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return;
         shadowDraft_ = shadow_;
         shadowColorOpen_ = false;
+        shadowBackHovered_ = false;
         shadowPanelDetached_ = false;
-        shadowPanelHwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | (desktopMode_ ? 0 : WS_EX_TOPMOST),
-            windowClass.lpszClassName, Tr(L"阴影"), WS_POPUP | WS_CLIPCHILDREN,
-            position.x, position.y, size.cx, size.cy, toolbarHwnd_, nullptr, instance_, this);
+        shadowPanelHwnd_ = vtsfloat::SidePanelViewport::Create(instance_, toolbarHwnd_,
+            WS_EX_TOOLWINDOW | (desktopMode_ ? 0 : WS_EX_TOPMOST),
+            windowClass.lpszClassName, Tr(L"阴影"), position, size, heightLimit, ShadowPx(40), this);
         if (!shadowPanelHwnd_) return;
+        shadowPersonalParent_ = personalParent;
         shadowPanelFont_ = CreateFontW(-ShadowPx(14), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
             DEFAULT_PITCH | FF_DONTCARE, UiFontFace());
         for (size_t i = 0; i < shadowFields_.size(); ++i) {
-            const int y = ShadowRow(i);
             shadowFields_[i] = CreateImageField(shadowPanelHwnd_, kShadowFirstField + static_cast<UINT>(i),
-                ShadowRect(340, y + 2, 397, y + 24), shadowPanelFont_);
+                ShadowInputRect(i), shadowPanelFont_);
             if (!shadowFields_[i]) { CloseShadowPanel(false); return; }
         }
         RefreshShadowPanel(true);
-        ShowWindow(shadowPanelHwnd_, SW_SHOW);
-        SetForegroundWindow(shadowPanelHwnd_);
+        const HWND host = vtsfloat::SidePanelViewport::Host(shadowPanelHwnd_);
+        ShowWindow(host, SW_SHOW);
+        if (personalParent) ShowWindow(vtsfloat::SidePanelViewport::Host(personalParent), SW_HIDE);
+        SetForegroundWindow(host);
         InvalidateRect(toolbarHwnd_, nullptr, FALSE);
     }
 
     void ActivateShadowButton(int action) {
         switch (action) {
         case ShadowClose: case ShadowCancel: CloseShadowPanel(false); return;
+        case ShadowBack: {
+            const bool openedFromPersonalization = shadowPersonalParent_ != nullptr;
+            CloseShadowPanel(true);
+            if (!openedFromPersonalization) {
+                EndViewEdit();
+                if (borderPanelHwnd_) {
+                    personalPanelManuallyPositioned_ = false;
+                    PositionBorderPanel();
+                    SetForegroundWindow(vtsfloat::SidePanelViewport::Host(borderPanelHwnd_));
+                } else {
+                    ShowBorderSettingsDialog();
+                }
+            }
+            return;
+        }
         case ShadowSave: CloseShadowPanel(true); return;
         case ShadowInside:
         case ShadowOutside:
@@ -436,7 +574,7 @@
             shadowColorOpen_ = false;
             break;
         case ShadowToggle: EditedShadow().enabled = !EditedShadow().enabled; break;
-        case ShadowHoverFade: ToggleShadowHoverFade(); return;
+        case ShadowHoverFade: EditedShadow().fadeOnHover = !EditedShadow().fadeOnHover; break;
         case ShadowSample: EditedShadow().sampleBackground = !EditedShadow().sampleBackground; break;
         case ShadowReset:
             EditedShadow() = {};
@@ -472,7 +610,12 @@
         POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         switch (message) {
         case WM_ERASEBKGND: return 1;
-        case WM_PAINT: overlay->PaintShadowPanel(panel); return 0;
+        case WM_PAINT:
+            overlay->PaintShadowPanel(panel);
+            return 0;
+        case vtsfloat::SidePanelViewport::PaintHeaderMessage:
+            overlay->PaintShadowHeader(reinterpret_cast<HDC>(wParam), static_cast<int>(lParam));
+            return 0;
         case WM_CTLCOLOREDIT: return reinterpret_cast<LRESULT>(CropNumericBrush(reinterpret_cast<HDC>(wParam)));
         case WM_COMMAND: {
             const UINT id = LOWORD(wParam);
@@ -485,7 +628,7 @@
         case WM_MOVING: {
             const auto* proposed = reinterpret_cast<const RECT*>(lParam);
             RECT current{};
-            if (proposed && GetWindowRect(panel, &current) &&
+            if (proposed && GetWindowRect(vtsfloat::SidePanelViewport::Host(panel), &current) &&
                 (proposed->left != current.left || proposed->top != current.top)) {
                 overlay->shadowPanelDetached_ = true;
             }
@@ -494,11 +637,11 @@
         case WM_NCHITTEST:
             ScreenToClient(panel, &point);
             return point.y < overlay->ShadowPx(40) && !overlay->ShadowActionAt(point) ? HTCAPTION : HTCLIENT;
+        case WM_NCLBUTTONDOWN:
+            return SendMessageW(vtsfloat::SidePanelViewport::Host(panel), message, wParam, lParam);
         case WM_SETCURSOR:
             if (LOWORD(lParam) == HTCLIENT) {
-                POINT cursor{};
-                GetCursorPos(&cursor);
-                ScreenToClient(panel, &cursor);
+                const POINT cursor = vtsfloat::SidePanelViewport::CursorPoint(panel);
                 if (overlay->ShadowActionAt(cursor)) {
                     SetCursor(LoadCursorW(nullptr, IDC_HAND));
                     return TRUE;
@@ -518,7 +661,7 @@
                 overlay->shadowDrag_ = kShadowColorBrightnessDrag;
             } else if (overlay->shadowColorOpen_ && PtInRect(&wheel, point)) {
                 overlay->shadowDrag_ = kShadowColorWheelDrag;
-            } else if (const RECT dial = overlay->ShadowRect(25, 104, 124, 203); PtInRect(&dial, point)) {
+            } else if (const RECT dial = overlay->ShadowAngleDialRect(); PtInRect(&dial, point)) {
                 overlay->shadowDrag_ = 0;
             } else {
                 for (size_t i = 1; i < overlay->shadowFields_.size(); ++i) {
@@ -533,8 +676,23 @@
                 overlay->UpdateShadowDrag(point);
             }
             return 0;
-        case WM_MOUSEMOVE:
+        case WM_MOUSEMOVE: {
+            const bool backHovered = overlay->ShadowActionAt(point) == ShadowBack;
+            if (backHovered != overlay->shadowBackHovered_) {
+                overlay->shadowBackHovered_ = backHovered;
+                if (backHovered && !vtsfloat::SidePanelViewport::RoutingHeader(panel)) {
+                    TRACKMOUSEEVENT tracking{sizeof(TRACKMOUSEEVENT), TME_LEAVE, panel, 0};
+                    TrackMouseEvent(&tracking);
+                }
+                vtsfloat::SidePanelViewport::InvalidateHeader(panel);
+            }
             if (GetCapture() == panel && overlay->shadowDrag_ >= 0) overlay->UpdateShadowDrag(point);
+            return 0;
+        }
+        case WM_MOUSELEAVE:
+            if (std::exchange(overlay->shadowBackHovered_, false)) {
+                vtsfloat::SidePanelViewport::InvalidateHeader(panel);
+            }
             return 0;
         case WM_LBUTTONUP:
             if (GetCapture() == panel) ReleaseCapture();

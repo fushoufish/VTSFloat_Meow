@@ -652,6 +652,22 @@
         return 0;
     }
 
+    void PaintImagePanelButton(HDC dc, const ImagePanelButton& button) const {
+        PanelFill(dc, button.bounds, button.action == imagePanelHover_ ? RGB(39, 86, 136)
+            : button.active ? RGB(31, 85, 141) : RGB(24, 42, 64));
+        PanelText(dc, button.label, button.bounds, RGB(240, 246, 255), ImagePanelPx(14), true,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
+
+    void PaintImageHeader(HDC dc, int width) const {
+        PanelFill(dc, RECT{0, 0, width, ImagePanelPx(40)}, RGB(27, 45, 68));
+        PanelText(dc, ImagePanelTitle(), ImagePanelRect(14, 0, 388, 40), RGB(223, 238, 252), ImagePanelPx(18), true,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        for (const auto& button : ImagePanelButtons()) {
+            if (button.action == ImageClose) PaintImagePanelButton(dc, button);
+        }
+    }
+
     void PaintImagePanel(HWND panel) const {
         PAINTSTRUCT paint{};
         const HDC target = BeginPaint(panel, &paint);
@@ -667,16 +683,12 @@
         }
         const HGDIOBJ previous = SelectObject(dc, buffer);
         PanelFill(dc, client, RGB(16, 25, 39));
-        PanelFill(dc, ImagePanelRect(0, 0, 440, 40), RGB(27, 45, 68));
         constexpr UINT line = DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
         const auto text = [&](const wchar_t* label, RECT rect, int size = 14, bool bold = false) {
             PanelText(dc, label, rect, RGB(223, 238, 252), ImagePanelPx(size), bold, DT_LEFT | line);
         };
-        text(ImagePanelTitle(), ImagePanelRect(14, 0, 388, 40), 18, true);
         for (const auto& button : ImagePanelButtons()) {
-            PanelFill(dc, button.bounds, button.action == imagePanelHover_ ? RGB(39, 86, 136)
-                : button.active ? RGB(31, 85, 141) : RGB(24, 42, 64));
-            PanelText(dc, button.label, button.bounds, RGB(240, 246, 255), ImagePanelPx(14), true, DT_CENTER | line);
+            if (button.action != ImageClose) PaintImagePanelButton(dc, button);
         }
         if (imageEffectsTab_) {
             const auto controls = ImageEffectControls();
@@ -882,7 +894,7 @@
         imagePanelHwnd_ = nullptr;
         imageCurveKnot_ = imageLevelsDrag_ = imageEffectDrag_ = -1;
         imagePanelEdits_.fill(nullptr);
-        if (IsWindow(panel)) DestroyWindow(panel);
+        if (IsWindow(panel)) DestroyWindow(vtsfloat::SidePanelViewport::Host(panel));
         if (const HFONT font = std::exchange(imagePanelFont_, nullptr)) DeleteObject(font);
         if (keep) {
             imageTone_ = imageToneDraft_;
@@ -1041,6 +1053,7 @@
             return TRUE;
         }
         if (GetDlgCtrlID(edit) == IDC_FPS_EDIT) return DefSubclassProc(edit, message, wParam, lParam);
+        if (message == WM_SETFOCUS) vtsfloat::SidePanelViewport::RevealField(edit);
         if (message == WM_KEYDOWN) {
             if (wParam == VK_ESCAPE) {
                 if (angle) overlay->CloseFeatherPanel();
@@ -1090,15 +1103,17 @@
             if (imageEffectsTab_ != blend) {
                 imageEffectsTab_ = blend;
                 imagePanelHover_ = 0;
-                SetWindowTextW(imagePanelHwnd_, ImagePanelTitle());
+                SetWindowTextW(vtsfloat::SidePanelViewport::Host(imagePanelHwnd_), ImagePanelTitle());
                 for (size_t i = 0; i < imagePanelEdits_.size(); ++i) {
                     ShowWindow(imagePanelEdits_[i], (i >= 4) == blend ? SW_SHOWNA : SW_HIDE);
                 }
-                SetWindowPos(imagePanelHwnd_, nullptr, 0, 0, ImagePanelPx(440), ImagePanelPx(blend ? 529 : 442),
-                    SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                vtsfloat::SidePanelViewport::Resize(imagePanelHwnd_,
+                    SIZE{ImagePanelPx(440), ImagePanelPx(blend ? 529 : 442)}, SidePanelHeightLimit(), ImagePanelPx(40));
+                PositionToolbar();
+                vtsfloat::SidePanelViewport::InvalidateHeader(imagePanelHwnd_);
                 InvalidateRect(imagePanelHwnd_, nullptr, FALSE);
             }
-            SetForegroundWindow(imagePanelHwnd_);
+            SetForegroundWindow(vtsfloat::SidePanelViewport::Host(imagePanelHwnd_));
             return;
         }
         WNDCLASSW windowClass{};
@@ -1112,19 +1127,21 @@
         if (!GetWindowRect(toolbarHwnd_, &toolbar) ||
             !GetMonitorInfoW(MonitorFromWindow(toolbarHwnd_, MONITOR_DEFAULTTONEAREST), &monitor)) return;
         imagePanelScale_ = (std::min)({uiScalePercent_ / 100.0,
-            (monitor.rcWork.right - monitor.rcWork.left) / 440.0,
+            vtsfloat::SidePanelViewport::ContentWidthLimit(monitor.rcWork) / 440.0,
             (monitor.rcWork.bottom - monitor.rcWork.top) / 529.0});
         const SIZE size{ImagePanelPx(440), ImagePanelPx(blend ? 529 : 442)};
-        const POINT position = SidePanelPosition(toolbar, monitor.rcWork, nullptr, size, UiScaled(8), toolbar.top);
+        const int heightLimit = SidePanelHeightLimit();
+        const POINT position = SidePanelPosition(toolbar, monitor.rcWork, nullptr,
+            vtsfloat::SidePanelViewport::WindowSize(size, heightLimit), UiScaled(8), toolbar.top);
         imageToneDraft_ = imageTone_;
         imageEffectsDraft_ = imageEffects_;
         imageEffectsTab_ = blend;
         imageCurveChannel_ = 0;
         imagePanelHover_ = 0;
         imagePanelDetached_ = false;
-        imagePanelHwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | (desktopMode_ ? 0 : WS_EX_TOPMOST),
-            windowClass.lpszClassName, ImagePanelTitle(),
-            WS_POPUP | WS_CLIPCHILDREN, position.x, position.y, size.cx, size.cy, toolbarHwnd_, nullptr, instance_, this);
+        imagePanelHwnd_ = vtsfloat::SidePanelViewport::Create(instance_, toolbarHwnd_,
+            WS_EX_TOOLWINDOW | (desktopMode_ ? 0 : WS_EX_TOPMOST),
+            windowClass.lpszClassName, ImagePanelTitle(), position, size, heightLimit, ImagePanelPx(40), this);
         if (!imagePanelHwnd_) return;
         imagePanelFont_ = CreateFontW(-ImagePanelPx(14), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
@@ -1146,8 +1163,9 @@
             if ((i >= ARRAYSIZE(fields)) != blend) ShowWindow(imagePanelEdits_[i], SW_HIDE);
         }
         UpdateImageFields();
-        ShowWindow(imagePanelHwnd_, SW_SHOW);
-        SetForegroundWindow(imagePanelHwnd_);
+        const HWND host = vtsfloat::SidePanelViewport::Host(imagePanelHwnd_);
+        ShowWindow(host, SW_SHOW);
+        SetForegroundWindow(host);
     }
 
     static LRESULT CALLBACK ImagePanelProc(HWND panel, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -1161,7 +1179,12 @@
         const POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         switch (message) {
         case WM_ERASEBKGND: return 1;
-        case WM_PAINT: overlay->PaintImagePanel(panel); return 0;
+        case WM_PAINT:
+            overlay->PaintImagePanel(panel);
+            return 0;
+        case vtsfloat::SidePanelViewport::PaintHeaderMessage:
+            overlay->PaintImageHeader(reinterpret_cast<HDC>(wParam), static_cast<int>(lParam));
+            return 0;
         case WM_CTLCOLOREDIT: return reinterpret_cast<LRESULT>(CropNumericBrush(reinterpret_cast<HDC>(wParam)));
         case WM_COMMAND: {
             const UINT id = LOWORD(wParam);
@@ -1175,7 +1198,7 @@
         case WM_MOVING: {
             const auto* proposed = reinterpret_cast<const RECT*>(lParam);
             RECT current{};
-            if (proposed && GetWindowRect(panel, &current) &&
+            if (proposed && GetWindowRect(vtsfloat::SidePanelViewport::Host(panel), &current) &&
                 (proposed->left != current.left || proposed->top != current.top)) {
                 overlay->imagePanelDetached_ = true;
             }
@@ -1189,9 +1212,7 @@
         }
         case WM_SETCURSOR:
             if (LOWORD(lParam) == HTCLIENT) {
-                POINT local{};
-                GetCursorPos(&local);
-                ScreenToClient(panel, &local);
+                const POINT local = vtsfloat::SidePanelViewport::CursorPoint(panel);
                 const RECT graph = overlay->ImageCurveBounds();
                 const RECT levels = overlay->ImageLevelsHitArea();
                 SetCursor(LoadCursorW(nullptr, overlay->ImagePanelHit(local) ? IDC_HAND :
@@ -1200,6 +1221,8 @@
                 return TRUE;
             }
             break;
+        case WM_NCLBUTTONDOWN:
+            return SendMessageW(vtsfloat::SidePanelViewport::Host(panel), message, wParam, lParam);
         case WM_LBUTTONDOWN: {
             SetFocus(panel);
             const int action = overlay->ImagePanelHit(point);
@@ -1235,13 +1258,21 @@
                 if (overlay->imageEffectDrag_ >= 0) overlay->UpdateImageEffect(point.x);
             }
             const int hover = overlay->ImagePanelHit(point);
-            if (std::exchange(overlay->imagePanelHover_, hover) != hover) InvalidateRect(panel, nullptr, FALSE);
-            TRACKMOUSEEVENT track{sizeof(TRACKMOUSEEVENT), TME_LEAVE, panel, 0};
-            TrackMouseEvent(&track);
+            const int previous = std::exchange(overlay->imagePanelHover_, hover);
+            if (previous != hover) {
+                if (previous == ImageClose || hover == ImageClose) vtsfloat::SidePanelViewport::InvalidateHeader(panel);
+                InvalidateRect(panel, nullptr, FALSE);
+            }
+            if (!vtsfloat::SidePanelViewport::RoutingHeader(panel)) {
+                TRACKMOUSEEVENT track{sizeof(TRACKMOUSEEVENT), TME_LEAVE, panel, 0};
+                TrackMouseEvent(&track);
+            }
             return 0;
         }
         case WM_MOUSELEAVE:
-            overlay->imagePanelHover_ = 0;
+            if (std::exchange(overlay->imagePanelHover_, 0) == ImageClose) {
+                vtsfloat::SidePanelViewport::InvalidateHeader(panel);
+            }
             InvalidateRect(panel, nullptr, FALSE);
             return 0;
         case WM_LBUTTONUP:

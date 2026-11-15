@@ -328,6 +328,25 @@ void Fetch(std::wstring url, bool metadata, std::uint64_t limit,
 
 } // namespace
 
+void DownloadVerifiedAsset(std::wstring_view url, const fs::path& destination,
+                           std::uint64_t expectedSize, const std::string& sha256,
+                           const std::atomic<bool>& cancelled, bool proxy,
+                           const std::function<void(std::uint64_t)>& progress) {
+    std::ofstream output(destination, std::ios::binary | std::ios::trunc);
+    if (!output) throw std::runtime_error("Open download file");
+    std::uint64_t downloaded = 0;
+    Fetch(RouteUrl(url, proxy), false, expectedSize, cancelled, [&](const char* data, DWORD size) {
+        output.write(data, size);
+        if (!output) throw std::runtime_error("Write download file");
+        downloaded += size;
+        progress(downloaded);
+    }, {}, proxy);
+    output.close();
+    if (!output || downloaded != expectedSize || FileSha256(destination) != sha256) {
+        throw std::runtime_error("Downloaded component failed SHA-256 verification");
+    }
+}
+
 std::optional<Version> ParseVersion(std::wstring_view text) {
     if (!text.empty() && (text.front() == L'v' || text.front() == L'V')) {
         text.remove_prefix(1);

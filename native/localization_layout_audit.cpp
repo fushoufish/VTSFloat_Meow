@@ -31,9 +31,11 @@ constexpr Contract kPanelContracts[] = {
     {L"羽化与旋转", 380, 18},
     {L"清晰度", 117, 14},
     {L"暗角", 117, 14},
-    {L"内部阴影", 129, 13},
-    {L"外部阴影", 129, 13},
-    {L"启用阴影", 95, 12},
+    {L"内部阴影", 203, 13},
+    {L"外部阴影", 203, 13},
+    {L"启用内部阴影", 229, 13},
+    {L"启用外部阴影", 229, 13},
+    {L"悬停时同时淡化阴影", 229, 13},
     {L"阴影距离", 203, 14},
     {L"阴影扩展", 203, 14},
     {L"阴影模糊", 203, 14},
@@ -92,13 +94,18 @@ constexpr Contract kContracts[] = {
     {L"边框粗细", 99, 13},
     {L"模型不透明度", 119, 13},
     {L"鼠标经过模型时将模型透明化", 345, 13},
-    {L"悬停不透明度", 119, 13},
+    {L"切换阴影设置菜单", 174, 13},
+    {L"悬停时模型不透明度", 149, 13},
+    {L"悬停透明度过渡时长", 154, 13},
     {L"透明度恢复延时", 154, 13},
     {L"默认 0 秒", 105, 10},
+    {L"默认 3 秒", 105, 10},
+    {L"默认 0.35 秒", 105, 10},
     {L"悬停扩展", 99, 13},
     {L"启用手动框选范围", 141, 13},
-    {L"鼠标移入时触发表情，移出后立即恢复", 330, 13},
+    {L"鼠标移入时触发表情", 330, 13},
     {L"表情恢复延时", 124, 13},
+    {L"表情渐出入过渡时长", 154, 13},
     {L"ENTER 确认", 100, 10},
     {L"选择表情", 373, 13},
     {L"暂无可用表情，请确认 VTube Studio API 已连接", 424, 13},
@@ -110,7 +117,6 @@ constexpr Contract kContracts[] = {
     {L"等待 VTube Studio 启动中", 580, 22},
     {L"从 Steam 启动 VTube Studio", 273, 16},
     {L"从外部启动 VTS", 273, 16},
-    {L"你刚刚拒绝了VTSFloat_Meow", 340, 15},
     {L"[重新发起授权]", 220, 15},
     {L"你可以访问该教程页面：", 580, 14},
     {L"GitHub-VTSFloat_Meow_DOCS", 580, 14},
@@ -189,6 +195,13 @@ int wmain() {
     for (UiLanguage language : languages) {
         vtsfloat::i18n::SetLanguage(language);
         auditHotkeyPrompt();
+        if (!vtsfloat::DrawFittedToolbarText(dc, RECT{0, 0, 270, 28},
+                Tr(L"你刚刚在VTS中拒绝了VTubeStudio_Meow的API授权请求"),
+                vtsfloat::i18n::UiFontFace(), 15, 9, false, DT_LEFT)) {
+            ++failures;
+            std::wcerr << L"[api-denied] " << vtsfloat::i18n::LanguageCode(language)
+                       << L" text does not fit\n";
+        }
         const auto audit = [&](const auto& contracts, int scale, const wchar_t* group) {
             const auto px = [scale](int logical) {
                 return static_cast<int>(std::lround(logical * scale / 100.0));

@@ -9,8 +9,8 @@ namespace vtsfloat {
 // Measure and paint using the same flags so wrapped lines fit the actual button.
 inline bool DrawFittedToolbarText(HDC dc, RECT bounds, const std::wstring& text,
                                  const wchar_t* fontFace, int preferredHeight,
-                                 int minimumHeight, bool paint = true) {
-    constexpr UINT flags = DT_CENTER | DT_WORDBREAK | DT_NOPREFIX;
+                                 int minimumHeight, bool paint = true, UINT alignment = DT_CENTER) {
+    const UINT flags = alignment | DT_WORDBREAK | DT_NOPREFIX;
     for (int height = preferredHeight; height >= minimumHeight; --height) {
         HFONT font = CreateFontW(
             -height, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
