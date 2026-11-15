@@ -106,7 +106,7 @@
   <div class="site-shell">
     <header class="topbar">
       <a class="brand" href="#top" aria-label="VTSFloat_Meow 首页"><img class="brand-image" data-media-src="assets/VTSFloat_Meow_small.webp" alt=""><noscript><img class="brand-image" src="assets/VTSFloat_Meow_small.webp" alt=""></noscript><span>VTSFloat_Meow</span></a>
-      <div class="topbar-actions"><a class="top-donation" data-donation-link href="support.html">捐赠作者 <span aria-hidden="true">♡</span></a><span class="version-pill">v1.3.0</span><a class="top-link" href="https://github.com/fushoufish/VTSFloat_Meow" target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a><label class="language-label" for="language-select">语言</label><select id="language-select" aria-label="选择语言"><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="ru">Русский</option></select><button class="menu-toggle" type="button" aria-expanded="false" aria-controls="sidebar">菜单</button></div>
+      <div class="topbar-actions"><a class="top-donation" data-donation-link href="support.html">捐赠作者 <span aria-hidden="true">♡</span></a><span class="version-pill">v1.3.1</span><a class="top-link" href="https://github.com/fushoufish/VTSFloat_Meow" target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a><label class="language-label" for="language-select">语言</label><select id="language-select" aria-label="选择语言"><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="ru">Русский</option></select><button class="menu-toggle" type="button" aria-expanded="false" aria-controls="sidebar">菜单</button></div>
     </header>
 
     <aside class="sidebar" id="sidebar">
@@ -139,6 +139,10 @@
       </div>
       <ol class="release-timeline">
         <li class="release-entry is-current">
+          <div class="release-entry-meta"><span class="release-version">v1.3.1</span><time datetime="2026-11-15">11.15</time></div>
+          <p>优化界面排版与悬停表情过渡，新增实验性 DX12 与 ANR 超帧，修复阴影闪烁</p>
+        </li>
+        <li class="release-entry">
           <div class="release-entry-meta"><span class="release-version">v1.3.0</span><time datetime="2026-11-13">11.13</time></div>
           <p>新增画面编辑、扩展 Spout2 兼容、内置检查更新与首次使用引导</p>
         </li>
@@ -385,8 +389,8 @@
       </section>
 
       <section class="section-anchor readme-section" id="requirements">
-        <div class="section-heading"><div><h2>使用前提与发布状态</h2></div><p>当前版本 v1.3.0 正式版</p></div>
-        <div class="requirements-grid"><article class="info-card"><h3>使用前提</h3><ul><li>Windows 10 / 11</li><li>支持 Direct3D 11 的硬件 GPU</li><li>已安装并运行 VTube Studio</li><li>已开启 Spout2 透明推流</li><li>发送端名称为 VTubeStudioSpout</li><li>表情悬停功能需要 Plugins API 授权</li></ul></article><article class="info-card release-card"><h3>版本与状态</h3><p>v1.3.0 已进入正式发布阶段</p><p>源码和构建脚本可以前往 GitHub 查看</p><a class="button button-ghost" href="https://github.com/fushoufish/VTSFloat_Meow" target="_blank" rel="noreferrer">前往 GitHub <span aria-hidden="true">↗</span></a></article></div>
+        <div class="section-heading"><div><h2>使用前提与发布状态</h2></div><p>当前版本 v1.3.1 正式版</p></div>
+        <div class="requirements-grid"><article class="info-card"><h3>使用前提</h3><ul><li>Windows 10 / 11</li><li>支持 Direct3D 11 的硬件 GPU</li><li>已安装并运行 VTube Studio</li><li>已开启 Spout2 透明推流</li><li>发送端名称为 VTubeStudioSpout</li><li>表情悬停功能需要 Plugins API 授权</li></ul></article><article class="info-card release-card"><h3>版本与状态</h3><p>v1.3.1 已进入正式发布阶段</p><p>源码和构建脚本可以前往 GitHub 查看</p><a class="button button-ghost" href="https://github.com/fushoufish/VTSFloat_Meow/releases/tag/v1.3.1" target="_blank" rel="noreferrer">前往 GitHub <span aria-hidden="true">↗</span></a></article></div>
       </section>
 
       <footer class="footer"><div><img class="brand-image" data-media-src="assets/VTSFloat_Meow_small.webp" alt=""><noscript><img class="brand-image" src="assets/VTSFloat_Meow_small.webp" alt=""></noscript><span>VTSFloat_Meow</span></div><span>Made for quiet desktop moments.</span><a href="#verify-exe">验证 EXE</a><a href="privacy.html">隐私政策 / Privacy Policy</a><a href="https://github.com/fushoufish/VTSFloat_Meow" target="_blank" rel="noreferrer">GitHub ↗</a></footer>
@@ -398,15 +402,6 @@
       <button class="download-close" type="button" aria-label="关闭下载窗口"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
     </div>
     <div class="download-options">
-      <details class="download-source" data-download-region="domestic" hidden>
-        <summary class="download-option">
-        <span class="download-recommendation">推荐</span>
-        <span class="download-option-icon"><img data-media-src="assets/data-capsule.svg" alt="" width="24" height="24"><noscript><img src="assets/data-capsule.svg" alt="" width="24" height="24"></noscript></span>
-        <span class="download-option-copy"><strong>数据胶囊-中国科技云</strong></span>
-        <svg class="download-option-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
-        </summary>
-        <div class="download-panel"><a class="download-link" href="https://data.cstcloud.cn/api/file/download/file/cacd6e36-6c04-41d4-83e7-953f18e65228-776855cde3a1da032d3ecded1fd0aa37" target="_blank" rel="noopener noreferrer">点击下载<span aria-hidden="true">↗</span></a></div>
-      </details>
       <a class="download-source download-option" data-download-region="global" href="https://github.com/fushoufish/VTSFloat_Meow/releases/latest" target="_blank" rel="noopener noreferrer">
         <span class="download-option-icon"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .75a11.25 11.25 0 0 0-3.56 21.92c.56.1.77-.24.77-.54v-2.1c-3.13.68-3.79-1.33-3.79-1.33-.51-1.3-1.25-1.65-1.25-1.65-1.02-.7.08-.69.08-.69 1.13.08 1.73 1.16 1.73 1.16 1 1.72 2.63 1.22 3.27.93.1-.73.39-1.22.71-1.5-2.5-.28-5.13-1.25-5.13-5.56 0-1.23.44-2.23 1.16-3.02-.12-.29-.5-1.43.11-2.98 0 0 .95-.3 3.1 1.15a10.8 10.8 0 0 1 5.63 0c2.15-1.46 3.09-1.15 3.09-1.15.61 1.55.23 2.69.12 2.98.72.79 1.15 1.79 1.15 3.02 0 4.32-2.63 5.27-5.14 5.55.4.35.76 1.03.76 2.08v3.11c0 .3.2.65.78.54A11.25 11.25 0 0 0 12 .75Z"/></svg></span>
         <span class="download-option-copy"><strong>GitHub</strong></span>
@@ -420,7 +415,7 @@
         <svg class="download-option-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
         </button>
         <div class="download-expander" id="cnb-panel" hidden><div class="download-panel download-actions-row">
-          <a class="download-link" href="https://cnb.cool/fushoufish/VTSFloat_Meow/-/releases/latest/download/VTSFloat_Meow.exe">下载最新版</a>
+          <a class="download-link" href="https://cnb.cool/fushoufish/VTSFloat_Meow/-/releases/download/v1.3.0/VTSFloat_Meow.exe">下载旧版 v1.3.0</a>
           <a class="download-project-link" href="https://cnb.cool/fushoufish/VTSFloat_Meow" target="_blank" rel="noopener noreferrer">前往该项目主页</a>
         </div></div>
       </div>
@@ -430,7 +425,7 @@
   <script src="preloader.js?v=20261114-cnb" defer></script>
   <script src="vendor/viewerjs/viewer.min.js"></script>
   <script src="donation.js?v=20261113-1"></script>
-  <script src="i18n.js?v=20261113-13"></script>
+  <script src="i18n.js?v=20261115-1"></script>
   <script src="media-source.js?v=20261114-cnb-2"></script>
   <script src="benchmark-charts.js?v=20260910-1"></script>
   <script src="script.js?v=20261114-cnb"></script>
